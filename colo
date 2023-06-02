@@ -570,13 +570,13 @@ def report_remote_failure(remote):
                 % (OCF_RESOURCE_INSTANCE, remote))
 
 def recv_line(fd):
-    line = ""
+    line = b''
     while True:
-        tmp = fd.recv(1).decode()
+        tmp = fd.recv(1)
         line += tmp
-        if tmp == "\n" or len(tmp) == 0:
+        if tmp == b'\n' or len(tmp) == 0:
             break
-    return line
+    return line.decode()
 
 # Filter out events
 def read_answer(fd):
