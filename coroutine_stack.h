@@ -10,6 +10,8 @@
 #ifndef COROUTINE_STACK_H
 #define COROUTINE_STACK_H
 
+#include <assert.h>
+
 #include <glib-2.0/glib.h>
 
 #include "daemon.h"
