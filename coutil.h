@@ -19,6 +19,18 @@ typedef struct CoroutineUtilCo {
     gsize offset;
 } CoroutineUtilCo;
 
+#define colod_lock_co(variable) \
+    do { \
+        while ((variable)) { \
+            progress_source_add(coroutine->cb.plain, coroutine); \
+            co_yield(GINT_TO_POINTER(G_SOURCE_REMOVE)); \
+        } \
+        (variable) = TRUE; \
+    } while(0)
+
+#define colod_unlock_co(variable) \
+    (variable) = FALSE;
+
 #define colod_channel_read_line_co(ret, channel, line, len, errp) \
     co_call_co((ret), _colod_channel_read_line_co, \
                (channel), (line), (len), (errp))

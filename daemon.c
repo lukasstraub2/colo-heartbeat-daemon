@@ -139,67 +139,54 @@ static gboolean _colod_client_co(Coroutine *coroutine) {
         colod_channel_read_line_co(ret, CO client_channel, &CO line,
                                    &CO read_len, &errp);
         if (ret != G_IO_STATUS_NORMAL) {
-            if (ret == G_IO_STATUS_ERROR) {
-                colod_syslog(CO ctx, LOG_WARNING,
-                             "Client connection broke: %s",
-                             errp->message);
-                g_error_free(errp);
-            }
-            return G_SOURCE_REMOVE;
+            goto error_client;
         }
 
-        // lock qmp for writing
-        if (CO ctx->qmp_lock) {
-            progress_source_add(colod_client_co, coroutine);
-            co_yield(GINT_TO_POINTER(G_SOURCE_REMOVE));
-        }
-        while (CO ctx->qmp_lock) {
-            co_yield(GINT_TO_POINTER(G_SOURCE_CONTINUE));
-        }
-        CO ctx->qmp_lock = TRUE;
-
+        colod_lock_co(CO ctx->qmp_lock);
         colod_channel_write_co(ret, CO ctx->qmp_channel, CO line, CO read_len,
                                &errp);
         if (ret != G_IO_STATUS_NORMAL) {
-            if (ret == G_IO_STATUS_ERROR) {
-                colod_syslog(CO ctx, LOG_WARNING, "QMP connection broke: %s",
-                             errp->message);
-                g_error_free(errp);
-            }
-            // qemu is gone: set global error, broadcast, ...
-            exit(EXIT_FAILURE);
+            goto error_qmp;
         }
-
         g_free(CO line);
-        CO ctx->qmp_lock = FALSE;
+        colod_unlock_co(CO ctx->qmp_lock);
 
         colod_channel_read_line_co(ret, CO ctx->qmp_channel, &CO line,
                                    &CO read_len, &errp);
         if (ret != G_IO_STATUS_NORMAL) {
-            if (ret == G_IO_STATUS_ERROR) {
-                colod_syslog(CO ctx, LOG_WARNING, "QMP connection broke: %s",
-                             errp->message);
-                g_error_free(errp);
-            }
-            // qemu is gone
-            exit(EXIT_FAILURE);
+            goto error_qmp;
         }
 
         colod_channel_write_co(ret, CO client_channel, CO line, CO read_len,
                                &errp);
         if (ret != G_IO_STATUS_NORMAL) {
-            if (ret == G_IO_STATUS_ERROR) {
-                colod_syslog(CO ctx, LOG_WARNING,
-                             "Client connection broke: %s",
-                             errp->message);
-                g_error_free(errp);
-            }
-            g_io_channel_unref(CO client_channel);
-            return G_SOURCE_REMOVE;
+            goto error_client;
         }
 
         g_free(CO line);
     }
+
+    CO co.line = 0;
+    return G_SOURCE_REMOVE;
+
+error_client:
+    if (ret == G_IO_STATUS_ERROR) {
+        colod_syslog(CO ctx, LOG_WARNING, "Client connection broke: %s",
+                     errp->message);
+        g_error_free(errp);
+    }
+    CO co.line = 0;
+    return G_SOURCE_REMOVE;
+
+error_qmp:
+    if (ret == G_IO_STATUS_ERROR) {
+        colod_syslog(CO ctx, LOG_WARNING, "QMP connection broke: %s",
+                     errp->message);
+        g_error_free(errp);
+    }
+    // qemu is gone: set global error, broadcast, ...
+    CO co.line = 0;
+    exit(EXIT_FAILURE);
 
     co_end;
 
