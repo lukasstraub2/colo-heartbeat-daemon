@@ -20,6 +20,10 @@ GIOStatus _colod_channel_read_line_co(Coroutine *coroutine,
     GIOStatus ret;
 
     co_begin(GIOStatus, 0);
+
+    g_io_add_watch(channel, G_IO_IN, coroutine->cb.iofunc, coroutine);
+    co_yield(GINT_TO_POINTER(G_SOURCE_REMOVE));
+
     while (TRUE) {
         ret = g_io_channel_read_line(channel, line, len, NULL, errp);
         if ((ret == G_IO_STATUS_NORMAL && *len == 0) ||
@@ -43,6 +47,10 @@ GIOStatus _colod_channel_write_co(Coroutine *coroutine,
     CO offset = 0;
 
     co_begin(GIOStatus, 0);
+
+    g_io_add_watch(channel, G_IO_OUT, coroutine->cb.iofunc, coroutine);
+    co_yield(GINT_TO_POINTER(G_SOURCE_REMOVE));
+
     while (CO offset < len) {
         ret = g_io_channel_write_chars(channel,
                                        buf + CO offset,

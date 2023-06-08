@@ -158,11 +158,6 @@ static gboolean _colod_client_co(Coroutine *coroutine) {
         }
         CO ctx->qmp_lock = TRUE;
 
-        // switch source to qmp
-        g_io_add_watch(CO ctx->qmp_channel, G_IO_OUT,
-                       colod_client_co_wrap, coroutine);
-        co_yield(GINT_TO_POINTER(G_SOURCE_REMOVE));
-
         colod_channel_write_co(ret, CO ctx->qmp_channel, CO line, CO read_len,
                                &errp);
         if (ret != G_IO_STATUS_NORMAL) {
@@ -178,10 +173,6 @@ static gboolean _colod_client_co(Coroutine *coroutine) {
         g_free(CO line);
         CO ctx->qmp_lock = FALSE;
 
-        g_io_add_watch(CO ctx->qmp_channel, G_IO_IN,
-                       colod_client_co_wrap, coroutine);
-        co_yield(GINT_TO_POINTER(G_SOURCE_REMOVE));
-
         colod_channel_read_line_co(ret, CO ctx->qmp_channel, &CO line,
                                    &CO read_len, &errp);
         if (ret != G_IO_STATUS_NORMAL) {
@@ -193,11 +184,6 @@ static gboolean _colod_client_co(Coroutine *coroutine) {
             // qemu is gone
             exit(EXIT_FAILURE);
         }
-
-        // switch source to client
-        g_io_add_watch(CO client_channel, G_IO_OUT,
-                       colod_client_co_wrap, coroutine);
-        co_yield(GINT_TO_POINTER(G_SOURCE_REMOVE));
 
         colod_channel_write_co(ret, CO client_channel, CO line, CO read_len,
                                &errp);
@@ -213,9 +199,6 @@ static gboolean _colod_client_co(Coroutine *coroutine) {
         }
 
         g_free(CO line);
-        g_io_add_watch(CO client_channel, G_IO_IN,
-                       colod_client_co_wrap, coroutine);
-        co_yield(GINT_TO_POINTER(G_SOURCE_REMOVE));
     }
 
     co_end;
