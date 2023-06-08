@@ -160,6 +160,7 @@ static gboolean _colod_client_co(Coroutine *coroutine) {
         colod_channel_write_co(ret, CO client_channel, CO line, CO read_len,
                                &errp);
         if (ret != G_IO_STATUS_NORMAL) {
+            g_free(CO line);
             goto error_client;
         }
 
