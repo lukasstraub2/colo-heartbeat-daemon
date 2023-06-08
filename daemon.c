@@ -50,14 +50,6 @@ static void colod_syslog(ColodContext *ctx, int pri,
     va_end(args);
 }
 
-static guint colod_create_source(GMainContext *context, int fd,
-                                 G_GNUC_UNUSED GIOCondition events,
-                                 GSourceFunc func, gpointer data) {
-    GSource *source = fd_source_create(fd, G_IO_IN);
-    g_source_set_callback(source, func, data, NULL);
-    return g_source_attach(source, context);
-}
-
 static GIOChannel *colod_create_channel(int fd, GError **errp) {
     GError *local_errp = NULL;
     GIOChannel *channel;

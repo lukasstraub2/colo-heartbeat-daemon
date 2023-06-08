@@ -32,7 +32,6 @@ int os_daemonize(void);
 int os_daemonize_post_init(int pipe, GError **errp);
 
 int colod_fd_set_blocking(int fd, gboolean blocking, GError **errp);
-GSource *fd_source_create(int fd, GIOCondition events);
 gint progress_source_add(GSourceFunc func, gpointer data);
 
 #endif // UTIL_H
