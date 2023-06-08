@@ -15,7 +15,6 @@
 #include "coroutine.h"
 
 typedef struct CoroutineUtilCo {
-    CoroutineEntry co;
     gsize offset;
 } CoroutineUtilCo;
 

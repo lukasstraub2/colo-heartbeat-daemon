@@ -166,7 +166,6 @@ static gboolean _colod_client_co(Coroutine *coroutine) {
         g_free(CO line);
     }
 
-    CO co.line = 0;
     return G_SOURCE_REMOVE;
 
 error_client:
@@ -175,7 +174,6 @@ error_client:
                      errp->message);
         g_error_free(errp);
     }
-    CO co.line = 0;
     return G_SOURCE_REMOVE;
 
 error_qmp:
@@ -185,7 +183,6 @@ error_qmp:
         g_error_free(errp);
     }
     // qemu is gone: set global error, broadcast, ...
-    CO co.line = 0;
     exit(EXIT_FAILURE);
 
     co_end;

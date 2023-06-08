@@ -36,7 +36,6 @@ typedef struct ColodContext {
 } ColodContext;
 
 typedef struct ColodClientCo {
-    CoroutineEntry co;
     ColodContext *ctx;
     GIOChannel *client_channel;
     gsize read_len;

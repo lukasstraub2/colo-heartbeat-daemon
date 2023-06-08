@@ -15,10 +15,13 @@
 #include "daemon.h"
 #include "coutil.h"
 
-union CoroutineStack {
-    ColodClientCo clientco;
-    CoroutineUtilCo utilco;
-};
+typedef struct CoroutineStack {
+    unsigned int line;
+    union {
+        ColodClientCo clientco;
+        CoroutineUtilCo utilco;
+    } data;
+} CoroutineStack;
 
 typedef struct CoroutineCallback {
     GSourceFunc plain;
@@ -30,13 +33,13 @@ typedef struct Coroutine {
     int yield;
     void *yield_value;
     unsigned int stack_index;
-    union CoroutineStack stack[16];
+    CoroutineStack stack[16];
     CoroutineCallback cb;
 } Coroutine;
 
 #define coroutine_stack_size(co) (sizeof(co->stack)/sizeof(co->stack[0]))
 
-#define co_stack(field) (&(coroutine->stack[coroutine->stack_index].field))
+#define co_stack(field) (&(coroutine->stack[coroutine->stack_index].data.field))
 
 #define co_yield(value) \
     do { \
@@ -52,7 +55,10 @@ typedef struct Coroutine {
         assert((coroutine)->stack_index == 0); \
         (ret) = func((coroutine), ##__VA_ARGS__); \
         assert((coroutine)->stack_index == 0); \
-        (coroutine)->quit = !(coroutine)->yield; \
+        if (!(coroutine)->yield) { \
+            (coroutine)->stack[(coroutine)->stack_index].line = 0; \
+            (coroutine)->quit = 1; \
+        } \
     } while(0)
 
 #define co_call_co(ret, func, ...) \
@@ -64,6 +70,7 @@ typedef struct Coroutine {
         if (coroutine->yield) { \
             _co_yield(coroutine_yield_ret); \
         } else { \
+            coroutine->stack[coroutine->stack_index + 1].line = 0; \
             break; \
         } \
     }
