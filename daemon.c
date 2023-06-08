@@ -236,6 +236,8 @@ static int colod_client_new(ColodContext *ctx, int fd, GError **errp) {
     }
 
     coroutine = g_new0(Coroutine, 1);
+    coroutine->cb.plain = colod_client_co;
+    coroutine->cb.iofunc = colod_client_co_wrap;
     co = co_stack(clientco);
     co->ctx = ctx;
     co->client_channel = channel;

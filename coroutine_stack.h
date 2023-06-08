@@ -10,6 +10,8 @@
 #ifndef COROUTINE_STACK_H
 #define COROUTINE_STACK_H
 
+#include <glib-2.0/glib.h>
+
 #include "daemon.h"
 #include "coutil.h"
 
@@ -18,12 +20,18 @@ union CoroutineStack {
     CoroutineUtilCo utilco;
 };
 
+typedef struct CoroutineCallback {
+    GSourceFunc plain;
+    GIOFunc iofunc;
+} CoroutineCallback;
+
 typedef struct Coroutine {
     int quit;
     int yield;
     void *yield_value;
     unsigned int stack_index;
     union CoroutineStack stack[16];
+    CoroutineCallback cb;
 } Coroutine;
 
 #define coroutine_stack_size(co) (sizeof(co->stack)/sizeof(co->stack[0]))
