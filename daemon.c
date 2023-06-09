@@ -50,33 +50,6 @@ static void colod_syslog(ColodContext *ctx, int pri,
     va_end(args);
 }
 
-static GIOChannel *colod_create_channel(int fd, GError **errp) {
-    GError *local_errp = NULL;
-    GIOChannel *channel;
-
-    channel = g_io_channel_unix_new(fd);
-    g_io_channel_set_encoding(channel, NULL, &local_errp);
-    if (local_errp) {
-        colod_error_set(errp, "Failed to set channel encoding: %s",
-                        local_errp->message);
-        g_error_free(local_errp);
-        g_io_channel_unref(channel);
-        return NULL;
-    }
-
-    g_io_channel_set_flags(channel, G_IO_FLAG_NONBLOCK, &local_errp);
-    if (local_errp) {
-        colod_error_set(errp, "Failed to set channel nonblocking: %s",
-                        local_errp->message);
-        g_error_free(local_errp);
-        g_io_channel_unref(channel);
-        return NULL;
-    }
-    g_io_channel_set_close_on_unref(channel, TRUE);
-
-    return channel;
-}
-
 static void colod_cpg_deliver(cpg_handle_t handle,
                               const struct cpg_name *group_name,
                               uint32_t nodeid,

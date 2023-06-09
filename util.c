@@ -92,3 +92,30 @@ gint progress_source_add(GSourceFunc func, gpointer data) {
     g_source_set_callback(source, func, data, NULL);
     return g_source_attach(source, context);
 }
+
+GIOChannel *colod_create_channel(int fd, GError **errp) {
+    GError *local_errp = NULL;
+    GIOChannel *channel;
+
+    channel = g_io_channel_unix_new(fd);
+    g_io_channel_set_encoding(channel, NULL, &local_errp);
+    if (local_errp) {
+        colod_error_set(errp, "Failed to set channel encoding: %s",
+                        local_errp->message);
+        g_error_free(local_errp);
+        g_io_channel_unref(channel);
+        return NULL;
+    }
+
+    g_io_channel_set_flags(channel, G_IO_FLAG_NONBLOCK, &local_errp);
+    if (local_errp) {
+        colod_error_set(errp, "Failed to set channel nonblocking: %s",
+                        local_errp->message);
+        g_error_free(local_errp);
+        g_io_channel_unref(channel);
+        return NULL;
+    }
+    g_io_channel_set_close_on_unref(channel, TRUE);
+
+    return channel;
+}
