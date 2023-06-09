@@ -15,6 +15,7 @@
 
 typedef enum ColodError {
     COLOD_ERROR_FATAL,
+    COLOD_ERROR_TIMEOUT
 } ColodError;
 
 #define COLOD_ERROR (colod_error_quark())

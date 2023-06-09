@@ -15,7 +15,10 @@
 #include "coroutine.h"
 
 typedef struct CoroutineUtilCo {
+    GSource *timeout_source;
+    GSource *io_source;
     gsize offset;
+    gboolean switched_source;
 } CoroutineUtilCo;
 
 #define colod_lock_co(variable) \
@@ -29,6 +32,10 @@ typedef struct CoroutineUtilCo {
 
 #define colod_unlock_co(variable) \
     (variable) = FALSE;
+#define colod_channel_read_line_timeout_co(ret, channel, line, len, timeout, \
+                                           errp) \
+    co_call_co((ret), _colod_channel_read_line_timeout_co, \
+               (channel), (line), (len), (timeout), (errp))
 
 #define colod_channel_read_line_co(ret, channel, line, len, errp) \
     co_call_co((ret), _colod_channel_read_line_co, \
@@ -37,6 +44,13 @@ typedef struct CoroutineUtilCo {
 #define colod_channel_write_co(ret, channel, buf, len, errp) \
     co_call_co((ret), _colod_channel_write_co, \
                (channel), (buf), (len), (errp))
+
+GIOStatus _colod_channel_read_line_timeout_co(Coroutine *coroutine,
+                                              GIOChannel *channel,
+                                              gchar **line,
+                                              gsize *len,
+                                              guint timeout,
+                                              GError **errp);
 
 GIOStatus _colod_channel_read_line_co(Coroutine *coroutine,
                                       GIOChannel *channel, gchar **line,
