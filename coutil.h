@@ -21,17 +21,36 @@ typedef struct CoroutineUtilCo {
     gboolean switched_source;
 } CoroutineUtilCo;
 
-#define colod_lock_co(variable) \
+typedef struct CoroutineLock {
+    Coroutine *holder;
+    unsigned int count;
+} CoroutineLock;
+
+#define colod_lock_co(lock) \
     do { \
-        while ((variable)) { \
+        if ((lock).holder == coroutine) { \
+            assert((lock).count); \
+            (lock).count++; \
+            break; \
+        } \
+        while ((lock).holder) { \
             progress_source_add(coroutine->cb.plain, coroutine); \
             co_yield(GINT_TO_POINTER(G_SOURCE_REMOVE)); \
         } \
-        (variable) = TRUE; \
+        assert((lock).count == 0); \
+        (lock).holder = coroutine; \
+        (lock).count++; \
     } while(0)
 
-#define colod_unlock_co(variable) \
-    (variable) = FALSE;
+#define colod_unlock_co(lock) \
+    do { \
+        assert((lock).holder == coroutine && (lock).count); \
+        (lock).count--; \
+        if (!(lock).count) { \
+            (lock).holder = NULL; \
+        } \
+    } while(0)
+
 #define colod_channel_read_line_timeout_co(ret, channel, line, len, timeout, \
                                            errp) \
     co_call_co((ret), _colod_channel_read_line_timeout_co, \
