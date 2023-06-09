@@ -16,12 +16,14 @@
 
 #include "daemon.h"
 #include "coutil.h"
+#include "qmp.h"
 
 typedef struct CoroutineStack {
     unsigned int line;
     union {
         ColodClientCo clientco;
         CoroutineUtilCo utilco;
+        ColodQmpCo qmpco;
     } data;
 } CoroutineStack;
 

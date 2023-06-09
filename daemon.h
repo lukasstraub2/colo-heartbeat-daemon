@@ -15,7 +15,7 @@
 #include <corosync/cpg.h>
 #include <corosync/corotypes.h>
 
-#include "coutil.h"
+#include "qmp.h"
 
 typedef struct ColodContext {
     /* Parameters */
@@ -27,11 +27,10 @@ typedef struct ColodContext {
     char *node_name, *instance_name, *base_dir, *qmp_path;
 
     int qmp_fd, mngmt_listen_fd, cpg_fd;
-    guint qmp_source_id, mngmt_listen_source_id, cpg_source_id;
+    guint mngmt_listen_source_id, cpg_source_id;
 
+    ColodQmpState *qmpstate;
 
-    GIOChannel *qmp_channel;
-    gboolean qmp_lock;
     cpg_handle_t cpg_handle;
 } ColodContext;
 
@@ -40,7 +39,7 @@ typedef struct ColodClientCo {
     GIOChannel *client_channel;
     gsize read_len;
     gchar *line;
-    size_t write_len;
+    ColodQmpResult *result;
 } ColodClientCo;
 
 #endif // DAEMON_H

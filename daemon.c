@@ -29,6 +29,7 @@
 #include "coroutine.h"
 #include "coutil.h"
 #include "util.h"
+#include "qmp.h"
 #include "coroutine_stack.h"
 
 static void colod_syslog(ColodContext *ctx, int pri,
@@ -115,29 +116,19 @@ static gboolean _colod_client_co(Coroutine *coroutine) {
             goto error_client;
         }
 
-        colod_lock_co(CO ctx->qmp_lock);
-        colod_channel_write_co(ret, CO ctx->qmp_channel, CO line, CO read_len,
-                               &errp);
-        if (ret != G_IO_STATUS_NORMAL) {
-            goto error_qmp;
-        }
-        g_free(CO line);
-        colod_unlock_co(CO ctx->qmp_lock);
-
-        colod_channel_read_line_co(ret, CO ctx->qmp_channel, &CO line,
-                                   &CO read_len, &errp);
-        if (ret != G_IO_STATUS_NORMAL) {
+        qmp_execute_co(CO result, CO ctx->qmpstate, &errp, CO line);
+        if (errp) {
             goto error_qmp;
         }
 
-        colod_channel_write_co(ret, CO client_channel, CO line, CO read_len,
-                               &errp);
+        colod_channel_write_co(ret, CO client_channel, CO result->line,
+                               CO result->len, &errp);
         if (ret != G_IO_STATUS_NORMAL) {
-            g_free(CO line);
+            qmp_result_free(CO result);
             goto error_client;
         }
 
-        g_free(CO line);
+        qmp_result_free(CO result);
     }
 
     return G_SOURCE_REMOVE;
@@ -151,7 +142,7 @@ error_client:
     return G_SOURCE_REMOVE;
 
 error_qmp:
-    if (ret == G_IO_STATUS_ERROR) {
+    if (errp) {
         colod_syslog(CO ctx, LOG_WARNING, "QMP connection broke: %s",
                      errp->message);
         g_error_free(errp);
@@ -217,8 +208,6 @@ static gboolean colod_mngmt_new_client(G_GNUC_UNUSED int fd,
     return G_SOURCE_CONTINUE;
 }
 
-static gboolean colod_qmp_readable(gpointer data);
-
 static void colod_mainloop(ColodContext *ctx) {
     GError *errp = NULL;
 
@@ -226,9 +215,9 @@ static void colod_mainloop(ColodContext *ctx) {
     ctx->mainctx = g_main_context_default();
     ctx->mainloop = g_main_loop_new(ctx->mainctx, FALSE);
 
-    ctx->qmp_channel = colod_create_channel(ctx->qmp_fd, &errp);
+    ctx->qmpstate = qmp_new(ctx->qmp_fd, &errp);
     if (errp) {
-        colod_syslog(ctx, LOG_ERR, "Failed to create qmp GIOChannel: %s",
+        colod_syslog(ctx, LOG_ERR, "Failed to initialize qmp: %s",
                      errp->message);
         g_error_free(errp);
         exit(EXIT_FAILURE);
