@@ -71,7 +71,7 @@ GIOStatus _colod_channel_read_line_co(Coroutine *coroutine,
 }
 
 GIOStatus _colod_channel_write_co(Coroutine *coroutine,
-                                  GIOChannel *channel, gchar *buf,
+                                  GIOChannel *channel, const gchar *buf,
                                   gsize len, GError **errp) {
     CoroutineUtilCo *co = co_stack(utilco);
     GIOStatus ret;

@@ -76,7 +76,7 @@ GIOStatus _colod_channel_read_line_co(Coroutine *coroutine,
                                       gsize *len, GError **errp);
 
 GIOStatus _colod_channel_write_co(Coroutine *coroutine,
-                                  GIOChannel *channel, gchar *buf,
+                                  GIOChannel *channel, const gchar *buf,
                                   gsize len, GError **errp);
 
 #endif // COUTIL_H
