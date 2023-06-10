@@ -22,29 +22,26 @@ GIOStatus _colod_channel_read_line_timeout_co(Coroutine *coroutine,
                                               GError **errp) {
     CoroutineUtilCo *co = co_stack(utilco);
     GIOStatus ret;
-    guint id;
 
     co_begin(GIOStatus, 0);
 
-    id = g_io_add_watch(channel, G_IO_IN, coroutine->cb.iofunc, coroutine);
-    CO io_source = g_main_context_find_source_by_id(g_main_context_default(), id);
-    co_yield(GINT_TO_POINTER(G_SOURCE_REMOVE));
-
-    assert(CO io_source && g_main_current_source() == CO io_source);
-
     if (timeout) {
-        id = g_timeout_add(timeout, coroutine->cb.plain, coroutine);
-        CO timeout_source = g_main_context_find_source_by_id(
-                                 g_main_context_default(), id);
+        CO timeout_source_id = g_timeout_add(timeout, coroutine->cb.plain,
+                                             coroutine);
     }
 
     while (TRUE) {
         ret = g_io_channel_read_line(channel, line, len, NULL, errp);
         if ((ret == G_IO_STATUS_NORMAL && *len == 0) ||
                 ret == G_IO_STATUS_AGAIN) {
-            co_yield(GINT_TO_POINTER(G_SOURCE_CONTINUE));
+            CO io_source_id = g_io_add_watch(channel, G_IO_IN,
+                                             coroutine->cb.iofunc,
+                                             coroutine);
+            co_yield(GINT_TO_POINTER(G_SOURCE_REMOVE));
 
-            if (timeout && g_main_current_source() == CO timeout_source) {
+            if (timeout && g_source_get_id(g_main_current_source())
+                    == CO timeout_source_id) {
+                g_source_remove(CO io_source_id);
                 g_set_error(errp, COLOD_ERROR, COLOD_ERROR_TIMEOUT,
                             "Channel read timed out");
                 ret = G_IO_STATUS_ERROR;
@@ -56,7 +53,7 @@ GIOStatus _colod_channel_read_line_timeout_co(Coroutine *coroutine,
     }
 
     if (timeout) {
-        g_source_destroy(CO timeout_source);
+        g_source_remove(CO timeout_source_id);
     }
     co_end;
 
@@ -80,9 +77,6 @@ GIOStatus _colod_channel_write_co(Coroutine *coroutine,
 
     co_begin(GIOStatus, 0);
 
-    g_io_add_watch(channel, G_IO_OUT, coroutine->cb.iofunc, coroutine);
-    co_yield(GINT_TO_POINTER(G_SOURCE_REMOVE));
-
     while (CO offset < len) {
         ret = g_io_channel_write_chars(channel,
                                        buf + CO offset,
@@ -91,7 +85,9 @@ GIOStatus _colod_channel_write_co(Coroutine *coroutine,
         CO offset += write_len;
         if (ret == G_IO_STATUS_NORMAL || ret == G_IO_STATUS_AGAIN) {
             if (write_len == 0) {
-                co_yield(GINT_TO_POINTER(G_SOURCE_CONTINUE));
+                g_io_add_watch(channel, G_IO_OUT, coroutine->cb.iofunc,
+                               coroutine);
+                co_yield(GINT_TO_POINTER(G_SOURCE_REMOVE));
             }
         } else {
             break;
@@ -104,7 +100,9 @@ GIOStatus _colod_channel_write_co(Coroutine *coroutine,
 
     ret = g_io_channel_flush(channel, errp);
     while(ret == G_IO_STATUS_AGAIN) {
-        co_yield(GINT_TO_POINTER(G_SOURCE_CONTINUE));
+        g_io_add_watch(channel, G_IO_OUT, coroutine->cb.iofunc,
+                       coroutine);
+        co_yield(GINT_TO_POINTER(G_SOURCE_REMOVE));
         ret = g_io_channel_flush(channel, errp);
     }
     co_end;

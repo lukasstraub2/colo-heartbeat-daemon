@@ -15,10 +15,8 @@
 #include "coroutine.h"
 
 typedef struct CoroutineUtilCo {
-    GSource *timeout_source;
-    GSource *io_source;
+    guint timeout_source_id, io_source_id;
     gsize offset;
-    gboolean switched_source;
 } CoroutineUtilCo;
 
 typedef struct CoroutineLock {
