@@ -18,27 +18,7 @@
 #include "coutil.h"
 #include "queue.h"
 
-typedef struct ColodQmpResult ColodQmpResult;
-typedef void (*QmpYankCallback)(gpointer user_data, gboolean success);
-typedef void (*QmpEventCallback)(gpointer user_data, ColodQmpResult *event);
-
-typedef struct ColodQmpCallback {
-    QSLIST_ENTRY(ColodQmpCallback) next;
-    union {
-        QmpYankCallback *yank;
-        QmpEventCallback *event;
-    } cb;
-    gpointer user_data;
-} ColodQmpCallback;
-
-typedef struct ColodQmpState {
-    GIOChannel *channel;
-    CoroutineLock lock;
-    guint timeout;
-    gchar *yank_instances;
-    QSLIST_HEAD(, ColodQmpCallback) yank_callbacks;
-    QSLIST_HEAD(, ColodQmpCallback) event_callbacks;
-} ColodQmpState;
+typedef struct ColodQmpState ColodQmpState;
 
 typedef struct ColodQmpCo {
     ColodQmpState *state;
@@ -47,11 +27,14 @@ typedef struct ColodQmpCo {
     gchar *command;
 } ColodQmpCo;
 
-struct ColodQmpResult {
+typedef struct ColodQmpResult {
     JsonNode *json_root;
     gchar *line;
     gsize len;
-};
+} ColodQmpResult;
+
+typedef void (*QmpYankCallback)(gpointer user_data, gboolean success);
+typedef void (*QmpEventCallback)(gpointer user_data, ColodQmpResult *event);
 
 void qmp_result_free(ColodQmpResult *result);
 
@@ -63,5 +46,14 @@ ColodQmpResult *_qmp_execute_co(Coroutine *coroutine,
                                 ColodQmpState *state,
                                 GError **errp,
                                 const gchar *command);
+
+void qmp_add_notify_event(ColodQmpState *state, QmpEventCallback _func,
+                          gpointer user_data);
+void qmp_add_notify_yank(ColodQmpState *state, QmpYankCallback _func,
+                         gpointer user_data);
+void qmp_del_notify_event(ColodQmpState *state, QmpEventCallback _func,
+                          gpointer user_data);
+void qmp_del_notify_yank(ColodQmpState *state, QmpYankCallback _func,
+                         gpointer user_data);
 
 #endif // QMP_H

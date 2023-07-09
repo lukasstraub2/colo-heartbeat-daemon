@@ -18,15 +18,100 @@
 #include "util.h"
 #include "coroutine_stack.h"
 
+typedef void (*Callback)(void);
+typedef struct QmpCallback {
+    QLIST_ENTRY(QmpCallback) next;
+    Callback func;
+    gpointer user_data;
+} QmpCallback;
+
+QLIST_HEAD(QmpCallbackHead, QmpCallback);
+struct ColodQmpState {
+    GIOChannel *channel;
+    CoroutineLock lock;
+    guint timeout;
+    gchar *yank_instances;
+    struct QmpCallbackHead yank_callbacks;
+    struct QmpCallbackHead event_callbacks;
+};
+
 #define qmp_yank_co(ret, state, errp) \
     co_call_co((ret), _qmp_yank_co, (state), (errp))
 static ColodQmpResult *_qmp_yank_co(Coroutine *coroutine, ColodQmpState *state,
                                     GError **errp);
 
+static QmpCallback *qmp_find_notify(struct QmpCallbackHead *head,
+                                    Callback func, gpointer user_data) {
+    QmpCallback *entry;
+    QLIST_FOREACH(entry, head, next) {
+        if (entry->func == func && entry->user_data == user_data) {
+            return entry;
+        }
+    }
+
+    return NULL;
+}
+
+static void qmp_add_notify(struct QmpCallbackHead *head,
+                           Callback func, gpointer user_data) {
+    QmpCallback *cb;
+
+    assert(!qmp_find_notify(head, func, user_data));
+
+    cb = g_new0(QmpCallback, 1);
+    cb->func = func;
+    cb->user_data = user_data;
+
+    QLIST_INSERT_HEAD(head, cb, next);
+}
+
+void qmp_add_notify_event(ColodQmpState *state, QmpEventCallback _func,
+                          gpointer user_data) {
+    Callback func = (Callback) _func;
+    qmp_add_notify(&state->event_callbacks, func, user_data);
+}
+
+void qmp_add_notify_yank(ColodQmpState *state, QmpYankCallback _func,
+                         gpointer user_data) {
+    Callback func = (Callback) _func;
+    qmp_add_notify(&state->yank_callbacks, func, user_data);
+}
+
+void qmp_del_notify_event(ColodQmpState *state, QmpEventCallback _func,
+                          gpointer user_data) {
+    Callback func = (Callback) _func;
+    QmpCallback *cb;
+
+    cb = qmp_find_notify(&state->event_callbacks, func, user_data);
+    assert(cb);
+
+    QLIST_REMOVE(cb, next);
+}
+
+void qmp_del_notify_yank(ColodQmpState *state, QmpYankCallback _func,
+                         gpointer user_data) {
+    Callback func = (Callback) _func;
+    QmpCallback *cb;
+
+    cb = qmp_find_notify(&state->yank_callbacks, func, user_data);
+    assert(cb);
+
+    QLIST_REMOVE(cb, next);
+}
+
 static void notify_event(ColodQmpState *state, ColodQmpResult *result) {
-    ColodQmpCallback *entry;
-    QSLIST_FOREACH(entry, &state->event_callbacks, next) {
-        (*entry->cb.event)(entry->user_data, result);
+    QmpCallback *entry;
+    QLIST_FOREACH(entry, &state->event_callbacks, next) {
+        QmpEventCallback func = (QmpEventCallback) entry->func;
+        func(entry->user_data, result);
+    }
+}
+
+static void notify_yank(ColodQmpState *state, gboolean success) {
+    QmpCallback *entry;
+    QLIST_FOREACH(entry, &state->yank_callbacks, next) {
+        QmpYankCallback func = (QmpYankCallback) entry->func;
+        func(entry->user_data, success);
     }
 }
 
@@ -147,13 +232,6 @@ ColodQmpResult *_qmp_execute_co(Coroutine *coroutine,
                                 GError **errp,
                                 const gchar *command) {
     return __qmp_execute_co(coroutine, state, TRUE, errp, command);
-}
-
-static void notify_yank(ColodQmpState *state, gboolean success) {
-    ColodQmpCallback *entry;
-    QSLIST_FOREACH(entry, &state->yank_callbacks, next) {
-        (*entry->cb.yank)(entry->user_data, success);
-    }
 }
 
 static ColodQmpResult *_qmp_yank_co(Coroutine *coroutine, ColodQmpState *state,
