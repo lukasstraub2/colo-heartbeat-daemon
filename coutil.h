@@ -33,7 +33,7 @@ typedef struct CoroutineLock {
         } \
         while ((lock).holder) { \
             progress_source_add(coroutine->cb.plain, coroutine); \
-            co_yield(GINT_TO_POINTER(G_SOURCE_REMOVE)); \
+            co_yield_int(G_SOURCE_REMOVE); \
         } \
         assert((lock).count == 0); \
         (lock).holder = coroutine; \

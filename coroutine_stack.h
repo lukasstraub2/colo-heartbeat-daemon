@@ -52,6 +52,9 @@ typedef struct Coroutine {
         _co_yield(coroutine_yield_ret); \
     } while (0)
 
+#define co_yield_int(value) \
+    co_yield(GINT_TO_POINTER(value))
+
 #define co_enter(ret, coroutine, func, ...) \
     do { \
         assert(!(coroutine)->quit); \
