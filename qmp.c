@@ -123,8 +123,8 @@ static ColodQmpResult *__qmp_execute_co(Coroutine *coroutine,
     co_begin(ColodQmpResult *, NULL);
 
     colod_lock_co(state->lock);
-    colod_channel_write_co(ret, state->channel, command, strlen(command),
-                           errp);
+    colod_channel_write_timeout_co(ret, state->channel, command,
+                                   strlen(command), state->timeout, errp);
     if (ret != G_IO_STATUS_NORMAL) {
         colod_unlock_co(state->lock);
         return NULL;
