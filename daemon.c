@@ -160,10 +160,8 @@ static int colod_client_new(ColodContext *ctx, int fd, GError **errp) {
     Coroutine *coroutine;
     ColodClientCo *co;
 
-    assert(errp);
-
     channel = colod_create_channel(fd, errp);
-    if (*errp) {
+    if (!channel) {
         return -1;
     }
 
@@ -244,16 +242,14 @@ cpg_model_v1_data_t cpg_data = {
     0
 };
 
-static void colod_open_cpg(ColodContext *ctx, GError **errp) {
+static int colod_open_cpg(ColodContext *ctx, GError **errp) {
     cs_error_t ret;
     int fd;
     struct cpg_name name;
 
-    assert(errp);
-
     if (strlen(ctx->instance_name) >= sizeof(name.value)) {
         colod_error_set(errp, "Instance name too long");
-        return;
+        return -1;
     }
     strcpy(name.value, ctx->instance_name);
     name.length = strlen(name.value);
@@ -262,7 +258,7 @@ static void colod_open_cpg(ColodContext *ctx, GError **errp) {
                                (cpg_model_data_t*) &cpg_data, ctx);
     if (ret != CS_OK) {
         colod_error_set(errp, "Failed to initialize cpg: %s", cs_strerror(ret));
-        return;
+        return -1;
     }
 
     ret = cpg_join(ctx->cpg_handle, &name);
@@ -279,25 +275,24 @@ static void colod_open_cpg(ColodContext *ctx, GError **errp) {
     }
 
     ctx->cpg_fd = fd;
-    return;
+    return 0;
 
 err_joined:
     cpg_leave(ctx->cpg_handle, &name);
 err:
     cpg_finalize(ctx->cpg_handle);
+    return -1;
 }
 
-static void colod_open_mngmt(ColodContext *ctx, GError **errp) {
+static int colod_open_mngmt(ColodContext *ctx, GError **errp) {
     int sockfd, ret;
     struct sockaddr_un address = { 0 };
     g_autofree char *path = NULL;
 
-    assert(errp);
-
     path = g_strconcat(ctx->base_dir, "/colod.sock", NULL);
     if (strlen(path) >= sizeof(address.sun_path)) {
         colod_error_set(errp, "Management unix path too long");
-        return;
+        return -1;
     }
     strcpy(address.sun_path, path);
     address.sun_family = AF_UNIX;
@@ -306,7 +301,7 @@ static void colod_open_mngmt(ColodContext *ctx, GError **errp) {
     if (ret < 0) {
         colod_error_set(errp, "Failed to create management socket: %s",
                         g_strerror(errno));
-        return;
+        return -1;
     }
     sockfd = ret;
 
@@ -327,26 +322,24 @@ static void colod_open_mngmt(ColodContext *ctx, GError **errp) {
 
     ret = colod_fd_set_blocking(sockfd, FALSE, errp);
     if (ret < 0) {
-        assert(*errp);
         goto err;
     }
 
     ctx->mngmt_listen_fd = sockfd;
-    return;
+    return 0;
 
 err:
     close(sockfd);
+    return -1;
 }
 
-static void colod_open_qmp(ColodContext *ctx, GError **errp) {
+static int colod_open_qmp(ColodContext *ctx, GError **errp) {
     int sockfd, ret;
     struct sockaddr_un address = { 0 };
 
-    assert(errp);
-
     if (strlen(ctx->qmp_path) >= sizeof(address.sun_path)) {
         colod_error_set(errp, "Qmp unix path too long");
-        return;
+        return -1;
     }
     strcpy(address.sun_path, ctx->qmp_path);
     address.sun_family = AF_UNIX;
@@ -355,7 +348,7 @@ static void colod_open_qmp(ColodContext *ctx, GError **errp) {
     if (ret < 0) {
         colod_error_set(errp, "Failed to create qmp socket: %s",
                         g_strerror(errno));
-        return;
+        return -1;
     }
     sockfd = ret;
 
@@ -368,14 +361,15 @@ static void colod_open_qmp(ColodContext *ctx, GError **errp) {
     }
 
     ctx->qmp_fd = sockfd;
-    return;
+    return 0;
 
 err:
     close(sockfd);
+    return -1;
 }
 
 static int colod_daemonize(ColodContext *ctx) {
-    GError *errp = NULL;
+    GError *local_errp = NULL;
     char *path;
     int logfd, pipefd, ret;
 
@@ -402,11 +396,11 @@ static int colod_daemonize(ColodContext *ctx) {
     openlog("colod", LOG_PID, LOG_DAEMON);
 
     path = g_strconcat(ctx->base_dir, "/colod.pid", NULL);
-    ret = colod_write_pidfile(path, &errp);
+    ret = colod_write_pidfile(path, &local_errp);
     g_free(path);
     if (!ret) {
-        syslog(LOG_ERR, "Fatal: %s", errp->message);
-        g_error_free(errp);
+        syslog(LOG_ERR, "Fatal: %s", local_errp->message);
+        g_error_free(local_errp);
         exit(EXIT_FAILURE);
     }
 
@@ -418,6 +412,7 @@ int main(int argc, char **argv) {
     char *node_name, *instance_name, *base_dir, *qmp_path;
     ColodContext ctx_struct = { 0 };
     ColodContext *ctx = &ctx_struct;
+    int ret;
 
     if (argc != 5) {
         fprintf(stderr, "Usage: %s <node name> <instance name> "
@@ -441,24 +436,24 @@ int main(int argc, char **argv) {
 
     signal(SIGPIPE, SIG_IGN); // TODO: Handle this properly
 
-    colod_open_qmp(ctx, &errp);
-    if (errp) {
+    ret = colod_open_qmp(ctx, &errp);
+    if (ret < 0) {
         goto err;
     }
 
-    colod_open_mngmt(ctx, &errp);
-    if (errp) {
+    ret = colod_open_mngmt(ctx, &errp);
+    if (ret < 0) {
         goto err;
     }
 
-    //colod_open_cpg(ctx, &errp);
-    if (errp) {
+    //ret = colod_open_cpg(ctx, &errp);
+    if (ret < 0) {
         goto err;
     }
 
     if (ctx->daemonize) {
-        os_daemonize_post_init(pipefd, &errp);
-        if (errp) {
+        ret = os_daemonize_post_init(pipefd, &errp);
+        if (ret < 0) {
             goto err;
         }
     }
