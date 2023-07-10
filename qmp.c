@@ -230,11 +230,10 @@ static ColodQmpResult *__qmp_execute_co(Coroutine *coroutine,
     }
 
     qmp_read_line_co(result, state, yank, errp);
+    colod_unlock_co(state->lock);
     if (*errp) {
         return NULL;
     }
-
-    colod_unlock_co(state->lock);
 
     co_end;
 
