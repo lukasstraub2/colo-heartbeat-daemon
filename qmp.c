@@ -151,6 +151,12 @@ ColodQmpResult *qmp_parse_result(gchar *line, gsize len, GError **errp) {
     result->json_root = json_node_ref(json_parser_get_root(parser));
     g_object_unref(parser);
 
+    if (!JSON_NODE_HOLDS_OBJECT(result->json_root)) {
+        colod_error_set(errp, "Result is not a json object: %s", result->line);
+        qmp_result_free(result);
+        return NULL;
+    }
+
     return result;
 }
 
