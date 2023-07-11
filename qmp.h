@@ -20,18 +20,19 @@
 
 typedef struct ColodQmpState ColodQmpState;
 
-typedef struct ColodQmpCo {
-    ColodQmpState *state;
-    gchar *line;
-    gsize len;
-    gchar *command;
-} ColodQmpCo;
-
 typedef struct ColodQmpResult {
     JsonNode *json_root;
     gchar *line;
     gsize len;
 } ColodQmpResult;
+
+typedef struct ColodQmpCo {
+    ColodQmpState *state;
+    gchar *line;
+    gsize len;
+    gchar *command;
+    ColodQmpResult *result;
+} ColodQmpCo;
 
 typedef void (*QmpYankCallback)(gpointer user_data, gboolean success);
 typedef void (*QmpEventCallback)(gpointer user_data, ColodQmpResult *event);

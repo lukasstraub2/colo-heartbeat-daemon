@@ -30,7 +30,7 @@ struct ColodQmpState {
     GIOChannel *channel;
     CoroutineLock lock;
     guint timeout;
-    gchar *yank_instances;
+    JsonNode *yank_matches;
     struct QmpCallbackHead yank_callbacks;
     struct QmpCallbackHead event_callbacks;
 };
@@ -251,46 +251,176 @@ ColodQmpResult *_qmp_execute_co(Coroutine *coroutine,
     return __qmp_execute_co(coroutine, state, TRUE, errp, command);
 }
 
+static gboolean object_matches(JsonNode *node, JsonNode *match) {
+    JsonObject *object, *match_object;
+    JsonObjectIter iter;
+    const gchar *match_member;
+    JsonNode *match_node;
+
+    assert(JSON_NODE_HOLDS_OBJECT(match));
+
+    if (!JSON_NODE_HOLDS_OBJECT(node)) {
+        return FALSE;
+    }
+
+    object = json_node_get_object(node);
+    match_object = json_node_get_object(match);
+
+    json_object_iter_init (&iter, match_object);
+    while (json_object_iter_next (&iter, &match_member, &match_node))
+    {
+        if (!json_object_has_member(object, match_member)) {
+            return FALSE;
+        }
+
+        JsonNode *member_node = json_object_get_member(object, match_member);
+        if (!json_node_equal(member_node, match_node)) {
+            return FALSE;
+        }
+    }
+
+    return TRUE;
+}
+
+static gboolean object_matches_match_array(JsonNode *node,
+                                           JsonNode *match_array) {
+    JsonReader *reader;
+
+    assert(JSON_NODE_HOLDS_ARRAY(match_array));
+
+    reader = json_reader_new(match_array);
+
+    guint count = json_reader_count_elements(reader);
+    for (guint i = 0; i < count; i++) {
+        json_reader_read_element(reader, i);
+        JsonNode *match = json_reader_get_value(reader);
+        assert(match);
+
+        if (object_matches(node, match)) {
+            g_object_unref(reader);
+            return TRUE;
+        }
+
+        json_reader_end_element(reader);
+    }
+    json_reader_end_member(reader);
+    g_object_unref(reader);
+
+    return FALSE;
+}
+
+static gchar *pick_yank_instances(JsonNode *result,
+                                  JsonNode *yank_matches) {
+    JsonArray *array;
+    gchar *instances_str;
+    JsonNode *instances;
+    JsonGenerator *generator;
+    JsonReader *reader;
+
+    assert(JSON_NODE_HOLDS_OBJECT(result));
+    assert(JSON_NODE_HOLDS_ARRAY(yank_matches));
+
+    instances = json_node_new(JSON_NODE_ARRAY);
+    array = json_array_new();
+    json_node_set_array(instances, array);
+    g_object_unref(array);
+
+    reader = json_reader_new(result);
+
+    json_reader_read_member(reader, "return");
+    guint count = json_reader_count_elements(reader);
+    for (guint i = 0; i < count; i++) {
+        json_reader_read_element(reader, i);
+        JsonNode *element = json_reader_get_value(reader);
+        assert(element);
+
+        if (object_matches_match_array(element, yank_matches)) {
+            json_array_add_element(array, element);
+        }
+
+        json_reader_end_element(reader);
+    }
+    json_reader_end_member(reader);
+    g_object_unref(reader);
+
+    generator = json_generator_new();
+    json_generator_set_root(generator, instances);
+    json_generator_set_pretty(generator, FALSE);
+    instances_str = json_generator_to_data(generator, NULL);
+    g_object_unref(generator);
+    g_object_unref(instances);
+    return instances_str;
+}
+
 static ColodQmpResult *_qmp_yank_co(Coroutine *coroutine, ColodQmpState *state,
                                     GError **errp) {
     ColodQmpCo *co = co_stack(qmpco);
-    ColodQmpResult *result = NULL;
+    ColodQmpResult *tmp;
 
     co_begin(ColodQmpResult *, NULL);
-    CO command = g_strdup_printf("{'exec-oob': 'yank', 'id': 'yank0', "
-                                        "'arguments':{ 'instances': %s }}",
-                                 state->yank_instances);
-    ___qmp_execute_co(result, state, FALSE, errp, CO command);
-    g_free(CO command);
-    if (!result) {
+    CO result = NULL;
+
+    ___qmp_execute_co(tmp, state, FALSE, errp,
+                      "{'exec-oob': 'query-yank', 'id': 'yank0'}");
+    if (!tmp) {
         notify_yank(state, FALSE);
         return NULL;
     }
 
-    if (has_member(result->json_root, "id")) {
-        // result is the result of the yank command
-        qmp_result_free(result);
-        qmp_read_line_co(result, state, FALSE, errp);
-        if (!result) {
-            notify_yank(state, FALSE);
-            return NULL;
-        }
-    } else {
+    if (!has_member(tmp->json_root, "id")) {
         // result is the result of the timed-out command
-        // read the yank command result
-        ColodQmpResult *tmp;
+        // read the query-yank command result
+        CO result = tmp;
         qmp_read_line_co(tmp, state, FALSE, errp);
         if (!tmp) {
             notify_yank(state, FALSE);
+            qmp_result_free(CO result);
             return NULL;
         }
         qmp_result_free(tmp);
+        return CO result;
+    }
+
+    gchar *instances = pick_yank_instances(tmp->json_root, state->yank_matches);
+    CO command = g_strdup_printf("{'exec-oob': 'yank', 'id': 'yank0', "
+                                        "'arguments':{ 'instances': %s }}",
+                                 instances);
+    g_free(instances);
+    qmp_result_free(tmp);
+
+    ___qmp_execute_co(tmp, state, FALSE, errp, CO command);
+    g_free(CO command);
+    if (!tmp) {
+        notify_yank(state, FALSE);
+        return NULL;
+    }
+
+    if (!has_member(tmp->json_root, "id")) {
+        // result is the result of the timed-out command
+        // read the yank command result
+        CO result = tmp;
+        qmp_read_line_co(tmp, state, FALSE, errp);
+        if (!tmp) {
+            notify_yank(state, FALSE);
+            qmp_result_free(CO result);
+            return NULL;
+        }
+        qmp_result_free(tmp);
+        notify_yank(state, TRUE);
+        return CO result;
+    }
+
+    qmp_result_free(tmp);
+    qmp_read_line_co(CO result, state, FALSE, errp);
+    if (!CO result) {
+        notify_yank(state, FALSE);
+        return NULL;
     }
 
     co_end;
 
     notify_yank(state, TRUE);
-    return result;
+    return CO result;
 }
 
 static gboolean _qmp_handshake_readable_co(Coroutine *coroutine);
