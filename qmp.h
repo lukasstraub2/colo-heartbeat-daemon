@@ -38,6 +38,7 @@ typedef void (*QmpYankCallback)(gpointer user_data, gboolean success);
 typedef void (*QmpEventCallback)(gpointer user_data, ColodQmpResult *event);
 
 void qmp_result_free(ColodQmpResult *result);
+ColodQmpResult *qmp_parse_result(gchar *line, gsize len, GError **errp);
 
 ColodQmpState *qmp_new(int fd, GError **errp);
 
@@ -56,5 +57,9 @@ void qmp_del_notify_event(ColodQmpState *state, QmpEventCallback _func,
                           gpointer user_data);
 void qmp_del_notify_yank(ColodQmpState *state, QmpYankCallback _func,
                          gpointer user_data);
+
+int qmp_get_error(ColodQmpState *state, GError **errp);
+gboolean qmp_get_yank(ColodQmpState *state);
+void qmp_clear_yank(ColodQmpState *state);
 
 #endif // QMP_H
