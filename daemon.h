@@ -17,6 +17,11 @@
 
 #include "qmp.h"
 
+typedef enum ColodRole {
+    ROLE_PRIMARY,
+    ROLE_SECONDARY
+} ColodRole;
+
 typedef struct ColodContext {
     /* Parameters */
     gboolean daemonize;
@@ -30,6 +35,8 @@ typedef struct ColodContext {
     guint mngmt_listen_source_id, cpg_source_id;
 
     ColodQmpState *qmpstate;
+    ColodRole role;
+    gboolean replication;
 
     cpg_handle_t cpg_handle;
 } ColodContext;
@@ -39,7 +46,14 @@ typedef struct ColodClientCo {
     GIOChannel *client_channel;
     gsize read_len;
     gchar *line;
-    ColodQmpResult *result;
+    union {
+        ColodQmpResult *result;
+        ColodQmpResult *qemu_status;
+    };
+    union {
+        ColodQmpResult *request;
+        ColodQmpResult *colo_status;
+    };
 } ColodClientCo;
 
 #endif // DAEMON_H

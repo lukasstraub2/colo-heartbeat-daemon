@@ -28,6 +28,7 @@
 #include "daemon.h"
 #include "coroutine.h"
 #include "coutil.h"
+#include "json_util.h"
 #include "util.h"
 #include "qmp.h"
 #include "coroutine_stack.h"
@@ -102,10 +103,167 @@ static gboolean colod_client_co_wrap(G_GNUC_UNUSED GIOChannel *channel,
     return colod_client_co(data);
 }
 
+static ColodQmpResult *create_error_reply(const gchar *message) {
+    ColodQmpResult *result;
+
+    gchar *reply = g_strdup_printf("{'error': '%s'}\n", message);
+    result = qmp_parse_result(reply, strlen(reply), NULL);
+    assert(result);
+
+    return result;
+}
+
+static gboolean qemu_runnng(const gchar *status) {
+    return !strcmp(status, "running")
+            || !strcmp(status, "finish-migrate")
+            || !strcmp(status, "colo");
+}
+
+#define qemu_query_status_co(result, qmp, role, replication, errp) \
+    co_call_co((result), _qemu_query_status_co, (qmp), (role), \
+               (replication), (errp))
+
+int _qemu_query_status_co(Coroutine *coroutine, ColodQmpState *qmp,
+                           ColodRole *role, gboolean *replication,
+                           GError **errp) {
+    ColodClientCo *co = co_stack(clientco);
+
+    co_begin(int, -1);
+
+    qmp_execute_co(CO qemu_status, qmp, errp,
+                   "{'execute': 'query-status'}\n");
+    if (!CO qemu_status) {
+        return -1;
+    }
+
+    qmp_execute_co(CO colo_status, qmp, errp,
+                   "{'execute': 'query-colo-status'}\n");
+    if (!CO colo_status) {
+        qmp_result_free(CO qemu_status);
+        return -1;
+    }
+
+    co_end;
+
+    const gchar *status, *colo_mode, *colo_reason;
+    status = get_member_member_str(CO qemu_status->json_root,
+                                   "return", "status");
+    colo_mode = get_member_member_str(CO colo_status->json_root,
+                                      "return", "mode");
+    colo_reason = get_member_member_str(CO colo_status->json_root,
+                                        "return", "reason");
+    if (!status || !colo_mode || !colo_reason) {
+        colod_error_set(errp, "Failed to parse query-status "
+                        "and query-colo-status output");
+        qmp_result_free(CO qemu_status);
+        qmp_result_free(CO colo_status);
+        return -1;
+    }
+
+    if (!strcmp(status, "inmigrate") || !strcmp(status, "shutdown")) {
+        *role = ROLE_SECONDARY;
+        *replication = FALSE;
+    } else if (qemu_runnng(status) && !strcmp(colo_mode, "none")
+               && (!strcmp(colo_reason, "none")
+                   || !strcmp(colo_reason, "request"))) {
+        *role = ROLE_PRIMARY;
+        *replication = FALSE;
+    } else if (qemu_runnng(status) &&!strcmp(colo_mode, "primary")) {
+        *role = ROLE_PRIMARY;
+        *replication = TRUE;
+    } else if (qemu_runnng(status) && !strcmp(colo_mode, "secondary")) {
+        *role = ROLE_SECONDARY;
+        *replication = TRUE;
+    } else {
+        colod_error_set(errp, "Unknown qemu status: %s, %s",
+                        CO qemu_status->line, CO colo_status->line);
+        qmp_result_free(CO qemu_status);
+        qmp_result_free(CO colo_status);
+        return -1;
+    }
+
+    qmp_result_free(CO qemu_status);
+    qmp_result_free(CO colo_status);
+    return 0;
+}
+
+#define colod_check_health_co(result, ctx, errp) \
+    co_call_co((result), _colod_check_health_co, (ctx), (errp))
+
+int _colod_check_health(Coroutine *coroutine, ColodContext *ctx,
+                        GError **errp) {
+    ColodRole role;
+    gboolean replication;
+    int ret;
+
+    ret = _qemu_query_status_co(coroutine, ctx->qmpstate, &role, &replication,
+                                errp);
+    if (coroutine->yield) {
+        return -1;
+    }
+    if (ret < 0) {
+        return -1;
+    }
+
+    ret = qmp_get_error(ctx->qmpstate, errp);
+    if (ret < 0) {
+        return -1;
+    }
+
+    if (ctx->role != role || ctx->replication != replication) {
+        colod_error_set(errp, "qemu status mismatch");
+        return -1;
+    }
+
+    return 0;
+}
+
+static const gchar *role_to_string(ColodRole role) {
+    if (role == ROLE_PRIMARY) {
+        return "primary";
+    } else {
+        return "secondary";
+    }
+}
+
+#define handle_query_status_co(result, ctx) \
+    co_call_co((result), _handle_query_status_co, (ctx))
+
+ColodQmpResult *_handle_query_status_co(Coroutine *coroutine,
+                                        ColodContext *ctx) {
+    int ret;
+    ColodQmpResult *result;
+    GError *local_errp;
+
+    ret = _colod_check_health(coroutine, ctx, &local_errp);
+    if (coroutine->yield) {
+        return NULL;
+    }
+    if (ret < 0) {
+        // TODO should return "state": "error" instead
+        result = create_error_reply(local_errp->message);
+        g_error_free(local_errp);
+        return result;
+    }
+
+    gchar *reply;
+    reply = g_strdup_printf("{'return': {'role': '%s', 'replication': %s}}",
+                            role_to_string(ctx->role),
+                            bool_to_json(ctx->replication));
+
+    result = qmp_parse_result(reply, strlen(reply), NULL);
+    assert(result);
+    return result;
+}
+
+static ColodQmpResult *handle_quit(ColodContext *ctx) {
+    return NULL;
+}
+
 static gboolean _colod_client_co(Coroutine *coroutine) {
     ColodClientCo *co = co_stack(clientco);
-    GError *errp = NULL;
     GIOStatus ret;
+    GError *errp = NULL;
 
     co_begin(gboolean, G_SOURCE_CONTINUE);
 
@@ -116,10 +274,33 @@ static gboolean _colod_client_co(Coroutine *coroutine) {
             goto error_client;
         }
 
-        qmp_execute_co(CO result, CO ctx->qmpstate, &errp, CO line);
-        if (errp) {
-            goto error_qmp;
+        CO request = qmp_parse_result(CO line, CO read_len, &errp);
+        if (!CO request) {
+            goto error_client;
         }
+
+        if (has_member(CO request->json_root, "exec-colod")) {
+            const gchar *command = get_member_str(CO request->json_root,
+                                                  "exec-colod");
+            if (!command) {
+                CO result = create_error_reply("Could not get exec-colod "
+                                               "member");
+            } else if (!strcmp(command, "query-status")) {
+                handle_query_status_co(CO result, CO ctx);
+            } else if (!strcmp(command, "quit")) {
+                CO result = handle_quit(CO ctx);
+            } else {
+                CO result = create_error_reply("Unknown command");
+            }
+        } else {
+            qmp_execute_co(CO result, CO ctx->qmpstate, &errp,
+                           CO request->line);
+            if (!CO result) {
+                goto error_qmp;
+            }
+        }
+
+        qmp_result_free(CO request);
 
         colod_channel_write_co(ret, CO client_channel, CO result->line,
                                CO result->len, &errp);
