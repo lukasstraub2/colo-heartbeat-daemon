@@ -16,6 +16,7 @@
 
 #include "qmp.h"
 #include "util.h"
+#include "json_util.h"
 #include "coroutine_stack.h"
 
 typedef void (*Callback)(void);
@@ -138,14 +139,6 @@ static void notify_yank(ColodQmpState *state, gboolean success) {
         QmpYankCallback func = (QmpYankCallback) entry->func;
         func(entry->user_data, success);
     }
-}
-
-static gboolean has_member(JsonNode *node, const gchar *member) {
-    JsonObject *object;
-
-    assert(JSON_NODE_HOLDS_OBJECT(node));
-    object = json_node_get_object(node);
-    return json_object_has_member(object, member);
 }
 
 void qmp_result_free(ColodQmpResult *result) {
@@ -298,64 +291,6 @@ ColodQmpResult *_qmp_execute_co(Coroutine *coroutine,
     return __qmp_execute_co(coroutine, state, TRUE, errp, command);
 }
 
-static gboolean object_matches(JsonNode *node, JsonNode *match) {
-    JsonObject *object, *match_object;
-    JsonObjectIter iter;
-    const gchar *match_member;
-    JsonNode *match_node;
-
-    assert(JSON_NODE_HOLDS_OBJECT(match));
-
-    if (!JSON_NODE_HOLDS_OBJECT(node)) {
-        return FALSE;
-    }
-
-    object = json_node_get_object(node);
-    match_object = json_node_get_object(match);
-
-    json_object_iter_init (&iter, match_object);
-    while (json_object_iter_next (&iter, &match_member, &match_node))
-    {
-        if (!json_object_has_member(object, match_member)) {
-            return FALSE;
-        }
-
-        JsonNode *member_node = json_object_get_member(object, match_member);
-        if (!json_node_equal(member_node, match_node)) {
-            return FALSE;
-        }
-    }
-
-    return TRUE;
-}
-
-static gboolean object_matches_match_array(JsonNode *node,
-                                           JsonNode *match_array) {
-    JsonReader *reader;
-
-    assert(JSON_NODE_HOLDS_ARRAY(match_array));
-
-    reader = json_reader_new(match_array);
-
-    guint count = json_reader_count_elements(reader);
-    for (guint i = 0; i < count; i++) {
-        json_reader_read_element(reader, i);
-        JsonNode *match = json_reader_get_value(reader);
-        assert(match);
-
-        if (object_matches(node, match)) {
-            g_object_unref(reader);
-            return TRUE;
-        }
-
-        json_reader_end_element(reader);
-    }
-    json_reader_end_member(reader);
-    g_object_unref(reader);
-
-    return FALSE;
-}
-
 static gchar *pick_yank_instances(JsonNode *result,
                                   JsonNode *yank_matches) {
     JsonArray *array;
@@ -408,7 +343,7 @@ static ColodQmpResult *_qmp_yank_co(Coroutine *coroutine, ColodQmpState *state,
     CO result = NULL;
 
     ___qmp_execute_co(tmp, state, FALSE, errp,
-                      "{'exec-oob': 'query-yank', 'id': 'yank0'}");
+                      "{'exec-oob': 'query-yank', 'id': 'yank0'}\n");
     if (!tmp) {
         return NULL;
     }
@@ -435,7 +370,7 @@ static ColodQmpResult *_qmp_yank_co(Coroutine *coroutine, ColodQmpState *state,
 
     gchar *instances = pick_yank_instances(tmp->json_root, state->yank_matches);
     CO command = g_strdup_printf("{'exec-oob': 'yank', 'id': 'yank0', "
-                                        "'arguments':{ 'instances': %s }}",
+                                        "'arguments':{ 'instances': %s }}\n",
                                  instances);
     g_free(instances);
     qmp_result_free(tmp);
