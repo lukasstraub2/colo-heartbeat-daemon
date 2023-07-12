@@ -16,6 +16,7 @@
 
 #include "daemon.h"
 #include "coutil.h"
+#include "client.h"
 #include "qmp.h"
 
 typedef struct CoroutineStack {

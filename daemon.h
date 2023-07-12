@@ -15,6 +15,7 @@
 #include <corosync/cpg.h>
 #include <corosync/corotypes.h>
 
+#include "base_types.h"
 #include "qmp.h"
 
 typedef enum ColodRole {
@@ -32,7 +33,9 @@ typedef struct ColodContext {
     char *node_name, *instance_name, *base_dir, *qmp_path;
 
     int qmp_fd, mngmt_listen_fd, cpg_fd;
-    guint mngmt_listen_source_id, cpg_source_id;
+    guint cpg_source_id;
+
+    ColodClientListener *listener;
 
     ColodQmpState *qmpstate;
     ColodRole role;
@@ -41,19 +44,12 @@ typedef struct ColodContext {
     cpg_handle_t cpg_handle;
 } ColodContext;
 
-typedef struct ColodClientCo {
-    ColodContext *ctx;
-    GIOChannel *client_channel;
-    gsize read_len;
-    gchar *line;
-    union {
-        ColodQmpResult *result;
-        ColodQmpResult *qemu_status;
-    };
-    union {
-        ColodQmpResult *request;
-        ColodQmpResult *colo_status;
-    };
-} ColodClientCo;
+void colod_syslog(ColodContext *ctx, int pri, const char *fmt, ...)
+     __attribute__ ((__format__ (__printf__, 3, 4)));
+
+#define colod_check_health_co(result, ctx, errp) \
+    co_call_co((result), _colod_check_health_co, (ctx), (errp))
+int _colod_check_health(Coroutine *coroutine, ColodContext *ctx,
+                        GError **errp);
 
 #endif // DAEMON_H

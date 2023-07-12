@@ -25,20 +25,17 @@
 #include <corosync/cpg.h>
 #include <corosync/corotypes.h>
 
+#include "base_types.h"
 #include "daemon.h"
 #include "coroutine.h"
 #include "coutil.h"
 #include "json_util.h"
 #include "util.h"
+#include "client.h"
 #include "qmp.h"
 #include "coroutine_stack.h"
 
-static void colod_syslog(ColodContext *ctx, int pri,
-                         const char *fmt, ...)
-     __attribute__ ((__format__ (__printf__, 3, 4)));
-
-static void colod_syslog(ColodContext *ctx, int pri,
-                         const char *fmt, ...) {
+void colod_syslog(ColodContext *ctx, int pri, const char *fmt, ...) {
     va_list args;
     va_start(args, fmt);
 
@@ -80,37 +77,6 @@ static gboolean colod_cpg_readable(gpointer data) {
     ColodContext *ctx = data;
     cpg_dispatch(ctx->cpg_handle, CS_DISPATCH_ALL);
     return G_SOURCE_CONTINUE;
-}
-
-static gboolean _colod_client_co(Coroutine *coroutine);
-static gboolean colod_client_co(gpointer data) {
-    Coroutine *coroutine = (Coroutine *) data;
-    ColodClientCo *co = co_stack(clientco);
-    gboolean ret;
-
-    co_enter(ret, coroutine, _colod_client_co);
-    if (coroutine->yield) {
-        return GPOINTER_TO_INT(coroutine->yield_value);
-    }
-
-    g_io_channel_unref(CO client_channel);
-    g_free(coroutine);
-    return ret;
-}
-static gboolean colod_client_co_wrap(G_GNUC_UNUSED GIOChannel *channel,
-                                     G_GNUC_UNUSED GIOCondition revents,
-                                     gpointer data) {
-    return colod_client_co(data);
-}
-
-static ColodQmpResult *create_error_reply(const gchar *message) {
-    ColodQmpResult *result;
-
-    gchar *reply = g_strdup_printf("{'error': '%s'}\n", message);
-    result = qmp_parse_result(reply, strlen(reply), NULL);
-    assert(result);
-
-    return result;
 }
 
 static gboolean qemu_runnng(const gchar *status) {
@@ -187,9 +153,6 @@ int _qemu_query_status_co(Coroutine *coroutine, ColodQmpState *qmp,
     return 0;
 }
 
-#define colod_check_health_co(result, ctx, errp) \
-    co_call_co((result), _colod_check_health_co, (ctx), (errp))
-
 int _colod_check_health(Coroutine *coroutine, ColodContext *ctx,
                         GError **errp) {
     ColodRole role;
@@ -218,175 +181,6 @@ int _colod_check_health(Coroutine *coroutine, ColodContext *ctx,
     return 0;
 }
 
-static const gchar *role_to_string(ColodRole role) {
-    if (role == ROLE_PRIMARY) {
-        return "primary";
-    } else {
-        return "secondary";
-    }
-}
-
-#define handle_query_status_co(result, ctx) \
-    co_call_co((result), _handle_query_status_co, (ctx))
-
-ColodQmpResult *_handle_query_status_co(Coroutine *coroutine,
-                                        ColodContext *ctx) {
-    int ret;
-    ColodQmpResult *result;
-    GError *local_errp;
-
-    ret = _colod_check_health(coroutine, ctx, &local_errp);
-    if (coroutine->yield) {
-        return NULL;
-    }
-    if (ret < 0) {
-        // TODO should return "state": "error" instead
-        result = create_error_reply(local_errp->message);
-        g_error_free(local_errp);
-        return result;
-    }
-
-    gchar *reply;
-    reply = g_strdup_printf("{'return': {'role': '%s', 'replication': %s}}",
-                            role_to_string(ctx->role),
-                            bool_to_json(ctx->replication));
-
-    result = qmp_parse_result(reply, strlen(reply), NULL);
-    assert(result);
-    return result;
-}
-
-static ColodQmpResult *handle_quit(ColodContext *ctx) {
-    return NULL;
-}
-
-static gboolean _colod_client_co(Coroutine *coroutine) {
-    ColodClientCo *co = co_stack(clientco);
-    GIOStatus ret;
-    GError *errp = NULL;
-
-    co_begin(gboolean, G_SOURCE_CONTINUE);
-
-    while (TRUE) {
-        colod_channel_read_line_co(ret, CO client_channel, &CO line,
-                                   &CO read_len, &errp);
-        if (ret != G_IO_STATUS_NORMAL) {
-            goto error_client;
-        }
-
-        CO request = qmp_parse_result(CO line, CO read_len, &errp);
-        if (!CO request) {
-            goto error_client;
-        }
-
-        if (has_member(CO request->json_root, "exec-colod")) {
-            const gchar *command = get_member_str(CO request->json_root,
-                                                  "exec-colod");
-            if (!command) {
-                CO result = create_error_reply("Could not get exec-colod "
-                                               "member");
-            } else if (!strcmp(command, "query-status")) {
-                handle_query_status_co(CO result, CO ctx);
-            } else if (!strcmp(command, "quit")) {
-                CO result = handle_quit(CO ctx);
-            } else {
-                CO result = create_error_reply("Unknown command");
-            }
-        } else {
-            qmp_execute_co(CO result, CO ctx->qmpstate, &errp,
-                           CO request->line);
-            if (!CO result) {
-                goto error_qmp;
-            }
-        }
-
-        qmp_result_free(CO request);
-
-        colod_channel_write_co(ret, CO client_channel, CO result->line,
-                               CO result->len, &errp);
-        if (ret != G_IO_STATUS_NORMAL) {
-            qmp_result_free(CO result);
-            goto error_client;
-        }
-
-        qmp_result_free(CO result);
-    }
-
-    return G_SOURCE_REMOVE;
-
-error_client:
-    if (ret == G_IO_STATUS_ERROR) {
-        colod_syslog(CO ctx, LOG_WARNING, "Client connection broke: %s",
-                     errp->message);
-        g_error_free(errp);
-    }
-    return G_SOURCE_REMOVE;
-
-error_qmp:
-    if (errp) {
-        colod_syslog(CO ctx, LOG_WARNING, "QMP connection broke: %s",
-                     errp->message);
-        g_error_free(errp);
-    }
-    // qemu is gone: set global error, broadcast, ...
-    exit(EXIT_FAILURE);
-
-    co_end;
-
-    return G_SOURCE_REMOVE;
-}
-
-static int colod_client_new(ColodContext *ctx, int fd, GError **errp) {
-    GIOChannel *channel;
-    Coroutine *coroutine;
-    ColodClientCo *co;
-
-    channel = colod_create_channel(fd, errp);
-    if (!channel) {
-        return -1;
-    }
-
-    coroutine = g_new0(Coroutine, 1);
-    coroutine->cb.plain = colod_client_co;
-    coroutine->cb.iofunc = colod_client_co_wrap;
-    co = co_stack(clientco);
-    co->ctx = ctx;
-    co->client_channel = channel;
-
-    g_io_add_watch(channel, G_IO_IN, colod_client_co_wrap, coroutine);
-    return 0;
-}
-
-static gboolean colod_mngmt_new_client(G_GNUC_UNUSED int fd,
-                                       G_GNUC_UNUSED GIOCondition condition,
-                                       gpointer data) {
-    ColodContext *ctx = (ColodContext *) data;
-    GError *errp = NULL;
-
-    while (TRUE) {
-        int clientfd = accept(ctx->mngmt_listen_fd, NULL, NULL);
-        if (clientfd < 0) {
-            if (errno != EWOULDBLOCK) {
-                colod_syslog(ctx, LOG_ERR,
-                             "Fatal: Failed to accept() new client: %s",
-                             g_strerror(errno));
-                exit(EXIT_FAILURE);
-            }
-
-            break;
-        }
-
-        if (colod_client_new(ctx, clientfd, &errp) < 0) {
-            colod_syslog(ctx, LOG_WARNING, "Failed to create new client: %s",
-                         errp->message);
-            g_error_free(errp);
-            continue;
-        }
-    }
-
-    return G_SOURCE_CONTINUE;
-}
-
 static void colod_mainloop(ColodContext *ctx) {
     GError *errp = NULL;
 
@@ -402,8 +196,13 @@ static void colod_mainloop(ColodContext *ctx) {
         exit(EXIT_FAILURE);
     }
 
-    ctx->mngmt_listen_source_id = g_unix_fd_add(ctx->mngmt_listen_fd, G_IO_IN,
-                                                colod_mngmt_new_client, ctx);
+    ctx->listener = client_listener_new(ctx->mngmt_listen_fd, ctx, &errp);
+    if (!ctx->listener) {
+        colod_syslog(ctx, LOG_ERR, "Failed to initialize client listener: %s",
+                     errp->message);
+        g_error_free(errp);
+        exit(EXIT_FAILURE);
+    }
 
     //ctx->cpg_source_id = colod_create_source(ctx->mainctx, ctx->cpg_fd,
     //                                         G_IO_IN, colod_cpg_readable,

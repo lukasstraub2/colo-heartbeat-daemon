@@ -17,8 +17,7 @@
 #include "coroutine.h"
 #include "coutil.h"
 #include "queue.h"
-
-typedef struct ColodQmpState ColodQmpState;
+#include "base_types.h"
 
 typedef struct ColodQmpResult {
     JsonNode *json_root;
