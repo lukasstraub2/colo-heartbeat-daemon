@@ -90,9 +90,9 @@ static gboolean qemu_runnng(const gchar *status) {
     co_call_co((result), _qemu_query_status_co, (qmp), (role), \
                (replication), (errp))
 
-int _qemu_query_status_co(Coroutine *coroutine, ColodQmpState *qmp,
-                           ColodRole *role, gboolean *replication,
-                           GError **errp) {
+static int _qemu_query_status_co(Coroutine *coroutine, ColodQmpState *qmp,
+                                 ColodRole *role, gboolean *replication,
+                                 GError **errp) {
     ColodClientCo *co = co_stack(clientco);
 
     co_begin(int, -1);
@@ -154,8 +154,8 @@ int _qemu_query_status_co(Coroutine *coroutine, ColodQmpState *qmp,
     return 0;
 }
 
-int _colod_check_health(Coroutine *coroutine, ColodContext *ctx,
-                        GError **errp) {
+int _colod_check_health_co(Coroutine *coroutine, ColodContext *ctx,
+                           GError **errp) {
     ColodRole role;
     gboolean replication;
     int ret;
@@ -187,25 +187,25 @@ void colod_quit(ColodContext *ctx) {
 }
 
 static void colod_mainloop(ColodContext *ctx) {
-    GError *errp = NULL;
+    GError *local_errp = NULL;
 
     // g_main_context_default creates the global context on demand
     ctx->mainctx = g_main_context_default();
     ctx->mainloop = g_main_loop_new(ctx->mainctx, FALSE);
 
-    ctx->qmpstate = qmp_new(ctx->qmp_fd, &errp);
-    if (errp) {
+    ctx->qmpstate = qmp_new(ctx->qmp_fd, &local_errp);
+    if (local_errp) {
         colod_syslog(ctx, LOG_ERR, "Failed to initialize qmp: %s",
-                     errp->message);
-        g_error_free(errp);
+                     local_errp->message);
+        g_error_free(local_errp);
         exit(EXIT_FAILURE);
     }
 
-    ctx->listener = client_listener_new(ctx->mngmt_listen_fd, ctx, &errp);
+    ctx->listener = client_listener_new(ctx->mngmt_listen_fd, ctx);
     if (!ctx->listener) {
         colod_syslog(ctx, LOG_ERR, "Failed to initialize client listener: %s",
-                     errp->message);
-        g_error_free(errp);
+                     local_errp->message);
+        g_error_free(local_errp);
         exit(EXIT_FAILURE);
     }
 

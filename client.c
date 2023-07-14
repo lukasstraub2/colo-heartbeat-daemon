@@ -67,7 +67,7 @@ static ColodQmpResult *_handle_query_status_co(Coroutine *coroutine,
     ColodQmpResult *result;
     GError *local_errp;
 
-    ret = _colod_check_health(coroutine, ctx, &local_errp);
+    ret = _colod_check_health_co(coroutine, ctx, &local_errp);
     if (coroutine->yield) {
         return NULL;
     }
@@ -108,7 +108,7 @@ static void client_free(ColodClient *client) {
 
 static gboolean _colod_client_co(Coroutine *coroutine);
 static gboolean colod_client_co(gpointer data) {
-    ColodClient *client = (ColodClient *) data;
+    ColodClient *client = data;
     Coroutine *coroutine = &client->coroutine;
     gboolean ret;
 
@@ -281,8 +281,7 @@ void client_listener_free(ColodClientListener *listener) {
     g_free(listener);
 }
 
-ColodClientListener *client_listener_new(int socket, ColodContext *ctx,
-                                         GError **errp) {
+ColodClientListener *client_listener_new(int socket, ColodContext *ctx) {
     ColodClientListener *listener;
 
     listener = g_new0(ColodClientListener, 1);

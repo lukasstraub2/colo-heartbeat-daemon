@@ -448,33 +448,33 @@ static gboolean qmp_handshake_readable_co_wrap(
 static gboolean _qmp_handshake_readable_co(Coroutine *coroutine) {
     ColodQmpCo *co = co_stack(qmpco);
     ColodQmpResult *result;
-    GError *errp = NULL;
+    GError *local_errp = NULL;
 
     co_begin(gboolean, G_SOURCE_CONTINUE);
 
-    qmp_read_line_co(result, CO state, FALSE, &errp);
+    qmp_read_line_co(result, CO state, FALSE, &local_errp);
     if (!result) {
         colod_unlock_co(CO state->lock);
-        qmp_set_error(CO state, errp);
-        g_error_free(errp);
+        qmp_set_error(CO state, local_errp);
+        g_error_free(local_errp);
         return G_SOURCE_REMOVE;
     }
     qmp_result_free(result);
 
-    qmp_execute_co(result, CO state, &errp,
+    qmp_execute_co(result, CO state, &local_errp,
                    "{'execute': 'qmp_capabilities', "
                         "'arguments': {'enable': ['oob']}}\n");
     colod_unlock_co(CO state->lock);
     if (!result) {
-        qmp_set_error(CO state, errp);
-        g_error_free(errp);
+        qmp_set_error(CO state, local_errp);
+        g_error_free(local_errp);
         return G_SOURCE_REMOVE;
     }
     if (has_member(result->json_root, "error")) {
-        errp = g_error_new(COLOD_ERROR, COLOD_ERROR_FATAL,
-                           "qmp_capabilities: %s", result->line);
-        qmp_set_error(CO state, errp);
-        g_error_free(errp);
+        local_errp = g_error_new(COLOD_ERROR, COLOD_ERROR_FATAL,
+                                 "qmp_capabilities: %s", result->line);
+        qmp_set_error(CO state, local_errp);
+        g_error_free(local_errp);
         qmp_result_free(result);
         return G_SOURCE_REMOVE;
     }
@@ -532,7 +532,7 @@ static gboolean _qmp_event_co(Coroutine *coroutine) {
     ColodQmpCo *co = co_stack(qmpco);
     ColodQmpResult *result;
     GIOStatus ret;
-    GError *errp = NULL;
+    GError *local_errp = NULL;
 
     co_begin(gboolean, G_SOURCE_CONTINUE);
 
@@ -548,35 +548,36 @@ static gboolean _qmp_event_co(Coroutine *coroutine) {
         colod_lock_co(CO state->lock);
 
         colod_channel_read_line_timeout_co(ret, CO state->channel, &CO line,
-                                           &CO len, CO state->timeout, &errp);
+                                           &CO len, CO state->timeout,
+                                           &local_errp);
         colod_unlock_co(CO state->lock);
         if (ret == G_IO_STATUS_ERROR) {
-            qmp_set_error(CO state, errp);
-            g_error_free(errp);
+            qmp_set_error(CO state, local_errp);
+            g_error_free(local_errp);
             return G_SOURCE_REMOVE;
         }
         if (ret != G_IO_STATUS_NORMAL) {
-            errp = g_error_new(COLOD_ERROR, COLOD_ERROR_FATAL,
-                               "Qmp signaled EOF");
-            qmp_set_error(CO state, errp);
-            g_error_free(errp);
+            local_errp = g_error_new(COLOD_ERROR, COLOD_ERROR_FATAL,
+                                     "Qmp signaled EOF");
+            qmp_set_error(CO state, local_errp);
+            g_error_free(local_errp);
             return G_SOURCE_REMOVE;
         }
 
-        result = qmp_parse_result(CO line, CO len, &errp);
+        result = qmp_parse_result(CO line, CO len, &local_errp);
         if (!result) {
-            qmp_set_error(CO state, errp);
-            g_error_free(errp);
-            errp = NULL;
+            qmp_set_error(CO state, local_errp);
+            g_error_free(local_errp);
+            local_errp = NULL;
             continue;
         }
 
         if (!has_member(result->json_root, "event")) {
-            errp = g_error_new(COLOD_ERROR, COLOD_ERROR_FATAL,
-                               "Not an event: %s", result->line);
-            qmp_set_error(CO state, errp);
-            g_error_free(errp);
-            errp = NULL;
+            local_errp = g_error_new(COLOD_ERROR, COLOD_ERROR_FATAL,
+                                     "Not an event: %s", result->line);
+            qmp_set_error(CO state, local_errp);
+            g_error_free(local_errp);
+            local_errp = NULL;
             qmp_result_free(result);
             continue;
         }

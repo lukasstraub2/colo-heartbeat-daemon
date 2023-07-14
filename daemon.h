@@ -49,8 +49,8 @@ void colod_syslog(ColodContext *ctx, int pri, const char *fmt, ...)
 
 #define colod_check_health_co(result, ctx, errp) \
     co_call_co((result), _colod_check_health_co, (ctx), (errp))
-int _colod_check_health(Coroutine *coroutine, ColodContext *ctx,
-                        GError **errp);
+int _colod_check_health_co(Coroutine *coroutine, ColodContext *ctx,
+                           GError **errp);
 
 void colod_quit(ColodContext *ctx);
 

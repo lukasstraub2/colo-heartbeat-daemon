@@ -29,7 +29,6 @@ typedef struct ColodClientCo {
 } ColodClientCo;
 
 void client_listener_free(ColodClientListener *listener);
-ColodClientListener *client_listener_new(int socket, ColodContext *ctx,
-                                         GError **errp);
+ColodClientListener *client_listener_new(int socket, ColodContext *ctx);
 
 #endif // CLIENT_H
