@@ -239,8 +239,10 @@ int os_daemonize_post_init(int pipe, GError **errp)
     if (len != 1) {
         colod_error_set(errp, "Failed to signal success: %s",
                         g_strerror(errno));
+        close(pipe);
         return -1;
     }
 
+    close(pipe);
     return 0;
 }

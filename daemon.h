@@ -25,7 +25,7 @@ typedef enum ColodRole {
 
 typedef struct ColodContext {
     /* Parameters */
-    gboolean daemonize;
+    gboolean daemonize, syslog;
 
     /* Variables */
     GMainContext *mainctx;
@@ -51,5 +51,7 @@ void colod_syslog(ColodContext *ctx, int pri, const char *fmt, ...)
     co_call_co((result), _colod_check_health_co, (ctx), (errp))
 int _colod_check_health(Coroutine *coroutine, ColodContext *ctx,
                         GError **errp);
+
+void colod_quit(ColodContext *ctx);
 
 #endif // DAEMON_H

@@ -79,7 +79,7 @@ static ColodQmpResult *_handle_query_status_co(Coroutine *coroutine,
     }
 
     gchar *reply;
-    reply = g_strdup_printf("{'return': {'role': '%s', 'replication': %s}}",
+    reply = g_strdup_printf("{'return': {'role': '%s', 'replication': %s}}\n",
                             role_to_string(ctx->role),
                             bool_to_json(ctx->replication));
 
@@ -89,7 +89,15 @@ static ColodQmpResult *_handle_query_status_co(Coroutine *coroutine,
 }
 
 static ColodQmpResult *handle_quit(ColodContext *ctx) {
-    return NULL;
+    ColodQmpResult *result;
+    gchar *reply;
+
+    colod_quit(ctx);
+
+    reply = g_strdup("{'return': {}}\n");
+    result = qmp_parse_result(reply, strlen(reply), NULL);
+    assert(result);
+    return result;
 }
 
 static void client_free(ColodClient *client) {
@@ -165,6 +173,7 @@ static gboolean _colod_client_co(Coroutine *coroutine) {
             if (!CO result) {
                 CO result = create_error_reply(errp->message);
                 g_error_free(errp);
+                errp = NULL;
             }
         }
 
@@ -211,7 +220,7 @@ static int client_new(ColodClientListener *listener, int fd, GError **errp) {
     client->channel = channel;
     QLIST_INSERT_HEAD(&listener->head, client, next);
 
-    g_io_add_watch(channel, G_IO_IN, colod_client_co_wrap, client);
+    g_io_add_watch(channel, G_IO_IN | G_IO_HUP, colod_client_co_wrap, client);
     return 0;
 }
 
@@ -230,6 +239,7 @@ static gboolean client_listener_new_client(G_GNUC_UNUSED int fd,
                              "Failed to accept() new client: %s",
                              g_strerror(errno));
                 listener->listen_source_id = 0;
+                close(listener->socket);
                 return G_SOURCE_REMOVE;
             }
 
@@ -240,6 +250,7 @@ static gboolean client_listener_new_client(G_GNUC_UNUSED int fd,
             colod_syslog(ctx, LOG_WARNING, "Failed to create new client: %s",
                          errp->message);
             g_error_free(errp);
+            errp = NULL;
             continue;
         }
     }
@@ -252,12 +263,14 @@ void client_listener_free(ColodClientListener *listener) {
 
     if (listener->listen_source_id) {
         g_source_remove(listener->listen_source_id);
+        close(listener->socket);
     }
 
     QLIST_FOREACH(entry, &listener->head, next) {
         entry->quit = TRUE;
         if (!entry->busy) {
-            g_io_channel_shutdown(entry->channel, FALSE, NULL);
+            int fd = g_io_channel_unix_get_fd(entry->channel);
+            shutdown(fd, SHUT_RDWR);
         }
     }
 

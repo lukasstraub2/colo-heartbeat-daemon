@@ -14,6 +14,7 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>
+#include <sys/prctl.h>
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <errno.h>
@@ -39,7 +40,7 @@ void colod_syslog(ColodContext *ctx, int pri, const char *fmt, ...) {
     va_list args;
     va_start(args, fmt);
 
-    if (ctx->daemonize) {
+    if (ctx->daemonize && ctx->syslog) {
         vsyslog(pri, fmt, args);
     } else {
         vfprintf(stderr, fmt, args);
@@ -181,6 +182,10 @@ int _colod_check_health(Coroutine *coroutine, ColodContext *ctx,
     return 0;
 }
 
+void colod_quit(ColodContext *ctx) {
+    g_main_loop_quit(ctx->mainloop);
+}
+
 static void colod_mainloop(ColodContext *ctx) {
     GError *errp = NULL;
 
@@ -205,12 +210,15 @@ static void colod_mainloop(ColodContext *ctx) {
     }
 
     //ctx->cpg_source_id = colod_create_source(ctx->mainctx, ctx->cpg_fd,
-    //                                         G_IO_IN, colod_cpg_readable,
-    //                                         ctx);
+    //                                         G_IO_IN | G_IO_HUP,
+    //                                         colod_cpg_readable, ctx);
 
     g_main_loop_run(ctx->mainloop);
-
     g_main_loop_unref(ctx->mainloop);
+
+    client_listener_free(ctx->listener);
+    qmp_free(ctx->qmpstate);
+
     g_main_context_unref(ctx->mainctx);
 }
 
@@ -406,13 +414,15 @@ int main(int argc, char **argv) {
     base_dir = argv[3];
     qmp_path = argv[4];
 
-    ctx->daemonize = FALSE;
+    ctx->daemonize = TRUE;
+    ctx->syslog = FALSE;
     ctx->node_name = node_name;
     ctx->instance_name = instance_name;
     ctx->base_dir = base_dir;
     ctx->qmp_path = qmp_path;
 
     int pipefd = colod_daemonize(ctx);
+    prctl(PR_SET_PTRACER, PR_SET_PTRACER_ANY, 0, 0, 0);
 
     signal(SIGPIPE, SIG_IGN); // TODO: Handle this properly
 

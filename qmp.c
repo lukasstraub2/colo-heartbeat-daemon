@@ -42,7 +42,9 @@ struct ColodQmpState {
 static void qmp_set_error(ColodQmpState *state, GError *error) {
     assert(error);
 
-    g_error_free(state->error);
+    if (state->error) {
+        g_error_free(state->error);
+    }
     state->error = g_error_copy(error);
 }
 
@@ -207,6 +209,7 @@ static ColodQmpResult *_qmp_read_line_co(Coroutine *coroutine,
                     local_errp->code == COLOD_ERROR_TIMEOUT) {
                 if (yank) {
                     g_error_free(local_errp);
+                    local_errp = NULL;
                     qmp_yank_co(result, state, errp);
                     return result;
                 }
@@ -495,8 +498,8 @@ static Coroutine *qmp_handshake_coroutine(ColodQmpState *state) {
     state->lock.count = 1;
     state->lock.holder = coroutine;
 
-    g_io_add_watch(state->channel, G_IO_IN, qmp_handshake_readable_co_wrap,
-                   coroutine);
+    g_io_add_watch(state->channel, G_IO_IN | G_IO_HUP,
+                   qmp_handshake_readable_co_wrap, coroutine);
 
     state->inflight++;
     return coroutine;
@@ -534,8 +537,9 @@ static gboolean _qmp_event_co(Coroutine *coroutine) {
     co_begin(gboolean, G_SOURCE_CONTINUE);
 
     while (TRUE) {
-        g_io_add_watch_full(CO state->channel, G_PRIORITY_LOW, G_IO_IN,
-                            qmp_event_co_wrap, coroutine, NULL);
+        g_io_add_watch_full(CO state->channel, G_PRIORITY_LOW,
+                            G_IO_IN | G_IO_HUP, qmp_event_co_wrap, coroutine,
+                            NULL);
         co_yield_int(G_SOURCE_REMOVE);
 
         while (CO state->lock.holder) {
@@ -596,7 +600,7 @@ static Coroutine *qmp_event_coroutine(ColodQmpState *state) {
     co = co_stack(qmpco);
     co->state = state;
 
-    g_io_add_watch_full(state->channel, G_PRIORITY_LOW, G_IO_IN,
+    g_io_add_watch_full(state->channel, G_PRIORITY_LOW, G_IO_IN | G_IO_HUP,
                         qmp_event_co_wrap, coroutine, NULL);
 
     state->inflight++;
@@ -604,7 +608,8 @@ static Coroutine *qmp_event_coroutine(ColodQmpState *state) {
 }
 
 void qmp_free(ColodQmpState *state) {
-    g_io_channel_shutdown(state->channel, FALSE, NULL);
+    int fd = g_io_channel_unix_get_fd(state->channel);
+    shutdown(fd, SHUT_RDWR);
 
     while (state->inflight) {
         g_main_context_iteration(g_main_context_default(), TRUE);
