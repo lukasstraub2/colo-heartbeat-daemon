@@ -36,6 +36,7 @@ struct ColodQmpState {
     struct QmpCallbackHead event_callbacks;
     gboolean did_yank;
     GError *error;
+    guint inflight;
 };
 
 static void qmp_set_error(ColodQmpState *state, GError *error) {
@@ -252,6 +253,7 @@ static ColodQmpResult *__qmp_execute_co(Coroutine *coroutine,
 
     co_begin(ColodQmpResult *, NULL);
 
+    state->inflight++;
     colod_lock_co(state->lock);
     colod_channel_write_timeout_co(ret, state->channel, command,
                                    strlen(command), state->timeout,
@@ -260,6 +262,7 @@ static ColodQmpResult *__qmp_execute_co(Coroutine *coroutine,
         qmp_set_error(state, local_errp);
         g_propagate_error(errp, local_errp);
         colod_unlock_co(state->lock);
+        state->inflight--;
         return NULL;
     }
     if (ret != G_IO_STATUS_NORMAL) {
@@ -268,11 +271,13 @@ static ColodQmpResult *__qmp_execute_co(Coroutine *coroutine,
         qmp_set_error(state, local_errp);
         g_propagate_error(errp, local_errp);
         colod_unlock_co(state->lock);
+        state->inflight--;
         return NULL;
     }
 
     qmp_read_line_co(result, state, yank, &local_errp);
     colod_unlock_co(state->lock);
+    state->inflight--;
     if (!result) {
         qmp_set_error(state, local_errp);
         g_propagate_error(errp, local_errp);
@@ -417,6 +422,7 @@ static ColodQmpResult *_qmp_yank_co(Coroutine *coroutine, ColodQmpState *state,
 static gboolean _qmp_handshake_readable_co(Coroutine *coroutine);
 static gboolean qmp_handshake_readable_co(gpointer data) {
     Coroutine *coroutine = data;
+    ColodQmpCo *co = co_stack(qmpco);
     gboolean ret;
 
     co_enter(ret, coroutine, _qmp_handshake_readable_co);
@@ -424,6 +430,7 @@ static gboolean qmp_handshake_readable_co(gpointer data) {
         return GPOINTER_TO_INT(coroutine->yield_value);
     }
 
+    co->state->inflight--;
     g_free(coroutine);
     return ret;
 }
@@ -491,12 +498,14 @@ static Coroutine *qmp_handshake_coroutine(ColodQmpState *state) {
     g_io_add_watch(state->channel, G_IO_IN, qmp_handshake_readable_co_wrap,
                    coroutine);
 
+    state->inflight++;
     return coroutine;
 }
 
 static gboolean _qmp_event_co(Coroutine *coroutine);
 static gboolean qmp_event_co(gpointer data) {
     Coroutine *coroutine = data;
+    ColodQmpCo *co = co_stack(qmpco);
     gboolean ret;
 
     co_enter(ret, coroutine, _qmp_event_co);
@@ -504,6 +513,7 @@ static gboolean qmp_event_co(gpointer data) {
         return GPOINTER_TO_INT(coroutine->yield_value);
     }
 
+    co->state->inflight--;
     g_free(coroutine);
     return ret;
 }
@@ -589,7 +599,19 @@ static Coroutine *qmp_event_coroutine(ColodQmpState *state) {
     g_io_add_watch_full(state->channel, G_PRIORITY_LOW, G_IO_IN,
                         qmp_event_co_wrap, coroutine, NULL);
 
+    state->inflight++;
     return coroutine;
+}
+
+void qmp_free(ColodQmpState *state) {
+    g_io_channel_shutdown(state->channel, FALSE, NULL);
+
+    while (state->inflight) {
+        g_main_context_iteration(g_main_context_default(), TRUE);
+    }
+
+    g_io_channel_unref(state->channel);
+    g_free(state);
 }
 
 ColodQmpState *qmp_new(int fd, GError **errp) {

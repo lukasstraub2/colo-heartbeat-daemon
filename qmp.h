@@ -40,6 +40,7 @@ void qmp_result_free(ColodQmpResult *result);
 ColodQmpResult *qmp_parse_result(gchar *line, gsize len, GError **errp);
 
 ColodQmpState *qmp_new(int fd, GError **errp);
+void qmp_free(ColodQmpState *state);
 
 #define qmp_execute_co(ret, state, errp, command) \
     co_call_co((ret), _qmp_execute_co, (state), (errp), (command))
