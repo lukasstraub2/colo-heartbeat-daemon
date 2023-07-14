@@ -186,6 +186,124 @@ void colod_quit(ColodContext *ctx) {
     g_main_loop_quit(ctx->mainloop);
 }
 
+typedef struct ColodWatchdog {
+    Coroutine coroutine;
+    ColodContext *ctx;
+    guint interval;
+    guint timer_id;
+    gboolean quit;
+} ColodWatchdog;
+
+static void colod_watchdog_refresh(ColodWatchdog *state) {
+    if (state->timer_id) {
+        g_source_remove(state->timer_id);
+        state->timer_id = g_timeout_add_full(G_PRIORITY_LOW,
+                                             state->interval,
+                                             state->coroutine.cb.plain,
+                                             &state->coroutine, NULL);
+    }
+}
+
+static void colod_watchdog_event_cb(gpointer data,
+                                    G_GNUC_UNUSED ColodQmpResult *result) {
+    ColodWatchdog *state = data;
+    colod_watchdog_refresh(state);
+}
+
+static gboolean _colod_watchdog_co(Coroutine *coroutine);
+static gboolean colod_watchdog_co(gpointer data) {
+    ColodWatchdog *state = data;
+    Coroutine *coroutine = &state->coroutine;
+    gboolean ret;
+
+    co_enter(ret, coroutine, _colod_watchdog_co);
+    if (coroutine->yield) {
+        return GPOINTER_TO_INT(coroutine->yield_value);
+    }
+
+    return ret;
+}
+
+static gboolean colod_watchdog_co_wrap(
+        G_GNUC_UNUSED GIOChannel *channel,
+        G_GNUC_UNUSED GIOCondition revents,
+        gpointer data) {
+    return colod_watchdog_co(data);
+}
+
+static gboolean _colod_watchdog_co(Coroutine *coroutine) {
+    ColodWatchdog *state = (ColodWatchdog *) coroutine;
+    int ret;
+    GError *local_errp = NULL;
+
+    co_begin(gboolean, G_SOURCE_CONTINUE);
+
+    while (!state->quit) {
+        state->timer_id = g_timeout_add_full(G_PRIORITY_LOW,
+                                             state->interval,
+                                             coroutine->cb.plain,
+                                             coroutine, NULL);
+        co_yield_int(G_SOURCE_REMOVE);
+        if (state->quit) {
+            break;
+        }
+        state->timer_id = 0;
+
+        colod_check_health_co(ret, state->ctx, &local_errp);
+        if (ret < 0) {
+            g_error_free(local_errp);
+            local_errp = NULL;
+            // qemu died...
+        }
+    }
+
+    co_end;
+
+    return G_SOURCE_REMOVE;
+}
+
+static void colo_watchdog_free(ColodWatchdog *state) {
+
+    if (!state->interval) {
+        g_free(state);
+        return;
+    }
+
+    state->quit = TRUE;
+
+    qmp_del_notify_event(state->ctx->qmpstate, colod_watchdog_event_cb, state);
+
+    if (state->timer_id) {
+        g_source_remove(state->timer_id);
+        state->timer_id = 0;
+        g_idle_add(colod_watchdog_co, &state->coroutine);
+    }
+
+    while (!state->coroutine.quit) {
+        g_main_context_iteration(g_main_context_default(), TRUE);
+    }
+
+    g_free(state);
+}
+
+static ColodWatchdog *colod_watchdog_new(ColodContext *ctx) {
+    ColodWatchdog *state;
+    Coroutine *coroutine;
+
+    state = g_new0(ColodWatchdog, 1);
+    coroutine = &state->coroutine;
+    coroutine->cb.plain = colod_watchdog_co;
+    coroutine->cb.iofunc = colod_watchdog_co_wrap;
+    state->ctx = ctx;
+    state->interval = ctx->watchdog_interval;
+
+    if (state->interval) {
+        g_idle_add(colod_watchdog_co, coroutine);
+        qmp_add_notify_event(ctx->qmpstate, colod_watchdog_event_cb, state);
+    }
+    return state;
+}
+
 static void colod_mainloop(ColodContext *ctx) {
     GError *local_errp = NULL;
 
@@ -202,12 +320,8 @@ static void colod_mainloop(ColodContext *ctx) {
     }
 
     ctx->listener = client_listener_new(ctx->mngmt_listen_fd, ctx);
-    if (!ctx->listener) {
-        colod_syslog(ctx, LOG_ERR, "Failed to initialize client listener: %s",
-                     local_errp->message);
-        g_error_free(local_errp);
-        exit(EXIT_FAILURE);
-    }
+
+    ctx->watchdog = colod_watchdog_new(ctx);
 
     //ctx->cpg_source_id = colod_create_source(ctx->mainctx, ctx->cpg_fd,
     //                                         G_IO_IN | G_IO_HUP,
@@ -216,6 +330,7 @@ static void colod_mainloop(ColodContext *ctx) {
     g_main_loop_run(ctx->mainloop);
     g_main_loop_unref(ctx->mainloop);
 
+    colo_watchdog_free(ctx->watchdog);
     client_listener_free(ctx->listener);
     qmp_free(ctx->qmpstate);
 

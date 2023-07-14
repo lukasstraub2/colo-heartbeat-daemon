@@ -26,6 +26,7 @@ typedef enum ColodRole {
 typedef struct ColodContext {
     /* Parameters */
     gboolean daemonize, syslog;
+    guint watchdog_interval;
 
     /* Variables */
     GMainContext *mainctx;
@@ -34,6 +35,8 @@ typedef struct ColodContext {
 
     int qmp_fd, mngmt_listen_fd, cpg_fd;
     guint cpg_source_id;
+
+    ColodWatchdog *watchdog;
 
     ColodClientListener *listener;
 
