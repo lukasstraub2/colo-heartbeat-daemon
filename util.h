@@ -35,5 +35,6 @@ int os_daemonize_post_init(int pipe, GError **errp);
 int colod_fd_set_blocking(int fd, gboolean blocking, GError **errp);
 gint progress_source_add(GSourceFunc func, gpointer data);
 GIOChannel *colod_create_channel(int fd, GError **errp);
+void colod_shutdown_channel(GIOChannel *channel);
 
 #endif // UTIL_H

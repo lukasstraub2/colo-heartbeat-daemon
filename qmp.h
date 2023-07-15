@@ -39,7 +39,7 @@ typedef void (*QmpEventCallback)(gpointer user_data, ColodQmpResult *event);
 void qmp_result_free(ColodQmpResult *result);
 ColodQmpResult *qmp_parse_result(gchar *line, gsize len, GError **errp);
 
-ColodQmpState *qmp_new(int fd, GError **errp);
+ColodQmpState *qmp_new(int fd1, int fd2, GError **errp);
 void qmp_free(ColodQmpState *state);
 
 #define qmp_execute_co(ret, state, errp, command) \
@@ -48,6 +48,11 @@ ColodQmpResult *_qmp_execute_co(Coroutine *coroutine,
                                 ColodQmpState *state,
                                 GError **errp,
                                 const gchar *command);
+
+#define qmp_yank_co(ret, state, errp) \
+    co_call_co((ret), _qmp_yank_co, (state), (errp))
+int _qmp_yank_co(Coroutine *coroutine, ColodQmpState *state,
+                 GError **errp);
 
 void qmp_add_notify_event(ColodQmpState *state, QmpEventCallback _func,
                           gpointer user_data);

@@ -18,6 +18,7 @@
 #include <signal.h>
 #include <sys/types.h>
 #include <sys/stat.h>
+#include <sys/socket.h>
 #include <fcntl.h>
 #include <errno.h>
 
@@ -118,4 +119,9 @@ GIOChannel *colod_create_channel(int fd, GError **errp) {
     g_io_channel_set_close_on_unref(channel, TRUE);
 
     return channel;
+}
+
+void colod_shutdown_channel(GIOChannel *channel) {
+    int fd = g_io_channel_unix_get_fd(channel);
+    shutdown(fd, SHUT_RDWR);
 }

@@ -311,7 +311,7 @@ static void colod_mainloop(ColodContext *ctx) {
     ctx->mainctx = g_main_context_default();
     ctx->mainloop = g_main_loop_new(ctx->mainctx, FALSE);
 
-    ctx->qmpstate = qmp_new(ctx->qmp_fd, &local_errp);
+    ctx->qmpstate = qmp_new(ctx->qmp1_fd, ctx->qmp2_fd, &local_errp);
     if (local_errp) {
         colod_syslog(ctx, LOG_ERR, "Failed to initialize qmp: %s",
                      local_errp->message);
@@ -437,8 +437,8 @@ err:
 }
 
 static int colod_open_qmp(ColodContext *ctx, GError **errp) {
-    int sockfd, ret;
     struct sockaddr_un address = { 0 };
+    int* fds[2] = { &ctx->qmp1_fd, &ctx->qmp2_fd };
 
     if (strlen(ctx->qmp_path) >= sizeof(address.sun_path)) {
         colod_error_set(errp, "Qmp unix path too long");
@@ -447,27 +447,37 @@ static int colod_open_qmp(ColodContext *ctx, GError **errp) {
     strcpy(address.sun_path, ctx->qmp_path);
     address.sun_family = AF_UNIX;
 
-    ret = socket(AF_UNIX, SOCK_STREAM, 0);
-    if (ret < 0) {
-        colod_error_set(errp, "Failed to create qmp socket: %s",
-                        g_strerror(errno));
-        return -1;
-    }
-    sockfd = ret;
+    for (int i = 0; i < 2; i++) {
+        int ret;
+        int *fd = fds[i];
 
-    ret = connect(sockfd, (const struct sockaddr *) &address,
-                  sizeof(address));
-    if (ret < 0) {
-        colod_error_set(errp, "Failed to connect qmp socket: %s",
-                        g_strerror(errno));
-        goto err;
+        ret = socket(AF_UNIX, SOCK_STREAM, 0);
+        if (ret < 0) {
+            colod_error_set(errp, "Failed to create qmp socket: %s",
+                            g_strerror(errno));
+            goto err;
+        }
+        *fd = ret;
+
+        ret = connect(*fd, (const struct sockaddr *) &address,
+                      sizeof(address));
+        if (ret < 0) {
+            colod_error_set(errp, "Failed to connect qmp socket: %s",
+                            g_strerror(errno));
+            goto err;
+        }
     }
 
-    ctx->qmp_fd = sockfd;
     return 0;
 
 err:
-    close(sockfd);
+    for (int i = 0; i < 2; i++) {
+        int *fd = fds[i];
+        if (*fd) {
+            close(*fd);
+            *fd = 0;
+        }
+    }
     return -1;
 }
 

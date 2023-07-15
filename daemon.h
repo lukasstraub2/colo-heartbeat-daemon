@@ -33,7 +33,7 @@ typedef struct ColodContext {
     GMainLoop *mainloop;
     char *node_name, *instance_name, *base_dir, *qmp_path;
 
-    int qmp_fd, mngmt_listen_fd, cpg_fd;
+    int qmp1_fd, qmp2_fd, mngmt_listen_fd, cpg_fd;
     guint cpg_source_id;
 
     ColodWatchdog *watchdog;

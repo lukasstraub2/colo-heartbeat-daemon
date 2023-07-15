@@ -316,8 +316,7 @@ void client_listener_free(ColodClientListener *listener) {
     QLIST_FOREACH(entry, &listener->head, next) {
         entry->quit = TRUE;
         if (!entry->busy) {
-            int fd = g_io_channel_unix_get_fd(entry->channel);
-            shutdown(fd, SHUT_RDWR);
+            colod_shutdown_channel(entry->channel);
         }
     }
 
