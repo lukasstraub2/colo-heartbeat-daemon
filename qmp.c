@@ -526,30 +526,9 @@ static gboolean _qmp_event_co(Coroutine *coroutine) {
         }
         colod_lock_co(channel->lock);
 
-        colod_channel_read_line_timeout_co(ret, channel->channel, &CO line,
-                                           &CO len, CO state->timeout,
-                                           &local_errp);
+        qmp_read_line_co(result, eventco->state, channel, FALSE, FALSE,
+                         &local_errp);
         colod_unlock_co(channel->lock);
-        if (ret == G_IO_STATUS_ERROR) {
-            qmp_set_error(eventco->state, local_errp);
-            g_error_free(local_errp);
-            return G_SOURCE_REMOVE;
-        }
-        if (ret != G_IO_STATUS_NORMAL) {
-            local_errp = g_error_new(COLOD_ERROR, COLOD_ERROR_FATAL,
-                                     "Qmp signaled EOF");
-            qmp_set_error(eventco->state, local_errp);
-            g_error_free(local_errp);
-            return G_SOURCE_REMOVE;
-        }
-
-        result = qmp_parse_result(CO line, CO len, &local_errp);
-        if (!result) {
-            qmp_set_error(eventco->state, local_errp);
-            g_error_free(local_errp);
-            local_errp = NULL;
-            continue;
-        }
 
         if (!has_member(result->json_root, "event")) {
             local_errp = g_error_new(COLOD_ERROR, COLOD_ERROR_FATAL,
