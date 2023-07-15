@@ -29,6 +29,7 @@ typedef struct QmpCallback {
 typedef struct QmpChannel {
     GIOChannel *channel;
     CoroutineLock lock;
+    gboolean discard_events;
 } QmpChannel;
 
 QLIST_HEAD(QmpCallbackHead, QmpCallback);
@@ -232,7 +233,9 @@ static ColodQmpResult *_qmp_read_line_co(Coroutine *coroutine,
         }
 
         if (skip_events && has_member(result->json_root, "event")) {
-            notify_event(state, result);
+            if (!channel->discard_events) {
+                notify_event(state, result);
+            }
             qmp_result_free(result);
             continue;
         }
@@ -479,7 +482,6 @@ typedef struct QmpEventCo {
     Coroutine coroutine;
     ColodQmpState *state;
     QmpChannel *channel;
-    gboolean discard;
 } QmpEventCo;
 
 static gboolean _qmp_event_co(Coroutine *coroutine);
@@ -508,9 +510,7 @@ static gboolean qmp_event_co_wrap(
 static gboolean _qmp_event_co(Coroutine *coroutine) {
     QmpEventCo *eventco = (QmpEventCo *) coroutine;
     QmpChannel *channel = eventco->channel;
-    ColodQmpCo *co = co_stack(qmpco);
     ColodQmpResult *result;
-    GIOStatus ret;
     GError *local_errp = NULL;
 
     co_begin(gboolean, G_SOURCE_CONTINUE);
@@ -540,7 +540,7 @@ static gboolean _qmp_event_co(Coroutine *coroutine) {
             continue;
         }
 
-        if (!eventco->discard) {
+        if (!channel->discard_events) {
             notify_event(eventco->state, result);
         }
         qmp_result_free(result);
@@ -551,8 +551,8 @@ static gboolean _qmp_event_co(Coroutine *coroutine) {
     return G_SOURCE_REMOVE;
 }
 
-static Coroutine *qmp_event_coroutine(ColodQmpState *state, QmpChannel *channel,
-                                      gboolean discard) {
+static Coroutine *qmp_event_coroutine(ColodQmpState *state,
+                                      QmpChannel *channel) {
     QmpEventCo *eventco;
     Coroutine *coroutine;
 
@@ -562,7 +562,6 @@ static Coroutine *qmp_event_coroutine(ColodQmpState *state, QmpChannel *channel,
     coroutine->cb.iofunc = qmp_event_co_wrap;
     eventco->state = state;
     eventco->channel = channel;
-    eventco->discard = discard;
 
     g_io_add_watch_full(channel->channel, G_PRIORITY_LOW, G_IO_IN | G_IO_HUP,
                         qmp_event_co_wrap, coroutine, NULL);
@@ -596,6 +595,7 @@ ColodQmpState *qmp_new(int fd1, int fd2, GError **errp) {
     }
 
     state->yank_channel.channel = colod_create_channel(fd2, errp);
+    state->yank_channel.discard_events = TRUE;
     if (!state->yank_channel.channel) {
         g_free(state->channel.channel);
         g_free(state);
@@ -603,8 +603,8 @@ ColodQmpState *qmp_new(int fd1, int fd2, GError **errp) {
     }
 
     qmp_handshake_coroutine(state);
-    qmp_event_coroutine(state, &state->channel, FALSE);
-    qmp_event_coroutine(state, &state->yank_channel, TRUE);
+    qmp_event_coroutine(state, &state->channel);
+    qmp_event_coroutine(state, &state->yank_channel);
 
     return state;
 }
