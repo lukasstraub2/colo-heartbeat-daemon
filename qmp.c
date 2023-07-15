@@ -155,22 +155,17 @@ void qmp_result_free(ColodQmpResult *result) {
 
 ColodQmpResult *qmp_parse_result(gchar *line, gsize len, GError **errp) {
     ColodQmpResult *result;
-    gboolean ret;
 
     result = g_new0(ColodQmpResult, 1);
     result->line = line;
     result->len = len;
 
-    JsonParser *parser = json_parser_new_immutable();
-    ret = json_parser_load_from_data(parser, line, len, errp);
-    if (!ret) {
-        g_object_unref(parser);
+    result->json_root = json_from_string(line, errp);
+    if (!result->json_root) {
         g_free(result->line);
         g_free(result);
         return NULL;
     }
-    result->json_root = json_node_ref(json_parser_get_root(parser));
-    g_object_unref(parser);
 
     if (!JSON_NODE_HOLDS_OBJECT(result->json_root)) {
         colod_error_set(errp, "Result is not a json object: %s", result->line);
@@ -304,7 +299,6 @@ static gchar *pick_yank_instances(JsonNode *result,
     JsonArray *array;
     gchar *instances_str;
     JsonNode *instances;
-    JsonGenerator *generator;
     JsonReader *reader;
 
     assert(JSON_NODE_HOLDS_OBJECT(result));
@@ -333,11 +327,7 @@ static gchar *pick_yank_instances(JsonNode *result,
     json_reader_end_member(reader);
     g_object_unref(reader);
 
-    generator = json_generator_new();
-    json_generator_set_root(generator, instances);
-    json_generator_set_pretty(generator, FALSE);
-    instances_str = json_generator_to_data(generator, NULL);
-    g_object_unref(generator);
+    instances_str = json_to_string(instances, FALSE);
     g_object_unref(instances);
     return instances_str;
 }
