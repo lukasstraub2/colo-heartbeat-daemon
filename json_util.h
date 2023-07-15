@@ -8,6 +8,7 @@ const gchar *bool_to_json(gboolean bool);
 
 gboolean has_member(JsonNode *node, const gchar *member);
 const gchar *get_member_str(JsonNode *node, const gchar *member);
+JsonNode *get_member_object(JsonNode *node, const gchar *member);
 const gchar *get_member_member_str(JsonNode *node, const gchar *member1,
                                    const gchar *member2);
 gboolean object_matches(JsonNode *node, JsonNode *match);

@@ -28,6 +28,7 @@ typedef struct ColodClient {
     QLIST_ENTRY(ColodClient) next;
     ColodContext *ctx;
     GIOChannel *channel;
+    JsonNode **store;
     gboolean quit;
     gboolean busy;
 } ColodClient;
@@ -38,6 +39,7 @@ struct ColodClientListener {
     ColodContext *ctx;
     guint listen_source_id;
     struct ColodClientHead head;
+    JsonNode *store;
 };
 
 static ColodQmpResult *create_error_reply(const gchar *message) {
@@ -83,6 +85,46 @@ static ColodQmpResult *_handle_query_status_co(Coroutine *coroutine,
                             role_to_string(ctx->role),
                             bool_to_json(ctx->replication));
 
+    result = qmp_parse_result(reply, strlen(reply), NULL);
+    assert(result);
+    return result;
+}
+
+static ColodQmpResult *handle_query_store(ColodClient *client) {
+    ColodQmpResult *result;
+    gchar *reply, *store_str;
+    JsonNode *store = *client->store;
+
+    if (store) {
+        store = get_member_object(store, "data");
+        store_str = json_to_string(store, FALSE);
+    } else {
+        store_str = g_strdup("{}");
+    }
+
+    reply = g_strdup_printf("{'return': %s}\n", store_str);
+    g_free(store_str);
+    result = qmp_parse_result(reply, strlen(reply), NULL);
+    assert(result);
+    return result;
+}
+
+static ColodQmpResult *handle_set_store(ColodQmpResult *request,
+                                        ColodClient *client) {
+    ColodQmpResult *result;
+    gchar *reply;
+    JsonNode *store = *client->store;
+
+    if (!has_member(request->json_root, "data")) {
+        return create_error_reply("Member 'data' missing");
+    }
+
+    if (store) {
+        json_node_unref(store);
+    }
+    store = json_node_ref(request->json_root);
+
+    reply = g_strdup("{'return': {}}\n");
     result = qmp_parse_result(reply, strlen(reply), NULL);
     assert(result);
     return result;
@@ -162,6 +204,10 @@ static gboolean _colod_client_co(Coroutine *coroutine) {
                                                "member");
             } else if (!strcmp(command, "query-status")) {
                 handle_query_status_co(CO result, client->ctx);
+            } else if (!strcmp(command, "query-store")) {
+                CO result = handle_query_store(client);
+            } else if (!strcmp(command, "set-store")) {
+                CO result = handle_set_store(CO request, client);
             } else if (!strcmp(command, "quit")) {
                 CO result = handle_quit(client->ctx);
             } else {
@@ -218,6 +264,7 @@ static int client_new(ColodClientListener *listener, int fd, GError **errp) {
     coroutine->cb.iofunc = colod_client_co_wrap;
     client->ctx = listener->ctx;
     client->channel = channel;
+    client->store = &listener->store;
     QLIST_INSERT_HEAD(&listener->head, client, next);
 
     g_io_add_watch(channel, G_IO_IN | G_IO_HUP, colod_client_co_wrap, client);

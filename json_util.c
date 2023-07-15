@@ -38,6 +38,14 @@ const gchar *get_member_str(JsonNode *node, const gchar *member) {
     return json_object_get_string_member(object, member);
 }
 
+JsonNode *get_member_object(JsonNode *node, const gchar *member) {
+    JsonObject *object;
+
+    assert(JSON_NODE_HOLDS_OBJECT(node));
+    object = json_node_get_object(node);
+    return json_object_get_member(object, member);
+}
+
 const gchar *get_member_member_str(JsonNode *node, const gchar *member1,
                                    const gchar *member2) {
     JsonObject *object;
