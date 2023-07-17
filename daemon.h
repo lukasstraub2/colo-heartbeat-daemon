@@ -10,6 +10,8 @@
 #ifndef DAEMON_H
 #define DAEMON_H
 
+#include <syslog.h>
+
 #include <glib-2.0/glib.h>
 
 #include <corosync/cpg.h>
@@ -25,7 +27,9 @@ typedef enum ColodRole {
 
 typedef struct ColodContext {
     /* Parameters */
-    gboolean daemonize, syslog;
+    gboolean daemonize;
+    guint qmp_timeout_low, qmp_timeout_high;
+    guint checkpoint_interval;
     guint watchdog_interval;
 
     /* Variables */
@@ -37,23 +41,69 @@ typedef struct ColodContext {
     guint cpg_source_id;
 
     ColodWatchdog *watchdog;
+    JsonNode *migration_commands;
+    JsonNode *failover_primary_commands, *failover_secondary_commands;
+    Coroutine *migration_coroutine;
 
     ColodClientListener *listener;
 
-    ColodQmpState *qmpstate;
+    ColodQmpState *qmp;
     ColodRole role;
     gboolean replication;
 
     cpg_handle_t cpg_handle;
 } ColodContext;
 
-void colod_syslog(ColodContext *ctx, int pri, const char *fmt, ...)
-     __attribute__ ((__format__ (__printf__, 3, 4)));
+typedef struct ColodCo {
+    ColodContext *ctx;
+    union {
+        ColodQmpResult *result;
+        ColodQmpResult *qemu_status;
+    };
+    union {
+        ColodQmpResult *request;
+        ColodQmpResult *colo_status;
+    };
+} ColodCo;
+
+typedef struct ColodArrayCo {
+    ColodContext *ctx;
+    JsonReader *reader;
+    gchar *line;
+    guint i, count;
+} ColodArrayCo;
+
+void colod_syslog(int pri, const char *fmt, ...)
+     __attribute__ ((__format__ (__printf__, 2, 3)));
+#define log_error(message) \
+    colod_syslog(LOG_ERR, "%s: %s", __func__, message)
+#define log_error_fmt(fmt, ...) \
+    colod_syslog(LOG_ERR, "%s: " fmt, __func__, ##__VA_ARGS__)
 
 #define colod_check_health_co(result, ctx, errp) \
     co_call_co((result), _colod_check_health_co, (ctx), (errp))
 int _colod_check_health_co(Coroutine *coroutine, ColodContext *ctx,
                            GError **errp);
+
+void colod_set_migration_commands(ColodContext *ctx, JsonNode *commands);
+void colod_set_primary_commands(ColodContext *ctx, JsonNode *commands);
+void colod_set_secondary_commands(ColodContext *ctx, JsonNode *commands);
+
+void colod_start_migration(ColodContext *ctx);
+
+#define colod_execute_nocheck_co(result, ctx, errp, command) \
+    co_call_co((result), _colod_execute_nocheck_co, (ctx), (errp), (command))
+ColodQmpResult *_colod_execute_nocheck_co(Coroutine *coroutine,
+                                          ColodContext *ctx,
+                                          GError **errp,
+                                          const gchar *command);
+
+#define colod_execute_co(result, ctx, errp, command) \
+    co_call_co((result), _colod_execute_co, (ctx), (errp), (command))
+ColodQmpResult *_colod_execute_co(Coroutine *coroutine,
+                                  ColodContext *ctx,
+                                  GError **errp,
+                                  const gchar *command);
 
 void colod_quit(ColodContext *ctx);
 

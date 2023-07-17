@@ -36,11 +36,13 @@
 #include "qmp.h"
 #include "coroutine_stack.h"
 
-void colod_syslog(ColodContext *ctx, int pri, const char *fmt, ...) {
+static gboolean do_syslog = FALSE;
+
+void colod_syslog(int pri, const char *fmt, ...) {
     va_list args;
     va_start(args, fmt);
 
-    if (ctx->daemonize && ctx->syslog) {
+    if (do_syslog) {
         vsyslog(pri, fmt, args);
     } else {
         vfprintf(stderr, fmt, args);
@@ -80,6 +82,27 @@ static gboolean colod_cpg_readable(gpointer data) {
     return G_SOURCE_CONTINUE;
 }
 
+void colod_set_migration_commands(ColodContext *ctx, JsonNode *commands) {
+    if (ctx->migration_commands) {
+        json_node_unref(ctx->migration_commands);
+    }
+    ctx->migration_commands = json_node_ref(commands);
+}
+
+void colod_set_primary_commands(ColodContext *ctx, JsonNode *commands) {
+    if (ctx->failover_primary_commands) {
+        json_node_unref(ctx->failover_primary_commands);
+    }
+    ctx->failover_primary_commands = json_node_ref(commands);
+}
+
+void colod_set_secondary_commands(ColodContext *ctx, JsonNode *commands) {
+    if (ctx->failover_secondary_commands) {
+        json_node_unref(ctx->failover_secondary_commands);
+    }
+    ctx->failover_secondary_commands = json_node_ref(commands);
+}
+
 static gboolean qemu_runnng(const gchar *status) {
     return !strcmp(status, "running")
             || !strcmp(status, "finish-migrate")
@@ -93,7 +116,7 @@ static gboolean qemu_runnng(const gchar *status) {
 static int _qemu_query_status_co(Coroutine *coroutine, ColodQmpState *qmp,
                                  ColodRole *role, gboolean *replication,
                                  GError **errp) {
-    ColodClientCo *co = co_stack(clientco);
+    ColodCo *co = co_stack(colodco);
 
     co_begin(int, -1);
 
@@ -160,7 +183,7 @@ int _colod_check_health_co(Coroutine *coroutine, ColodContext *ctx,
     gboolean replication;
     int ret;
 
-    ret = _qemu_query_status_co(coroutine, ctx->qmpstate, &role, &replication,
+    ret = _qemu_query_status_co(coroutine, ctx->qmp, &role, &replication,
                                 errp);
     if (coroutine->yield) {
         return -1;
@@ -169,7 +192,7 @@ int _colod_check_health_co(Coroutine *coroutine, ColodContext *ctx,
         return -1;
     }
 
-    ret = qmp_get_error(ctx->qmpstate, errp);
+    ret = qmp_get_error(ctx->qmp, errp);
     if (ret < 0) {
         return -1;
     }
@@ -271,7 +294,7 @@ static void colo_watchdog_free(ColodWatchdog *state) {
 
     state->quit = TRUE;
 
-    qmp_del_notify_event(state->ctx->qmpstate, colod_watchdog_event_cb, state);
+    qmp_del_notify_event(state->ctx->qmp, colod_watchdog_event_cb, state);
 
     if (state->timer_id) {
         g_source_remove(state->timer_id);
@@ -299,9 +322,311 @@ static ColodWatchdog *colod_watchdog_new(ColodContext *ctx) {
 
     if (state->interval) {
         g_idle_add(colod_watchdog_co, coroutine);
-        qmp_add_notify_event(ctx->qmpstate, colod_watchdog_event_cb, state);
+        qmp_add_notify_event(ctx->qmp, colod_watchdog_event_cb, state);
     }
     return state;
+}
+
+ColodQmpResult *_colod_execute_nocheck_co(Coroutine *coroutine,
+                                          ColodContext *ctx,
+                                          GError **errp,
+                                          const gchar *command) {
+    ColodQmpResult *result;
+
+    result = _qmp_execute_co(coroutine, ctx->qmp, errp, command);
+    if (coroutine->yield) {
+        return NULL;
+    }
+    if (!result) {
+        return NULL;
+    }
+
+    return result;
+}
+
+ColodQmpResult *_colod_execute_co(Coroutine *coroutine,
+                                  ColodContext *ctx,
+                                  GError **errp,
+                                  const gchar *command) {
+    ColodQmpResult *result;
+
+    result = _colod_execute_nocheck_co(coroutine, ctx, errp, command);
+    if (coroutine->yield) {
+        return NULL;
+    }
+    if (!result) {
+        return NULL;
+    }
+    if (has_member(result->json_root, "error")) {
+        g_set_error(errp, COLOD_ERROR, COLOD_ERROR_QMP,
+                    "qmp command returned error: %s %s",
+                    command, result->line);
+        qmp_result_free(result);
+        return NULL;
+    }
+
+    return result;
+}
+
+#define colod_execute_array(ret, ctx, array, ignore_errors, errp) \
+    co_call_co((ret), _colod_execute_array_co, (ctx), (array), \
+               (ignore_errors), (errp))
+
+static int _colod_execute_array_co(Coroutine *coroutine, ColodContext *ctx,
+                                   JsonNode *array, gboolean ignore_errors,
+                                   GError **errp) {
+    ColodArrayCo *co = co_stack(colodarrayco);
+    int ret = 0;
+    GError *local_errp = NULL;
+
+    co_begin(int, -1);
+
+    assert(!errp || !*errp);
+    assert(JSON_NODE_HOLDS_ARRAY(array));
+
+    CO reader = json_reader_new(array);
+
+    CO count = json_reader_count_elements(CO reader);
+    for (CO i = 0; CO i < CO count; CO i++) {
+        json_reader_read_element(CO reader, CO i);
+        JsonNode *node = json_reader_get_value(CO reader);
+        assert(node);
+
+        gchar *tmp = json_to_string(node, FALSE);
+        CO line = g_strdup_printf("%s\n", tmp);
+        g_free(tmp);
+
+        ColodQmpResult *result;
+        colod_execute_co(result, ctx, &local_errp, CO line);
+        if (!result) {
+            if (ignore_errors &&
+                    g_error_matches(local_errp, COLOD_ERROR, COLOD_ERROR_QMP)) {
+                colod_syslog(LOG_WARNING, "Ignoring qmp error: %s",
+                             local_errp->message);
+                g_error_free(local_errp);
+                local_errp = NULL;
+            } else {
+                if (errp && *errp) {
+                    g_error_free(*errp);
+                    *errp = NULL;
+                }
+                g_propagate_error(errp, local_errp);
+                json_reader_end_element(CO reader);
+                g_free(CO line);
+                ret = -1;
+                break;
+            }
+        }
+        qmp_result_free(result);
+
+        json_reader_end_element(CO reader);
+    }
+    json_reader_end_member(CO reader);
+    g_object_unref(CO reader);
+
+    co_end;
+
+    return ret;
+}
+
+typedef enum ColodState {
+    STATE_RUNNING,
+    STATE_FAILED,
+    STATE_FAILOVER_SYNC,
+    STATE_FAILOVER,
+    STATE_STANDBY
+} ColodState;
+
+static gboolean _colod_migration_co(Coroutine *coroutine);
+static gboolean colod_migration_co(gpointer data) {
+    Coroutine *coroutine = data;
+    ColodCo *co = co_stack(colodco);
+    gboolean ret;
+
+    co_enter(ret, coroutine, _colod_migration_co);
+    if (coroutine->yield) {
+        return GPOINTER_TO_INT(coroutine->yield_value);
+    }
+
+    g_free(coroutine);
+    co->ctx->migration_coroutine = NULL;
+    return ret;
+}
+
+static gboolean colod_migration_co_wrap(
+        G_GNUC_UNUSED GIOChannel *channel,
+        G_GNUC_UNUSED GIOCondition revents,
+        gpointer data) {
+    return colod_migration_co(data);
+}
+
+static gboolean _colod_migration_co(Coroutine *coroutine) {
+    ColodCo *co = co_stack(colodco);
+    ColodContext *ctx = CO ctx;
+    ColodQmpState *qmp = ctx->qmp;
+    int ret;
+    GError *local_errp = NULL;
+
+    co_begin(gboolean, G_SOURCE_CONTINUE);
+    colod_execute_co(CO result, ctx, &local_errp,
+                     "{'execute': 'migrate-set-capabilities',"
+                     "'arguments': {'capabilities': ["
+                        "{'capability': 'events', 'state': true },"
+                        "{'capability': 'pause-before-switchover', 'state': true }]}}\n");
+    if (!CO result) {
+        log_error(local_errp->message);
+        g_error_free(local_errp);
+        return G_SOURCE_REMOVE;
+    }
+    qmp_result_free(CO result);
+
+    // TODO handle migration failure -> possibly needs to yank
+
+    qmp_wait_event_co(ret, qmp, 5*60*1000,
+                      "MIGRATION_STATUS_PRE_SWITCHOVER", &local_errp);
+    if (ret < 0) {
+        log_error(local_errp->message);
+        g_error_free(local_errp);
+        return G_SOURCE_REMOVE;
+    }
+
+    colod_execute_array(ret, ctx, ctx->migration_commands, FALSE,
+                        &local_errp);
+    if (ret < 0) {
+        log_error_fmt("Error while executing migration commands: %s",
+                      local_errp->message);
+        g_error_free(local_errp);
+        return G_SOURCE_REMOVE;
+    }
+
+    qmp_set_timeout(qmp, ctx->qmp_timeout_high);
+
+    colod_execute_co(CO result, ctx, &local_errp,
+                     "{'execute': 'migrate-continue',"
+                     "'arguments': {'state': 'pre-switchover'}}\n");
+    if (!CO result) {
+        log_error(local_errp->message);
+        g_error_free(local_errp);
+        return G_SOURCE_REMOVE;
+    }
+
+    // TODO what if CONT event appears sooner?
+    qmp_wait_event_co(ret, qmp, 1000, "CONT", &local_errp);
+    if (ret < 0) {
+        log_error(local_errp->message);
+        g_error_free(local_errp);
+        return G_SOURCE_REMOVE;
+    }
+    qmp_wait_event_co(ret, qmp, ctx->checkpoint_interval, "STOP", &local_errp);
+    if (ret < 0) {
+        log_error(local_errp->message);
+        g_error_free(local_errp);
+        return G_SOURCE_REMOVE;
+    }
+    qmp_wait_event_co(ret, qmp, ctx->qmp_timeout_high, "CONT", &local_errp);
+    if (ret < 0) {
+        log_error(local_errp->message);
+        g_error_free(local_errp);
+        return G_SOURCE_REMOVE;
+    }
+
+    qmp_set_timeout(qmp, ctx->qmp_timeout_low);
+
+    co_end;
+
+    return G_SOURCE_REMOVE;
+}
+
+static Coroutine *colod_migration_coroutine(ColodContext *ctx) {
+    Coroutine *coroutine;
+    ColodCo *co;
+
+    assert(!ctx->migration_coroutine);
+
+    coroutine = g_new0(Coroutine, 1);
+    coroutine->cb.plain = colod_migration_co;
+    coroutine->cb.iofunc = colod_migration_co_wrap;
+    co = co_stack(colodco);
+    co->ctx = ctx;
+    ctx->migration_coroutine = coroutine;
+
+    g_idle_add(colod_migration_co, coroutine);
+    return coroutine;
+}
+
+void colod_start_migration(ColodContext *ctx) {
+    colod_migration_coroutine(ctx);
+}
+
+static gboolean _colod_failover_co(Coroutine *coroutine);
+static gboolean colod_failover_co(gpointer data) {
+    Coroutine *coroutine = data;
+    gboolean ret;
+
+    co_enter(ret, coroutine, _colod_failover_co);
+    if (coroutine->yield) {
+        return GPOINTER_TO_INT(coroutine->yield_value);
+    }
+
+    g_free(coroutine);
+    return ret;
+}
+
+static gboolean colod_failover_co_wrap(
+        G_GNUC_UNUSED GIOChannel *channel,
+        G_GNUC_UNUSED GIOCondition revents,
+        gpointer data) {
+    return colod_failover_co(data);
+}
+
+static gboolean _colod_failover_co(Coroutine *coroutine) {
+    ColodCo *co = co_stack(colodco);
+    ColodContext *ctx = CO ctx;
+    int ret;
+    GError *local_errp = NULL;
+    JsonNode *commands;
+
+    if (ctx->role == ROLE_PRIMARY) {
+        commands = ctx->failover_primary_commands;
+    } else {
+        commands = ctx->failover_secondary_commands;
+    }
+
+    co_begin(gboolean, G_SOURCE_CONTINUE);
+
+    qmp_yank_co(ret, ctx->qmp, &local_errp);
+    if (ret < 0) {
+        log_error(local_errp->message);
+        g_error_free(local_errp);
+        return G_SOURCE_REMOVE;
+    }
+
+    colod_execute_array(ret, ctx, commands, TRUE, &local_errp);
+    if (ret < 0) {
+        log_error(local_errp->message);
+        g_error_free(local_errp);
+        return G_SOURCE_REMOVE;
+    }
+
+    co_end;
+
+    return G_SOURCE_REMOVE;
+}
+
+static Coroutine *colod_failover_coroutine(ColodContext *ctx) {
+    Coroutine *coroutine;
+    ColodCo *co;
+
+    assert(!ctx->migration_coroutine);
+
+    coroutine = g_new0(Coroutine, 1);
+    coroutine->cb.plain = colod_failover_co;
+    coroutine->cb.iofunc = colod_failover_co_wrap;
+    co = co_stack(colodco);
+    co->ctx = ctx;
+
+    g_idle_add(colod_failover_co, coroutine);
+    return coroutine;
 }
 
 static void colod_mainloop(ColodContext *ctx) {
@@ -311,9 +636,10 @@ static void colod_mainloop(ColodContext *ctx) {
     ctx->mainctx = g_main_context_default();
     ctx->mainloop = g_main_loop_new(ctx->mainctx, FALSE);
 
-    ctx->qmpstate = qmp_new(ctx->qmp1_fd, ctx->qmp2_fd, &local_errp);
+    ctx->qmp = qmp_new(ctx->qmp1_fd, ctx->qmp2_fd, ctx->qmp_timeout_low,
+                            &local_errp);
     if (local_errp) {
-        colod_syslog(ctx, LOG_ERR, "Failed to initialize qmp: %s",
+        colod_syslog(LOG_ERR, "Failed to initialize qmp: %s",
                      local_errp->message);
         g_error_free(local_errp);
         exit(EXIT_FAILURE);
@@ -332,7 +658,7 @@ static void colod_mainloop(ColodContext *ctx) {
 
     colo_watchdog_free(ctx->watchdog);
     client_listener_free(ctx->listener);
-    qmp_free(ctx->qmpstate);
+    qmp_free(ctx->qmp);
 
     g_main_context_unref(ctx->mainctx);
 }
@@ -540,7 +866,7 @@ int main(int argc, char **argv) {
     qmp_path = argv[4];
 
     ctx->daemonize = TRUE;
-    ctx->syslog = FALSE;
+    do_syslog = FALSE;
     ctx->node_name = node_name;
     ctx->instance_name = instance_name;
     ctx->base_dir = base_dir;
@@ -581,7 +907,7 @@ int main(int argc, char **argv) {
 
 err:
     if (errp) {
-        colod_syslog(ctx, LOG_ERR, "Fatal: %s", errp->message);
+        colod_syslog(LOG_ERR, "Fatal: %s", errp->message);
         g_error_free(errp);
     }
     exit(EXIT_FAILURE);

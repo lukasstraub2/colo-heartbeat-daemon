@@ -18,7 +18,6 @@
 #include "client.h"
 #include "util.h"
 #include "daemon.h"
-#include "qmp.h"
 #include "json_util.h"
 #include "coroutine_stack.h"
 
@@ -41,6 +40,16 @@ struct ColodClientListener {
     struct ColodClientHead head;
     JsonNode *store;
 };
+
+static ColodQmpResult *create_reply(const gchar *member) {
+    ColodQmpResult *result;
+
+    gchar *reply = g_strdup_printf("{'return': %s}\n", member);
+    result = qmp_parse_result(reply, strlen(reply), NULL);
+    assert(result);
+
+    return result;
+}
 
 static ColodQmpResult *create_error_reply(const gchar *message) {
     ColodQmpResult *result;
@@ -92,54 +101,82 @@ static ColodQmpResult *_handle_query_status_co(Coroutine *coroutine,
 
 static ColodQmpResult *handle_query_store(ColodClient *client) {
     ColodQmpResult *result;
-    gchar *reply, *store_str;
+    gchar *store_str;
     JsonNode *store = *client->store;
 
     if (store) {
-        store = get_member_object(store, "data");
         store_str = json_to_string(store, FALSE);
     } else {
         store_str = g_strdup("{}");
     }
 
-    reply = g_strdup_printf("{'return': %s}\n", store_str);
+    result = create_reply(store_str);
     g_free(store_str);
-    result = qmp_parse_result(reply, strlen(reply), NULL);
-    assert(result);
     return result;
 }
 
 static ColodQmpResult *handle_set_store(ColodQmpResult *request,
                                         ColodClient *client) {
-    ColodQmpResult *result;
-    gchar *reply;
-    JsonNode *store = *client->store;
+    JsonNode *store;
 
-    if (!has_member(request->json_root, "data")) {
-        return create_error_reply("Member 'data' missing");
+    if (!has_member(request->json_root, "store")) {
+        return create_error_reply("Member 'store' missing");
     }
 
-    if (store) {
-        json_node_unref(store);
-    }
-    store = json_node_ref(request->json_root);
+    store = get_member_node(request->json_root, "store");
 
-    reply = g_strdup("{'return': {}}\n");
-    result = qmp_parse_result(reply, strlen(reply), NULL);
-    assert(result);
-    return result;
+    if (*client->store) {
+        json_node_unref(*client->store);
+    }
+    *client->store = json_node_ref(store);
+
+    return create_reply("{}");
 }
 
 static ColodQmpResult *handle_quit(ColodContext *ctx) {
-    ColodQmpResult *result;
-    gchar *reply;
-
     colod_quit(ctx);
 
-    reply = g_strdup("{'return': {}}\n");
-    result = qmp_parse_result(reply, strlen(reply), NULL);
-    assert(result);
-    return result;
+    return create_reply("{}");
+}
+
+static ColodQmpResult *_set_commands(
+        ColodQmpResult *request, ColodContext *ctx,
+        void (*set)(ColodContext *, JsonNode *)) {
+    JsonNode *commands;
+
+    if (!has_member(request->json_root, "commands")) {
+        return create_error_reply("Member 'commands' missing");
+    }
+
+    commands = get_member_node(request->json_root, "commands");
+    if (!JSON_NODE_HOLDS_ARRAY(commands)) {
+        return create_error_reply("Member 'commands' must be an array");
+    }
+
+    set(ctx, commands);
+
+    return create_reply("{}");
+}
+
+static ColodQmpResult *handle_set_migration(ColodQmpResult *request,
+                                            ColodContext *ctx) {
+    return _set_commands(request, ctx, colod_set_migration_commands);
+}
+
+static ColodQmpResult *handle_start_migration(ColodContext *ctx) {
+    colod_start_migration(ctx);
+
+    return create_reply("{}");
+}
+
+static ColodQmpResult *handle_set_primary_failover(ColodQmpResult *request,
+                                                   ColodContext *ctx) {
+    return _set_commands(request, ctx, colod_set_primary_commands);
+}
+
+static ColodQmpResult *handle_set_secondary_failover(ColodQmpResult *request,
+                                                     ColodContext *ctx) {
+    return _set_commands(request, ctx, colod_set_secondary_commands);
 }
 
 static void client_free(ColodClient *client) {
@@ -210,12 +247,21 @@ static gboolean _colod_client_co(Coroutine *coroutine) {
                 CO result = handle_set_store(CO request, client);
             } else if (!strcmp(command, "quit")) {
                 CO result = handle_quit(client->ctx);
+            } else if (!strcmp(command, "set-migration")) {
+                CO result = handle_set_migration(CO request, client->ctx);
+            } else if (!strcmp(command, "start-migration")) {
+                CO result = handle_start_migration(client->ctx);
+            } else if (!strcmp(command, "set-primary-failover")) {
+                CO result = handle_set_primary_failover(CO request, client->ctx);
+            } else if (!strcmp(command, "set-secondary-failover")) {
+                CO result = handle_set_secondary_failover(CO request,
+                                                          client->ctx);
             } else {
                 CO result = create_error_reply("Unknown command");
             }
         } else {
-            qmp_execute_co(CO result, client->ctx->qmpstate, &errp,
-                           CO request->line);
+            colod_execute_nocheck_co(CO result, client->ctx, &errp,
+                                     CO request->line);
             if (!CO result) {
                 CO result = create_error_reply(errp->message);
                 g_error_free(errp);
@@ -241,7 +287,7 @@ static gboolean _colod_client_co(Coroutine *coroutine) {
 
 error_client:
     if (ret == G_IO_STATUS_ERROR) {
-        colod_syslog(client->ctx, LOG_WARNING, "Client connection broke: %s",
+        colod_syslog(LOG_WARNING, "Client connection broke: %s",
                      errp->message);
         g_error_free(errp);
     }
@@ -275,15 +321,13 @@ static gboolean client_listener_new_client(G_GNUC_UNUSED int fd,
                                            G_GNUC_UNUSED GIOCondition condition,
                                            gpointer data) {
     ColodClientListener *listener = (ColodClientListener *) data;
-    ColodContext *ctx = listener->ctx;
     GError *errp = NULL;
 
     while (TRUE) {
         int clientfd = accept(listener->socket, NULL, NULL);
         if (clientfd < 0) {
             if (errno != EWOULDBLOCK) {
-                colod_syslog(ctx, LOG_ERR,
-                             "Failed to accept() new client: %s",
+                colod_syslog(LOG_ERR, "Failed to accept() new client: %s",
                              g_strerror(errno));
                 listener->listen_source_id = 0;
                 close(listener->socket);
@@ -294,7 +338,7 @@ static gboolean client_listener_new_client(G_GNUC_UNUSED int fd,
         }
 
         if (client_new(listener, clientfd, &errp) < 0) {
-            colod_syslog(ctx, LOG_WARNING, "Failed to create new client: %s",
+            colod_syslog(LOG_WARNING, "Failed to create new client: %s",
                          errp->message);
             g_error_free(errp);
             errp = NULL;

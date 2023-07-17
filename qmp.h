@@ -47,7 +47,7 @@ typedef void (*QmpEventCallback)(gpointer user_data, ColodQmpResult *event);
 void qmp_result_free(ColodQmpResult *result);
 ColodQmpResult *qmp_parse_result(gchar *line, gsize len, GError **errp);
 
-ColodQmpState *qmp_new(int fd1, int fd2, GError **errp);
+ColodQmpState *qmp_new(int fd1, int fd2, guint timeout, GError **errp);
 void qmp_free(ColodQmpState *state);
 
 #define qmp_execute_co(ret, state, errp, command) \
@@ -56,6 +56,13 @@ ColodQmpResult *_qmp_execute_co(Coroutine *coroutine,
                                 ColodQmpState *state,
                                 GError **errp,
                                 const gchar *command);
+
+#define qmp_execute_nocheck_co(ret, state, errp, command) \
+    co_call_co((ret), _qmp_execute_nocheck_co, (state), (errp), (command))
+ColodQmpResult *_qmp_execute_nocheck_co(Coroutine *coroutine,
+                                        ColodQmpState *state,
+                                        GError **errp,
+                                        const gchar *command);
 
 #define qmp_yank_co(ret, state, errp) \
     co_call_co((ret), _qmp_yank_co, (state), (errp))
@@ -79,5 +86,7 @@ int _qmp_wait_event_co(Coroutine *coroutine, ColodQmpState *state,
 int qmp_get_error(ColodQmpState *state, GError **errp);
 gboolean qmp_get_yank(ColodQmpState *state);
 void qmp_clear_yank(ColodQmpState *state);
+
+void qmp_set_timeout(ColodQmpState *state, guint timeout);
 
 #endif // QMP_H

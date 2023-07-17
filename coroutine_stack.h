@@ -25,6 +25,8 @@ typedef struct CoroutineStack {
         ColodClientCo clientco;
         CoroutineUtilCo utilco;
         ColodQmpCo qmpco;
+        ColodCo colodco;
+        ColodArrayCo colodarrayco;
     } data;
 } CoroutineStack;
 

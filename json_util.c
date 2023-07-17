@@ -38,7 +38,7 @@ const gchar *get_member_str(JsonNode *node, const gchar *member) {
     return json_object_get_string_member(object, member);
 }
 
-JsonNode *get_member_object(JsonNode *node, const gchar *member) {
+JsonNode *get_member_node(JsonNode *node, const gchar *member) {
     JsonObject *object;
 
     assert(JSON_NODE_HOLDS_OBJECT(node));

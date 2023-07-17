@@ -304,6 +304,31 @@ ColodQmpResult *_qmp_execute_co(Coroutine *coroutine,
                                 ColodQmpState *state,
                                 GError **errp,
                                 const gchar *command) {
+    ColodQmpResult *result;
+
+    result = __qmp_execute_co(coroutine, state, &state->channel, TRUE, errp,
+                              command);
+    if (coroutine->yield) {
+        return NULL;
+    }
+    if (!result) {
+        return NULL;
+    }
+    if (has_member(result->json_root, "error")) {
+        g_set_error(errp, COLOD_ERROR, COLOD_ERROR_QMP,
+                    "qmp command returned error: %s %s",
+                    command, result->line);
+        qmp_result_free(result);
+        return NULL;
+    }
+
+    return result;
+}
+
+ColodQmpResult *_qmp_execute_nocheck_co(Coroutine *coroutine,
+                                        ColodQmpState *state,
+                                        GError **errp,
+                                        const gchar *command) {
     return __qmp_execute_co(coroutine, state, &state->channel, TRUE, errp,
                             command);
 }
@@ -385,6 +410,7 @@ int _qmp_yank_co(Coroutine *coroutine, ColodQmpState *state,
         qmp_result_free(result);
         return -1;
     }
+    qmp_set_yank(state);
 
     qmp_result_free(result);
 
@@ -493,7 +519,27 @@ static void qmp_wait_event_cb(gpointer data, ColodQmpResult *result) {
         g_idle_add(state->coroutine->cb.plain, state->coroutine);
     }
 
-    qmp_del_notify_event(state->state, qmp_wait_event_cb, result);
+    qmp_del_notify_event(state->state, qmp_wait_event_cb, state);
+}
+
+int qmp_wake_wait_event(ColodQmpState *qmp, Coroutine *coroutine) {
+    QmpCallback *entry, *next_entry;
+
+    QLIST_FOREACH_SAFE(entry, &qmp->event_callbacks, next, next_entry) {
+        QmpEventCallback cast = (QmpEventCallback) entry->func;
+
+        if (cast == qmp_wait_event_cb) {
+            ColodWaitState *state = entry->user_data;
+
+            if (state->coroutine == coroutine) {
+                g_idle_add(state->coroutine->cb.plain, state->coroutine);
+                qmp_del_notify_event(state->state, qmp_wait_event_cb, state);
+                return 0;
+            }
+        }
+    }
+
+    return -1;
 }
 
 int _qmp_wait_event_co(Coroutine *coroutine, ColodQmpState *state,
@@ -584,7 +630,10 @@ static gboolean _qmp_event_co(Coroutine *coroutine) {
         qmp_read_line_co(result, eventco->state, channel, FALSE, FALSE,
                          &local_errp);
         colod_unlock_co(channel->lock);
-
+        if (!result) {
+            qmp_set_error(eventco->state, local_errp);
+            return G_SOURCE_REMOVE;
+        }
         if (!has_member(result->json_root, "event")) {
             local_errp = g_error_new(COLOD_ERROR, COLOD_ERROR_FATAL,
                                      "Not an event: %s", result->line);
@@ -625,6 +674,12 @@ static Coroutine *qmp_event_coroutine(ColodQmpState *state,
     return coroutine;
 }
 
+void qmp_set_timeout(ColodQmpState *state, guint timeout) {
+    assert(timeout);
+
+    state->timeout = timeout;
+}
+
 void qmp_free(ColodQmpState *state) {
     colod_shutdown_channel(state->yank_channel.channel);
     colod_shutdown_channel(state->channel.channel);
@@ -638,11 +693,11 @@ void qmp_free(ColodQmpState *state) {
     g_free(state);
 }
 
-ColodQmpState *qmp_new(int fd1, int fd2, GError **errp) {
+ColodQmpState *qmp_new(int fd1, int fd2, guint timeout, GError **errp) {
     ColodQmpState *state;
 
     state = g_new0(ColodQmpState, 1);
-    state->timeout = 5000;
+    state->timeout = timeout;
     state->channel.channel = colod_create_channel(fd1, errp);
     if (!state->channel.channel) {
         g_free(state);
