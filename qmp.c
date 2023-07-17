@@ -135,16 +135,16 @@ void qmp_del_notify_yank(ColodQmpState *state, QmpYankCallback _func,
 }
 
 static void notify_event(ColodQmpState *state, ColodQmpResult *result) {
-    QmpCallback *entry;
-    QLIST_FOREACH(entry, &state->event_callbacks, next) {
+    QmpCallback *entry, *next_entry;
+    QLIST_FOREACH_SAFE(entry, &state->event_callbacks, next, next_entry) {
         QmpEventCallback func = (QmpEventCallback) entry->func;
         func(entry->user_data, result);
     }
 }
 
 static void notify_yank(ColodQmpState *state, gboolean success) {
-    QmpCallback *entry;
-    QLIST_FOREACH(entry, &state->yank_callbacks, next) {
+    QmpCallback *entry, *next_entry;
+    QLIST_FOREACH_SAFE(entry, &state->yank_callbacks, next, next_entry) {
         QmpYankCallback func = (QmpYankCallback) entry->func;
         func(entry->user_data, success);
     }
@@ -476,6 +476,61 @@ static Coroutine *qmp_handshake_coroutine(ColodQmpState *state) {
 
     state->inflight++;
     return coroutine;
+}
+
+typedef struct ColodWaitState {
+    Coroutine *coroutine;
+    const gchar *event;
+    ColodQmpState *state;
+} ColodWaitState;
+
+static void qmp_wait_event_cb(gpointer data, ColodQmpResult *result) {
+    ColodWaitState *state = data;
+    const gchar *event;
+
+    event = get_member_str(result->json_root, "event");
+    if (!strcmp(event, state->event)) {
+        g_idle_add(state->coroutine->cb.plain, state->coroutine);
+    }
+
+    qmp_del_notify_event(state->state, qmp_wait_event_cb, result);
+}
+
+int _qmp_wait_event_co(Coroutine *coroutine, ColodQmpState *state,
+                       guint timeout, const gchar *event, GError **errp) {
+    ColodQmpCo *co = co_stack(qmpco);
+    int ret = 0;
+
+    co_begin(int, -1);
+
+    CO wait_state = g_new0(ColodWaitState, 1);
+    CO wait_state->coroutine = coroutine;
+    CO wait_state->event = event;
+    CO wait_state->state = state;
+    qmp_add_notify_event(state, qmp_wait_event_cb, CO wait_state);
+    if (timeout) {
+        CO timeout_source_id = g_timeout_add(timeout, coroutine->cb.plain,
+                                             coroutine);
+    }
+
+    co_yield_int(G_SOURCE_REMOVE);
+    if (timeout && g_source_get_id(g_main_current_source())
+            == CO timeout_source_id) {
+        qmp_del_notify_event(state, qmp_wait_event_cb, CO wait_state);
+        g_set_error(errp, COLOD_ERROR, COLOD_ERROR_FATAL,
+                    "Timeout reached while waiting for qmp event: %s",
+                    event);
+        ret = -1;
+    }
+
+    if (timeout) {
+        g_source_remove(CO timeout_source_id);
+    }
+    g_free(CO wait_state);
+
+    co_end;
+
+    return ret;
 }
 
 typedef struct QmpEventCo {

@@ -19,6 +19,8 @@
 #include "queue.h"
 #include "base_types.h"
 
+typedef struct ColodWaitState ColodWaitState;
+
 typedef struct ColodQmpResult {
     JsonNode *json_root;
     gchar *line;
@@ -28,8 +30,14 @@ typedef struct ColodQmpResult {
 typedef struct ColodQmpCo {
     ColodQmpState *state;
     gchar *line;
-    gsize len;
-    gchar *command;
+    union {
+        gsize len;
+        guint timeout_source_id;
+    };
+    union {
+        gchar *command;
+        ColodWaitState *wait_state;
+    };
     ColodQmpResult *result;
 } ColodQmpCo;
 
@@ -62,6 +70,11 @@ void qmp_del_notify_event(ColodQmpState *state, QmpEventCallback _func,
                           gpointer user_data);
 void qmp_del_notify_yank(ColodQmpState *state, QmpYankCallback _func,
                          gpointer user_data);
+
+#define qmp_wait_event_co(ret, state, timeout, event, errp) \
+    co_call_co((ret), _qmp_wait_event_co, (state), (timeout), (event), (errp))
+int _qmp_wait_event_co(Coroutine *coroutine, ColodQmpState *state,
+                       guint timeout, const gchar *event, GError **errp);
 
 int qmp_get_error(ColodQmpState *state, GError **errp);
 gboolean qmp_get_yank(ColodQmpState *state);
