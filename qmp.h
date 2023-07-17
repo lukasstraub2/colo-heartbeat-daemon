@@ -28,7 +28,6 @@ typedef struct ColodQmpResult {
 } ColodQmpResult;
 
 typedef struct ColodQmpCo {
-    ColodQmpState *state;
     gchar *line;
     union {
         gsize len;
