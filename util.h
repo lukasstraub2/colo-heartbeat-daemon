@@ -38,4 +38,13 @@ gint progress_source_add(GSourceFunc func, gpointer data);
 GIOChannel *colod_create_channel(int fd, GError **errp);
 void colod_shutdown_channel(GIOChannel *channel);
 
+typedef struct ColodQueue {
+    guint queue[16];
+    guint read_pos, write_pos;
+} ColodQueue;
+
+gboolean queue_empty(ColodQueue *queue);
+void queue_add(ColodQueue *queue, guint entry);
+guint queue_remove(ColodQueue *queue);
+
 #endif // UTIL_H

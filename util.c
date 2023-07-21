@@ -21,6 +21,7 @@
 #include <sys/socket.h>
 #include <fcntl.h>
 #include <errno.h>
+#include <assert.h>
 
 G_DEFINE_QUARK(colod-error-quark, colod_error)
 
@@ -124,4 +125,37 @@ GIOChannel *colod_create_channel(int fd, GError **errp) {
 void colod_shutdown_channel(GIOChannel *channel) {
     int fd = g_io_channel_unix_get_fd(channel);
     shutdown(fd, SHUT_RDWR);
+}
+
+static guint queue_size() {
+    ColodQueue queue;
+    return sizeof(queue.queue)/sizeof(queue.queue[0]);
+}
+
+gboolean queue_empty(ColodQueue *queue) {
+    return queue->read_pos == queue->write_pos;
+}
+
+void queue_add(ColodQueue *queue, guint entry) {
+    guint size = queue_size();
+    guint next_pos = queue->write_pos + 1 % size;
+
+    if (next_pos == queue->read_pos) {
+        // queue full
+        return;
+    }
+
+    queue->queue[queue->write_pos] = entry;
+    queue->write_pos = next_pos;
+}
+
+guint queue_remove(ColodQueue *queue) {
+    guint size = queue_size();
+    guint ret;
+
+    assert(!queue_empty(queue));
+
+    ret = queue->queue[queue->read_pos];
+    queue->read_pos = queue->read_pos + 1 % size;
+    return ret;
 }
