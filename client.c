@@ -164,7 +164,12 @@ static ColodQmpResult *handle_set_migration(ColodQmpResult *request,
 }
 
 static ColodQmpResult *handle_start_migration(ColodContext *ctx) {
-    colod_start_migration(ctx);
+    int ret;
+
+    ret = colod_start_migration(ctx);
+    if (ret < 0) {
+        return create_error_reply("Pending actions");
+    }
 
     return create_reply("{}");
 }
@@ -196,6 +201,8 @@ static gboolean colod_client_co(gpointer data) {
         return GPOINTER_TO_INT(coroutine->yield_value);
     }
 
+    g_source_remove_by_user_data(coroutine);
+    assert(!g_source_remove_by_user_data(coroutine));
     client_free(client);
     return ret;
 }

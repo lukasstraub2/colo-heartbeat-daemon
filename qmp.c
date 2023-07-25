@@ -436,6 +436,8 @@ static gboolean qmp_handshake_readable_co(gpointer data) {
         return GPOINTER_TO_INT(coroutine->yield_value);
     }
 
+    g_source_remove_by_user_data(coroutine);
+    assert(!g_source_remove_by_user_data(coroutine));
     qmpco->state->inflight--;
     g_free(coroutine);
     return ret;
@@ -517,6 +519,7 @@ typedef struct ColodWaitState {
     Coroutine *coroutine;
     const gchar *event;
     ColodQmpState *state;
+    gboolean fired;
 } ColodWaitState;
 
 static void qmp_wait_event_cb(gpointer data, ColodQmpResult *result) {
@@ -525,30 +528,10 @@ static void qmp_wait_event_cb(gpointer data, ColodQmpResult *result) {
 
     event = get_member_str(result->json_root, "event");
     if (!strcmp(event, state->event)) {
+        state->fired = TRUE;
         g_idle_add(state->coroutine->cb.plain, state->coroutine);
+        qmp_del_notify_event(state->state, qmp_wait_event_cb, state);
     }
-
-    qmp_del_notify_event(state->state, qmp_wait_event_cb, state);
-}
-
-int qmp_wake_wait_event(ColodQmpState *qmp, Coroutine *coroutine) {
-    QmpCallback *entry, *next_entry;
-
-    QLIST_FOREACH_SAFE(entry, &qmp->event_callbacks, next, next_entry) {
-        QmpEventCallback cast = (QmpEventCallback) entry->func;
-
-        if (cast == qmp_wait_event_cb) {
-            ColodWaitState *state = entry->user_data;
-
-            if (state->coroutine == coroutine) {
-                g_idle_add(state->coroutine->cb.plain, state->coroutine);
-                qmp_del_notify_event(state->state, qmp_wait_event_cb, state);
-                return 0;
-            }
-        }
-    }
-
-    return -1;
 }
 
 int _qmp_wait_event_co(Coroutine *coroutine, ColodQmpState *state,
@@ -563,18 +546,24 @@ int _qmp_wait_event_co(Coroutine *coroutine, ColodQmpState *state,
     CO wait_state->event = event;
     CO wait_state->state = state;
     qmp_add_notify_event(state, qmp_wait_event_cb, CO wait_state);
+    CO timeout_source_id = 0;
     if (timeout) {
         CO timeout_source_id = g_timeout_add(timeout, coroutine->cb.plain,
                                              coroutine);
     }
 
     co_yield_int(G_SOURCE_REMOVE);
-    if (timeout && g_source_get_id(g_main_current_source())
-            == CO timeout_source_id) {
+    if (!CO wait_state->fired) {
+        if (g_source_get_id(g_main_current_source()) == CO timeout_source_id) {
+            g_set_error(errp, COLOD_ERROR, COLOD_ERROR_TIMEOUT,
+                        "Timeout reached while waiting for qmp event: %s",
+                        event);
+        } else {
+            g_set_error(errp, COLOD_ERROR, COLOD_ERROR_INTERRUPT,
+                        "Got interrupted while waiting for qmp event: %s",
+                        event);
+        }
         qmp_del_notify_event(state, qmp_wait_event_cb, CO wait_state);
-        g_set_error(errp, COLOD_ERROR, COLOD_ERROR_FATAL,
-                    "Timeout reached while waiting for qmp event: %s",
-                    event);
         ret = -1;
     }
 
@@ -599,6 +588,8 @@ static gboolean qmp_event_co(gpointer data) {
         return GPOINTER_TO_INT(coroutine->yield_value);
     }
 
+    g_source_remove_by_user_data(coroutine);
+    assert(!g_source_remove_by_user_data(coroutine));
     qmpco->state->inflight--;
     g_free(qmpco);
     return ret;

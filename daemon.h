@@ -18,6 +18,7 @@
 #include <corosync/corotypes.h>
 
 #include "base_types.h"
+#include "util.h"
 #include "qmp.h"
 
 typedef enum ColodRole {
@@ -25,9 +26,12 @@ typedef enum ColodRole {
     ROLE_SECONDARY
 } ColodRole;
 
+typedef enum ColodEvent ColodEvent;
+
 typedef struct ColodContext {
     /* Parameters */
     gboolean daemonize;
+    gboolean disable_cpg;
     guint qmp_timeout_low, qmp_timeout_high;
     guint checkpoint_interval;
     guint watchdog_interval;
@@ -43,7 +47,10 @@ typedef struct ColodContext {
     ColodWatchdog *watchdog;
     JsonNode *migration_commands;
     JsonNode *failover_primary_commands, *failover_secondary_commands;
-    Coroutine *migration_coroutine;
+    Coroutine *main_coroutine;
+    ColodQueue events, critical_events;
+    gboolean pending_action;
+    gboolean failed, yellow;
 
     ColodClientListener *listener;
 
@@ -55,7 +62,7 @@ typedef struct ColodContext {
 } ColodContext;
 
 typedef struct ColodCo {
-    ColodContext *ctx;
+    JsonNode *commands;
     union {
         ColodQmpResult *result;
         ColodQmpResult *qemu_status;
@@ -89,7 +96,7 @@ void colod_set_migration_commands(ColodContext *ctx, JsonNode *commands);
 void colod_set_primary_commands(ColodContext *ctx, JsonNode *commands);
 void colod_set_secondary_commands(ColodContext *ctx, JsonNode *commands);
 
-void colod_start_migration(ColodContext *ctx);
+int colod_start_migration(ColodContext *ctx);
 
 #define colod_execute_nocheck_co(result, ctx, errp, command) \
     co_call_co((result), _colod_execute_nocheck_co, (ctx), (errp), (command))

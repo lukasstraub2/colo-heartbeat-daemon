@@ -2,7 +2,7 @@
 
 set -e
 
-CFLAGS="-g -Wall -Wextra -pedantic -Wno-unused-function -fsanitize=address"
+CFLAGS="-g -Wall -Wextra -fsanitize=address"
 CFLAGS="${CFLAGS} `pkg-config --cflags glib-2.0 json-glib-1.0`"
 
 LDFLAGS="-lcorosync_common -lcpg"
