@@ -19,6 +19,7 @@
 #include "util.h"
 #include "daemon.h"
 #include "json_util.h"
+#include "qmp.h"
 #include "coroutine_stack.h"
 
 
@@ -183,6 +184,44 @@ static ColodQmpResult *handle_set_secondary_failover(ColodQmpResult *request,
     return _set_commands(request, ctx, colod_set_secondary_commands);
 }
 
+static ColodQmpResult *handle_set_yank(ColodQmpResult *request,
+                                       ColodContext *ctx) {
+    JsonNode *instances;
+
+    if (!has_member(request->json_root, "instances")) {
+        return create_error_reply("Member 'instances' missing");
+    }
+
+    instances = get_member_node(request->json_root, "instances");
+    if (!JSON_NODE_HOLDS_ARRAY(instances)) {
+        return create_error_reply("Member 'instances' must be an array");
+    }
+
+    qmp_set_yank_instances(ctx->qmp, instances);
+
+    return create_reply("{}");
+}
+
+#define handle_yank_co(result, ctx) \
+    co_call_co((result), _handle_yank_co, (ctx))
+static ColodQmpResult *_handle_yank_co(Coroutine *coroutine, ColodContext *ctx) {
+    ColodQmpResult *result;
+    int ret;
+    GError *local_errp = NULL;
+
+    ret = _colod_yank_co(coroutine, ctx, &local_errp);
+    if (coroutine->yield) {
+        return NULL;
+    }
+    if (ret < 0) {
+        result = create_error_reply(local_errp->message);
+        g_error_free(local_errp);
+        return result;
+    }
+
+    return create_reply("{}");
+}
+
 static void client_free(ColodClient *client) {
     QLIST_REMOVE(client, next);
     g_io_channel_unref(client->channel);
@@ -263,6 +302,10 @@ static gboolean _colod_client_co(Coroutine *coroutine) {
             } else if (!strcmp(command, "set-secondary-failover")) {
                 CO result = handle_set_secondary_failover(CO request,
                                                           client->ctx);
+            } else if (!strcmp(command, "set-yank")) {
+                CO result = handle_set_yank(CO request, client->ctx);
+            } else if (!strcmp(command, "yank")) {
+                handle_yank_co(CO result, client->ctx);
             } else {
                 CO result = create_error_reply("Unknown command");
             }

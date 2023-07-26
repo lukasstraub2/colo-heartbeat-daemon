@@ -29,7 +29,7 @@ struct ColodQmpState {
     QmpChannel channel;
     QmpChannel yank_channel;
     guint timeout;
-    JsonNode *yank_matches;
+    JsonNode *yank_instances;
     ColodCallbackHead yank_callbacks;
     ColodCallbackHead event_callbacks;
     gboolean did_yank;
@@ -348,7 +348,7 @@ int _qmp_yank_co(Coroutine *coroutine, ColodQmpState *state,
     }
 
     gchar *instances = pick_yank_instances(result->json_root,
-                                           state->yank_matches);
+                                           state->yank_instances);
     CO command = g_strdup_printf("{'exec-oob': 'yank', 'id': 'yank0', "
                                         "'arguments':{ 'instances': %s }}\n",
                                  instances);
@@ -623,6 +623,13 @@ static Coroutine *qmp_event_coroutine(ColodQmpState *state,
 
     state->inflight++;
     return coroutine;
+}
+
+void qmp_set_yank_instances(ColodQmpState *state, JsonNode *instances) {
+    if (state->yank_instances) {
+        json_node_unref(state->yank_instances);
+    }
+    state->yank_instances = json_node_ref(instances);
 }
 
 void qmp_set_timeout(ColodQmpState *state, guint timeout) {

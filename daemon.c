@@ -216,14 +216,6 @@ void colod_syslog(int pri, const char *fmt, ...) {
     va_end(args);
 }
 
-static gboolean colod_cpg_readable(G_GNUC_UNUSED gint fd,
-                                   G_GNUC_UNUSED GIOCondition events,
-                                   gpointer data) {
-    ColodContext *ctx = data;
-    cpg_dispatch(ctx->cpg_handle, CS_DISPATCH_ALL);
-    return G_SOURCE_CONTINUE;
-}
-
 void colod_set_migration_commands(ColodContext *ctx, JsonNode *commands) {
     if (ctx->migration_commands) {
         json_node_unref(ctx->migration_commands);
@@ -243,6 +235,23 @@ void colod_set_secondary_commands(ColodContext *ctx, JsonNode *commands) {
         json_node_unref(ctx->failover_secondary_commands);
     }
     ctx->failover_secondary_commands = json_node_ref(commands);
+}
+
+int _colod_yank_co(Coroutine *coroutine, ColodContext *ctx, GError **errp) {
+    int ret;
+
+    ret = _qmp_yank_co(coroutine, ctx->qmp, errp);
+    if (coroutine->yield) {
+        return -1;
+    }
+    if (ret < 0) {
+        colod_event_queue(ctx, EVENT_FAILED);
+    } else {
+        qmp_clear_yank(ctx->qmp);
+        colod_event_queue(ctx, EVENT_DO_FAILOVER);
+    }
+
+    return ret;
 }
 
 static void colod_watchdog_refresh(ColodWatchdog *state);
@@ -722,6 +731,14 @@ static void colod_cpg_totem_confchg(G_GNUC_UNUSED cpg_handle_t handle,
                                     G_GNUC_UNUSED uint32_t member_list_entries,
                                     G_GNUC_UNUSED const uint32_t *member_list) {
 
+}
+
+static gboolean colod_cpg_readable(G_GNUC_UNUSED gint fd,
+                                   G_GNUC_UNUSED GIOCondition events,
+                                   gpointer data) {
+    ColodContext *ctx = data;
+    cpg_dispatch(ctx->cpg_handle, CS_DISPATCH_ALL);
+    return G_SOURCE_CONTINUE;
 }
 
 static void colod_cpg_send(ColodContext *ctx, uint32_t message) {
@@ -1346,10 +1363,6 @@ static int colod_daemonize(ColodContext *ctx) {
     char *path;
     int logfd, pipefd, ret;
 
-    if (!ctx->daemonize) {
-        return 0;
-    }
-
     pipefd = os_daemonize();
 
     path = g_strconcat(ctx->base_dir, "/colod.log", NULL);
@@ -1380,33 +1393,64 @@ static int colod_daemonize(ColodContext *ctx) {
     return pipefd;
 }
 
+static int colod_parse_options(ColodContext *ctx, int *argc, char ***argv,
+                               GError **errp) {
+    gboolean ret;
+    GOptionContext *context;
+    GOptionEntry entries[] =
+    {
+        {"daemonize", 'd', 0, G_OPTION_ARG_NONE, &ctx->daemonize, "Daemonize", NULL},
+        {"disable_cpg", 0, 0, G_OPTION_ARG_NONE, &ctx->disable_cpg, "Disable corosync communication", NULL},
+        {"instance_name", 'i', 0, G_OPTION_ARG_STRING, &ctx->instance_name, "The CPG group name for corosync communication", NULL},
+        {"syslog", 's', 0, G_OPTION_ARG_NONE, &do_syslog, "Log to syslog", NULL},
+        {"node_name", 'n', 0, G_OPTION_ARG_STRING, &ctx->node_name, "The node hostname", NULL},
+        {"base_directory", 'b', 0, G_OPTION_ARG_FILENAME, &ctx->base_dir, "The base directory to store logs and sockets", NULL},
+        {"qmp_path", 'q', 0, G_OPTION_ARG_FILENAME, &ctx->qmp_path, "The path to the qmp socket", NULL},
+        {"timeout_low", 'l', 0, G_OPTION_ARG_INT, &ctx->qmp_timeout_low, "Low qmp timeout", NULL},
+        {"timeout_high", 't', 0, G_OPTION_ARG_INT, &ctx->qmp_timeout_high, "High qmp timeout", NULL},
+        {"watchdog_interval", 'a', 0, G_OPTION_ARG_INT, &ctx->watchdog_interval, "Watchdog interval (0 to disable)", NULL},
+        {NULL}
+    };
+
+    ctx->qmp_timeout_low = 600;
+    ctx->qmp_timeout_high = 10000;
+
+    context = g_option_context_new("- qemu colo heartbeat daemon");
+    g_option_context_set_help_enabled(context, TRUE);
+    g_option_context_add_main_entries(context, entries, 0);
+
+    ret = g_option_context_parse(context, argc, argv, errp);
+    g_option_context_free(context);
+    if (!ret) {
+        return -1;
+    }
+
+    if (!ctx->node_name || !ctx->instance_name || !ctx->base_dir ||
+            !ctx->qmp_path) {
+        g_set_error(errp, COLOD_ERROR, COLOD_ERROR_FATAL,
+                    "--node_name, --instance_name, --base_directory and --qmp_path need to be given.");
+        return -1;
+    }
+
+    return 0;
+}
+
 int main(int argc, char **argv) {
     GError *errp = NULL;
-    char *node_name, *instance_name, *base_dir, *qmp_path;
     ColodContext ctx_struct = { 0 };
     ColodContext *ctx = &ctx_struct;
-    int ret;
+    int ret, pipefd;
 
-    if (argc != 5) {
-        fprintf(stderr, "Usage: %s <node name> <instance name> "
-                        "<base directory> <qmp unix socket>\n",
-                        argv[0]);
+    ret = colod_parse_options(ctx, &argc, &argv, &errp);
+    if (ret < 0) {
+        fprintf(stderr, "%s\n", errp->message);
+        g_error_free(errp);
         exit(EXIT_FAILURE);
     }
 
-    node_name = argv[1];
-    instance_name = argv[2];
-    base_dir = argv[3];
-    qmp_path = argv[4];
-
-    ctx->daemonize = TRUE;
-    do_syslog = FALSE;
-    ctx->node_name = node_name;
-    ctx->instance_name = instance_name;
-    ctx->base_dir = base_dir;
-    ctx->qmp_path = qmp_path;
-
-    int pipefd = colod_daemonize(ctx);
+    if (ctx->daemonize) {
+        pipefd = colod_daemonize(ctx);
+    }
     prctl(PR_SET_PTRACER, PR_SET_PTRACER_ANY, 0, 0, 0);
 
     signal(SIGPIPE, SIG_IGN); // TODO: Handle this properly

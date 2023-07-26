@@ -85,6 +85,7 @@ int qmp_get_error(ColodQmpState *state, GError **errp);
 gboolean qmp_get_yank(ColodQmpState *state);
 void qmp_clear_yank(ColodQmpState *state);
 
+void qmp_set_yank_instances(ColodQmpState *state, JsonNode *instances);
 void qmp_set_timeout(ColodQmpState *state, guint timeout);
 
 #endif // QMP_H

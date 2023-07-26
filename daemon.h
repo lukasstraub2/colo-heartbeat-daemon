@@ -98,6 +98,10 @@ void colod_set_secondary_commands(ColodContext *ctx, JsonNode *commands);
 
 int colod_start_migration(ColodContext *ctx);
 
+#define colod_yank(ret, ctx, errp) \
+    co_call_co((ret), _colod_yank_co, (ctx), (errp))
+int _colod_yank_co(Coroutine *coroutine, ColodContext *ctx, GError **errp);
+
 #define colod_execute_nocheck_co(result, ctx, errp, command) \
     co_call_co((result), _colod_execute_nocheck_co, (ctx), (errp), (command))
 ColodQmpResult *_colod_execute_nocheck_co(Coroutine *coroutine,
