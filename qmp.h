@@ -16,7 +16,6 @@
 
 #include "coroutine.h"
 #include "coutil.h"
-#include "queue.h"
 #include "base_types.h"
 
 typedef struct ColodWaitState ColodWaitState;
@@ -40,7 +39,7 @@ typedef struct ColodQmpCo {
     ColodQmpResult *result;
 } ColodQmpCo;
 
-typedef void (*QmpYankCallback)(gpointer user_data, gboolean success);
+typedef void (*QmpYankCallback)(gpointer user_data);
 typedef void (*QmpEventCallback)(gpointer user_data, ColodQmpResult *event);
 
 void qmp_result_free(ColodQmpResult *result);

@@ -76,23 +76,22 @@ static ColodQmpResult *_handle_query_status_co(Coroutine *coroutine,
                                                ColodContext *ctx) {
     int ret;
     ColodQmpResult *result;
-    GError *local_errp;
+    gboolean failed = FALSE;
 
-    ret = _colod_check_health_co(coroutine, ctx, &local_errp);
+    ret = _colod_check_health_co(coroutine, ctx, NULL);
     if (coroutine->yield) {
         return NULL;
     }
     if (ret < 0) {
-        // TODO should return "state": "error" instead
-        result = create_error_reply(local_errp->message);
-        g_error_free(local_errp);
-        return result;
+        failed = TRUE;
     }
 
     gchar *reply;
-    reply = g_strdup_printf("{'return': {'role': '%s', 'replication': %s}}\n",
+    reply = g_strdup_printf("{'return': "
+                            "{'role': '%s', 'replication': %s, 'failed': %s}}\n",
                             role_to_string(ctx->role),
-                            bool_to_json(ctx->replication));
+                            bool_to_json(ctx->replication),
+                            bool_to_json(failed || ctx->failed));
 
     result = qmp_parse_result(reply, strlen(reply), NULL);
     assert(result);
@@ -259,7 +258,8 @@ static gboolean _colod_client_co(Coroutine *coroutine) {
             } else if (!strcmp(command, "start-migration")) {
                 CO result = handle_start_migration(client->ctx);
             } else if (!strcmp(command, "set-primary-failover")) {
-                CO result = handle_set_primary_failover(CO request, client->ctx);
+                CO result = handle_set_primary_failover(CO request,
+                                                        client->ctx);
             } else if (!strcmp(command, "set-secondary-failover")) {
                 CO result = handle_set_secondary_failover(CO request,
                                                           client->ctx);

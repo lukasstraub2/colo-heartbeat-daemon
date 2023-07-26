@@ -50,7 +50,7 @@ typedef struct ColodContext {
     JsonNode *failover_primary_commands, *failover_secondary_commands;
     Coroutine *main_coroutine;
     ColodQueue events, critical_events;
-    gboolean pending_action;
+    gboolean pending_action, transitioning;
     gboolean failed, yellow;
 
     ColodClientListener *listener;

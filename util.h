@@ -13,6 +13,8 @@
 #include <stdint.h>
 #include <glib-2.0/glib.h>
 
+#include "queue.h"
+
 typedef enum ColodError {
     COLOD_ERROR_FATAL,
     COLOD_ERROR_TIMEOUT,
@@ -47,5 +49,21 @@ typedef struct ColodQueue {
 gboolean queue_empty(ColodQueue *queue);
 void queue_add(ColodQueue *queue, guint entry);
 guint queue_remove(ColodQueue *queue);
+
+typedef void (*ColodCallbackFunc)(void);
+typedef struct ColodCallback {
+    QLIST_ENTRY(ColodCallback) next;
+    ColodCallbackFunc func;
+    gpointer user_data;
+} ColodCallback;
+
+typedef QLIST_HEAD(ColodCallbackHead, ColodCallback) ColodCallbackHead;
+
+ColodCallback *colod_callback_find(ColodCallbackHead *head,
+                                   ColodCallbackFunc func, gpointer user_data);
+void colod_callback_add(ColodCallbackHead *head,
+                        ColodCallbackFunc func, gpointer user_data);
+void colod_callback_del(ColodCallbackHead *head,
+                        ColodCallbackFunc func, gpointer user_data);
 
 #endif // UTIL_H

@@ -19,27 +19,19 @@
 #include "json_util.h"
 #include "coroutine_stack.h"
 
-typedef void (*Callback)(void);
-typedef struct QmpCallback {
-    QLIST_ENTRY(QmpCallback) next;
-    Callback func;
-    gpointer user_data;
-} QmpCallback;
-
 typedef struct QmpChannel {
     GIOChannel *channel;
     CoroutineLock lock;
     gboolean discard_events;
 } QmpChannel;
 
-QLIST_HEAD(QmpCallbackHead, QmpCallback);
 struct ColodQmpState {
     QmpChannel channel;
     QmpChannel yank_channel;
     guint timeout;
     JsonNode *yank_matches;
-    struct QmpCallbackHead yank_callbacks;
-    struct QmpCallbackHead event_callbacks;
+    ColodCallbackHead yank_callbacks;
+    ColodCallbackHead event_callbacks;
     gboolean did_yank;
     GError *error;
     guint inflight;
@@ -56,7 +48,7 @@ static void qmp_set_error(ColodQmpState *state, GError *error) {
 
 int qmp_get_error(ColodQmpState *state, GError **errp) {
     if (state->error) {
-        g_propagate_error(errp, g_error_copy(state->error));
+        g_propagate_prefixed_error(errp, g_error_copy(state->error), "qmp: ");
         return -1;
     } else {
         return 0;
@@ -75,78 +67,43 @@ void qmp_clear_yank(ColodQmpState *state) {
     state->did_yank = FALSE;
 }
 
-static QmpCallback *qmp_find_notify(struct QmpCallbackHead *head,
-                                    Callback func, gpointer user_data) {
-    QmpCallback *entry;
-    QLIST_FOREACH(entry, head, next) {
-        if (entry->func == func && entry->user_data == user_data) {
-            return entry;
-        }
-    }
-
-    return NULL;
-}
-
-static void qmp_add_notify(struct QmpCallbackHead *head,
-                           Callback func, gpointer user_data) {
-    QmpCallback *cb;
-
-    assert(!qmp_find_notify(head, func, user_data));
-
-    cb = g_new0(QmpCallback, 1);
-    cb->func = func;
-    cb->user_data = user_data;
-
-    QLIST_INSERT_HEAD(head, cb, next);
-}
-
 void qmp_add_notify_event(ColodQmpState *state, QmpEventCallback _func,
                           gpointer user_data) {
-    Callback func = (Callback) _func;
-    qmp_add_notify(&state->event_callbacks, func, user_data);
+    ColodCallbackFunc func = (ColodCallbackFunc) _func;
+    colod_callback_add(&state->event_callbacks, func, user_data);
 }
 
 void qmp_add_notify_yank(ColodQmpState *state, QmpYankCallback _func,
                          gpointer user_data) {
-    Callback func = (Callback) _func;
-    qmp_add_notify(&state->yank_callbacks, func, user_data);
+    ColodCallbackFunc func = (ColodCallbackFunc) _func;
+    colod_callback_add(&state->yank_callbacks, func, user_data);
 }
 
 void qmp_del_notify_event(ColodQmpState *state, QmpEventCallback _func,
                           gpointer user_data) {
-    Callback func = (Callback) _func;
-    QmpCallback *cb;
-
-    cb = qmp_find_notify(&state->event_callbacks, func, user_data);
-    assert(cb);
-
-    QLIST_REMOVE(cb, next);
+    ColodCallbackFunc func = (ColodCallbackFunc) _func;
+    colod_callback_del(&state->event_callbacks, func, user_data);
 }
 
 void qmp_del_notify_yank(ColodQmpState *state, QmpYankCallback _func,
                          gpointer user_data) {
-    Callback func = (Callback) _func;
-    QmpCallback *cb;
-
-    cb = qmp_find_notify(&state->yank_callbacks, func, user_data);
-    assert(cb);
-
-    QLIST_REMOVE(cb, next);
+    ColodCallbackFunc func = (ColodCallbackFunc) _func;
+    colod_callback_del(&state->yank_callbacks, func, user_data);
 }
 
 static void notify_event(ColodQmpState *state, ColodQmpResult *result) {
-    QmpCallback *entry, *next_entry;
+    ColodCallback *entry, *next_entry;
     QLIST_FOREACH_SAFE(entry, &state->event_callbacks, next, next_entry) {
         QmpEventCallback func = (QmpEventCallback) entry->func;
         func(entry->user_data, result);
     }
 }
 
-static void notify_yank(ColodQmpState *state, gboolean success) {
-    QmpCallback *entry, *next_entry;
+static void notify_yank(ColodQmpState *state) {
+    ColodCallback *entry, *next_entry;
     QLIST_FOREACH_SAFE(entry, &state->yank_callbacks, next, next_entry) {
         QmpYankCallback func = (QmpYankCallback) entry->func;
-        func(entry->user_data, success);
+        func(entry->user_data);
     }
 }
 
@@ -271,7 +228,7 @@ static ColodQmpResult *__qmp_execute_co(Coroutine *coroutine,
                                    &local_errp);
     if (ret == G_IO_STATUS_ERROR) {
         qmp_set_error(state, local_errp);
-        g_propagate_error(errp, local_errp);
+        g_propagate_prefixed_error(errp, local_errp, "qmp: ");
         colod_unlock_co(channel->lock);
         state->inflight--;
         return NULL;
@@ -280,7 +237,7 @@ static ColodQmpResult *__qmp_execute_co(Coroutine *coroutine,
         local_errp = g_error_new(COLOD_ERROR, COLOD_ERROR_FATAL,
                                  "Qmp signaled EOF");
         qmp_set_error(state, local_errp);
-        g_propagate_error(errp, local_errp);
+        g_propagate_prefixed_error(errp, local_errp, "qmp: ");
         colod_unlock_co(channel->lock);
         state->inflight--;
         return NULL;
@@ -291,7 +248,7 @@ static ColodQmpResult *__qmp_execute_co(Coroutine *coroutine,
     state->inflight--;
     if (!result) {
         qmp_set_error(state, local_errp);
-        g_propagate_error(errp, local_errp);
+        g_propagate_prefixed_error(errp, local_errp, "qmp: ");
         return NULL;
     }
 

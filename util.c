@@ -159,3 +159,38 @@ guint queue_remove(ColodQueue *queue) {
     queue->read_pos = queue->read_pos + 1 % size;
     return ret;
 }
+
+ColodCallback *colod_callback_find(ColodCallbackHead *head,
+                                   ColodCallbackFunc func, gpointer user_data) {
+    ColodCallback *entry;
+    QLIST_FOREACH(entry, head, next) {
+        if (entry->func == func && entry->user_data == user_data) {
+            return entry;
+        }
+    }
+
+    return NULL;
+}
+
+void colod_callback_add(ColodCallbackHead *head,
+                        ColodCallbackFunc func, gpointer user_data) {
+    ColodCallback *cb;
+
+    assert(!colod_callback_find(head, func, user_data));
+
+    cb = g_new0(ColodCallback, 1);
+    cb->func = func;
+    cb->user_data = user_data;
+
+    QLIST_INSERT_HEAD(head, cb, next);
+}
+
+void colod_callback_del(ColodCallbackHead *head,
+                        ColodCallbackFunc func, gpointer user_data) {
+    ColodCallback *cb;
+
+    cb = colod_callback_find(head, func, user_data);
+    assert(cb);
+
+    QLIST_REMOVE(cb, next);
+}
