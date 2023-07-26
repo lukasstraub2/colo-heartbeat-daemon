@@ -307,6 +307,84 @@ static ColodWatchdog *colod_watchdog_new(ColodContext *ctx) {
     return state;
 }
 
+static gboolean _colod_raise_timeout_co(Coroutine *coroutine,
+                                        ColodContext *ctx);
+static gboolean colod_raise_timeout_co(gpointer data) {
+    ColodContext *ctx = data;
+    Coroutine *coroutine = ctx->raise_timeout_coroutine;
+    gboolean ret;
+
+    co_enter(ret, coroutine, _colod_raise_timeout_co, ctx);
+    if (coroutine->yield) {
+        return GPOINTER_TO_INT(coroutine->yield_value);
+    }
+
+    qmp_set_timeout(ctx->qmp, ctx->qmp_timeout_low);
+
+    g_source_remove_by_user_data(coroutine);
+    assert(!g_source_remove_by_user_data(coroutine));
+    g_free(ctx->raise_timeout_coroutine);
+    ctx->raise_timeout_coroutine = NULL;
+    return ret;
+}
+
+static gboolean colod_raise_timeout_co_wrap(
+        G_GNUC_UNUSED GIOChannel *channel,
+        G_GNUC_UNUSED GIOCondition revents,
+        gpointer data) {
+    return colod_raise_timeout_co(data);
+}
+
+static gboolean _colod_raise_timeout_co(Coroutine *coroutine,
+                                        ColodContext *ctx) {
+    int ret;
+
+    co_begin(gboolean, G_SOURCE_CONTINUE);
+
+    qmp_wait_event_co(ret, ctx->qmp, 0, "STOP", NULL);
+    if (ret < 0) {
+        return G_SOURCE_REMOVE;
+    }
+
+    qmp_wait_event_co(ret, ctx->qmp, 0, "CONT", NULL);
+    if (ret < 0) {
+        return G_SOURCE_REMOVE;
+    }
+
+    co_end;
+
+    return G_SOURCE_REMOVE;
+}
+
+static void colod_raise_timeout_coroutine_free(ColodContext *ctx) {
+    if (ctx->raise_timeout_coroutine) {
+        return;
+    }
+
+    g_idle_add(colod_raise_timeout_co, ctx);
+
+    while (ctx->raise_timeout_coroutine) {
+        g_main_context_iteration(g_main_context_default(), TRUE);
+    }
+}
+
+static Coroutine *colod_raise_timeout_coroutine(ColodContext *ctx) {
+    Coroutine *coroutine;
+
+    if (ctx->raise_timeout_coroutine) {
+        return NULL;
+    }
+
+    qmp_set_timeout(ctx->qmp, ctx->qmp_timeout_high);
+
+    coroutine = g_new0(Coroutine, 1);
+    coroutine->cb.plain = colod_raise_timeout_co;
+    coroutine->cb.iofunc = colod_raise_timeout_co_wrap;
+    ctx->raise_timeout_coroutine = coroutine;
+
+    return coroutine;
+}
+
 ColodQmpResult *_colod_execute_nocheck_co(Coroutine *coroutine,
                                           ColodContext *ctx,
                                           GError **errp,
@@ -757,7 +835,7 @@ static ColodResult _colod_start_migration_co(Coroutine *coroutine,
         goto handle_event;
     }
 
-    qmp_set_timeout(qmp, ctx->qmp_timeout_high);
+    colod_raise_timeout_coroutine(ctx);
 
     colod_execute_co(qmp_result, ctx, &local_errp,
                      "{'execute': 'migrate-continue',"
@@ -780,20 +858,6 @@ static ColodResult _colod_start_migration_co(Coroutine *coroutine,
         qmp_set_timeout(qmp, ctx->qmp_timeout_low);
         goto qmp_error;
     }
-    colod_qmp_event_wait_co(ret, ctx, ctx->checkpoint_interval + 1000, "STOP",
-                            &local_errp);
-    if (ret < 0) {
-        qmp_set_timeout(qmp, ctx->qmp_timeout_low);
-        goto qmp_error_colo;
-    }
-    colod_qmp_event_wait_co(ret, ctx, ctx->qmp_timeout_high, "CONT",
-                            &local_errp);
-    if (ret < 0) {
-        qmp_set_timeout(qmp, ctx->qmp_timeout_low);
-        goto qmp_error_colo;
-    }
-
-    qmp_set_timeout(qmp, ctx->qmp_timeout_low);
 
     return RESULT_SUCCESS;
 
@@ -814,24 +878,6 @@ qmp_error:
         g_error_free(local_errp);
     }
     goto failover;
-
-qmp_error_colo:
-    if (g_error_matches(local_errp, COLOD_ERROR, COLOD_ERROR_INTERRUPT)) {
-        g_error_free(local_errp);
-        local_errp = NULL;
-        assert(colod_event_pending(ctx));
-        ColodEvent event;
-        colod_event_wait(event, ctx);
-        if (colod_event_failover(event)) {
-            goto failover_colo;
-        } else {
-            return colod_critical_result(event);
-        }
-    } else {
-        log_error(local_errp->message);
-        g_error_free(local_errp);
-    }
-    goto failover_colo;
 
 qemu_failed:
     log_error(local_errp->message);
@@ -855,10 +901,6 @@ failover:
         goto qemu_failed;
     }
     qmp_result_free(qmp_result);
-    colod_failover_co(result, ctx);
-    return result;
-
-failover_colo:
     colod_failover_co(result, ctx);
     return result;
 
@@ -1103,6 +1145,7 @@ static void colod_mainloop(ColodContext *ctx) {
     if (ctx->cpg_source_id) {
         g_source_remove(ctx->cpg_source_id);
     }
+    colod_raise_timeout_coroutine_free(ctx);
     colod_main_free(ctx);
     colo_watchdog_free(ctx->watchdog);
     client_listener_free(ctx->listener);

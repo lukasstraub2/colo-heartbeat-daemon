@@ -45,6 +45,7 @@ typedef struct ColodContext {
     guint cpg_source_id;
 
     ColodWatchdog *watchdog;
+    Coroutine *raise_timeout_coroutine;
     JsonNode *migration_commands;
     JsonNode *failover_primary_commands, *failover_secondary_commands;
     Coroutine *main_coroutine;
@@ -74,7 +75,6 @@ typedef struct ColodCo {
 } ColodCo;
 
 typedef struct ColodArrayCo {
-    ColodContext *ctx;
     JsonReader *reader;
     gchar *line;
     guint i, count;
