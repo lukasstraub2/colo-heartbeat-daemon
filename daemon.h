@@ -46,7 +46,7 @@ typedef struct ColodContext {
     Coroutine *main_coroutine;
     ColodQueue events, critical_events;
     gboolean pending_action, transitioning;
-    gboolean failed, yellow;
+    gboolean failed, yellow, qemu_exited;
     gboolean autoquit;
 
     ColodClientListener *listener;

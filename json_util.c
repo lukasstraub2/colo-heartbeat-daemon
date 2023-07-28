@@ -16,9 +16,9 @@
 
 const gchar *bool_to_json(gboolean bool) {
     if (bool) {
-        return "True";
+        return "true";
     } else {
-        return "False";
+        return "false";
     }
 }
 
