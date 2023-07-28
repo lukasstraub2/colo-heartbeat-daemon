@@ -21,15 +21,11 @@
 #include "util.h"
 #include "qmp.h"
 
-typedef enum ColodRole {
-    ROLE_PRIMARY,
-    ROLE_SECONDARY
-} ColodRole;
-
 typedef enum ColodEvent ColodEvent;
 
 typedef struct ColodContext {
     /* Parameters */
+    gchar *node_name, *instance_name, *base_dir, *qmp_path;
     gboolean daemonize;
     gboolean disable_cpg;
     guint qmp_timeout_low, qmp_timeout_high;
@@ -39,7 +35,6 @@ typedef struct ColodContext {
     /* Variables */
     GMainContext *mainctx;
     GMainLoop *mainloop;
-    char *node_name, *instance_name, *base_dir, *qmp_path;
 
     int qmp1_fd, qmp2_fd, mngmt_listen_fd, cpg_fd;
     guint cpg_source_id;
@@ -52,11 +47,12 @@ typedef struct ColodContext {
     ColodQueue events, critical_events;
     gboolean pending_action, transitioning;
     gboolean failed, yellow;
+    gboolean autoquit;
 
     ColodClientListener *listener;
 
     ColodQmpState *qmp;
-    ColodRole role;
+    gboolean primary;
     gboolean replication;
 
     cpg_handle_t cpg_handle;
@@ -97,6 +93,9 @@ void colod_set_primary_commands(ColodContext *ctx, JsonNode *commands);
 void colod_set_secondary_commands(ColodContext *ctx, JsonNode *commands);
 
 int colod_start_migration(ColodContext *ctx);
+void colod_autoquit(ColodContext *ctx);
+void colod_quit(ColodContext *ctx);
+void colod_qemu_failed(ColodContext *ctx);
 
 #define colod_yank(ret, ctx, errp) \
     co_call_co((ret), _colod_yank_co, (ctx), (errp))
@@ -115,7 +114,5 @@ ColodQmpResult *_colod_execute_co(Coroutine *coroutine,
                                   ColodContext *ctx,
                                   GError **errp,
                                   const gchar *command);
-
-void colod_quit(ColodContext *ctx);
 
 #endif // DAEMON_H

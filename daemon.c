@@ -130,7 +130,6 @@ static gboolean colod_event_pending(ColodContext *ctx) {
 
 static gboolean colod_main_co(gpointer data);
 static void colod_event_queue(ColodContext *ctx, ColodEvent event) {
-    assert(event != EVENT_NONE);
     ColodQueue *queue;
 
     if (colod_event_critical(event)) {
@@ -141,6 +140,13 @@ static void colod_event_queue(ColodContext *ctx, ColodEvent event) {
 
     if (queue_empty(queue) && ctx->main_coroutine) {
         g_idle_add(colod_main_co, ctx);
+    }
+
+    if (!queue_empty(queue)) {
+        // ratelimit
+        if (queue_peek(queue) == event) {
+            return;
+        }
     }
 
     queue_add(queue, event);
@@ -369,14 +375,15 @@ static int _colod_execute_array_co(Coroutine *coroutine, ColodContext *ctx,
 static gboolean qemu_runnng(const gchar *status) {
     return !strcmp(status, "running")
             || !strcmp(status, "finish-migrate")
-            || !strcmp(status, "colo");
+            || !strcmp(status, "colo")
+            || !strcmp(status, "paused");
 }
 
-#define qemu_query_status_co(result, qmp, role, replication, errp) \
-    co_call_co((result), _qemu_query_status_co, (qmp), (role), \
+#define qemu_query_status_co(result, qmp, primary, replication, errp) \
+    co_call_co((result), _qemu_query_status_co, (qmp), (primary), \
                (replication), (errp))
 static int _qemu_query_status_co(Coroutine *coroutine, ColodContext *ctx,
-                                 ColodRole *role, gboolean *replication,
+                                 gboolean *primary, gboolean *replication,
                                  GError **errp) {
     ColodCo *co = co_stack(colodco);
 
@@ -413,18 +420,18 @@ static int _qemu_query_status_co(Coroutine *coroutine, ColodContext *ctx,
     }
 
     if (!strcmp(status, "inmigrate") || !strcmp(status, "shutdown")) {
-        *role = ROLE_SECONDARY;
+        *primary = FALSE;
         *replication = FALSE;
     } else if (qemu_runnng(status) && !strcmp(colo_mode, "none")
                && (!strcmp(colo_reason, "none")
                    || !strcmp(colo_reason, "request"))) {
-        *role = ROLE_PRIMARY;
+        *primary = TRUE;
         *replication = FALSE;
     } else if (qemu_runnng(status) &&!strcmp(colo_mode, "primary")) {
-        *role = ROLE_PRIMARY;
+        *primary = TRUE;
         *replication = TRUE;
     } else if (qemu_runnng(status) && !strcmp(colo_mode, "secondary")) {
-        *role = ROLE_SECONDARY;
+        *primary = FALSE;
         *replication = TRUE;
     } else {
         colod_error_set(errp, "Unknown qemu status: %s, %s",
@@ -441,11 +448,11 @@ static int _qemu_query_status_co(Coroutine *coroutine, ColodContext *ctx,
 
 int _colod_check_health_co(Coroutine *coroutine, ColodContext *ctx,
                            GError **errp) {
-    ColodRole role;
+    gboolean primary;
     gboolean replication;
     int ret;
 
-    ret = _qemu_query_status_co(coroutine, ctx, &role, &replication,
+    ret = _qemu_query_status_co(coroutine, ctx, &primary, &replication,
                                 errp);
     if (coroutine->yield) {
         return -1;
@@ -456,7 +463,7 @@ int _colod_check_health_co(Coroutine *coroutine, ColodContext *ctx,
     }
 
     if (!ctx->transitioning &&
-            (ctx->role != role || ctx->replication != replication)) {
+            (ctx->primary != primary || ctx->replication != replication)) {
         colod_error_set(errp, "qemu status mismatch");
         colod_event_queue(ctx, EVENT_FAILED);
         return -1;
@@ -465,8 +472,67 @@ int _colod_check_health_co(Coroutine *coroutine, ColodContext *ctx,
     return 0;
 }
 
+int colod_start_migration(ColodContext *ctx) {
+    if (ctx->pending_action || ctx->replication) {
+        return -1;
+    }
+
+    colod_event_queue(ctx, EVENT_START_MIGRATION);
+    return 0;
+}
+
+static void colod_watchdog_inc_inhibit(ColodWatchdog *state);
+void colod_autoquit(ColodContext *ctx) {
+    ctx->autoquit = TRUE;
+    colod_watchdog_inc_inhibit(ctx->watchdog);
+    colod_event_queue(ctx, EVENT_NONE);
+}
+
 void colod_quit(ColodContext *ctx) {
     g_main_loop_quit(ctx->mainloop);
+}
+
+void colod_qemu_failed(ColodContext *ctx) {
+    colod_event_queue(ctx, EVENT_FAILED);
+}
+
+static gboolean colod_hup_cb(G_GNUC_UNUSED GIOChannel *channel,
+                             G_GNUC_UNUSED GIOCondition revents,
+                             gpointer data) {
+    ColodContext *ctx = data;
+
+    colod_event_queue(ctx, EVENT_FAILED);
+    return G_SOURCE_REMOVE;
+}
+
+static void colod_qmp_event_cb(gpointer data, ColodQmpResult *result) {
+    ColodContext *ctx = data;
+    const gchar *event;
+
+    event = get_member_str(result->json_root, "event");
+
+    if (!strcmp(event, "QUORUM_REPORT_BAD")) {
+        const gchar *node, *type;
+        node = get_member_member_str(result->json_root, "data", "node-name");
+        type = get_member_member_str(result->json_root, "data", "type");
+
+        if (!strcmp(node, "nbd0")) {
+            if (!!strcmp(type, "read")) {
+                colod_event_queue(ctx, EVENT_DO_FAILOVER);
+            }
+        } else {
+            if (!!strcmp(type, "read")) {
+                colod_event_queue(ctx, EVENT_YELLOW);
+            }
+        }
+    } else if (!strcmp(event, "COLO_EXIT")) {
+        const gchar *reason;
+        reason = get_member_member_str(result->json_root, "data", "reason");
+
+        if (!strcmp(reason, "error")) {
+            colod_event_queue(ctx, EVENT_DO_FAILOVER);
+        }
+    }
 }
 
 typedef struct ColodWatchdog {
@@ -474,6 +540,7 @@ typedef struct ColodWatchdog {
     ColodContext *ctx;
     guint interval;
     guint timer_id;
+    guint inhibit;
     gboolean quit;
 } ColodWatchdog;
 
@@ -485,6 +552,16 @@ static void colod_watchdog_refresh(ColodWatchdog *state) {
                                              state->coroutine.cb.plain,
                                              &state->coroutine, NULL);
     }
+}
+
+static void colod_watchdog_inc_inhibit(ColodWatchdog *state) {
+    state->inhibit++;
+}
+
+static void colod_watchdog_dec_inhibit(ColodWatchdog *state) {
+    assert(state->inhibit != 0);
+
+    state->inhibit--;
 }
 
 static void colod_watchdog_event_cb(gpointer data,
@@ -533,6 +610,10 @@ static gboolean _colod_watchdog_co(Coroutine *coroutine) {
             break;
         }
         state->timer_id = 0;
+
+        if (state->inhibit) {
+            continue;
+        }
 
         colod_check_health_co(ret, state->ctx, &local_errp);
         if (ret < 0) {
@@ -806,7 +887,7 @@ static ColodResult _colod_failover_co(Coroutine *coroutine, ColodContext *ctx) {
         return RESULT_FAILED;
     }
 
-    if (ctx->role == ROLE_PRIMARY) {
+    if (ctx->primary) {
         CO commands = ctx->failover_primary_commands;
     } else {
         CO commands = ctx->failover_secondary_commands;
@@ -1012,15 +1093,6 @@ static ColodResult _colod_replication_running_co(Coroutine *coroutine,
     return RESULT_FAILED;
 }
 
-int colod_start_migration(ColodContext *ctx) {
-    if (ctx->pending_action || ctx->replication) {
-        return -1;
-    }
-
-    colod_event_queue(ctx, EVENT_START_MIGRATION);
-    return 0;
-}
-
 static gboolean _colod_main_co(Coroutine *coroutine, ColodContext *ctx);
 static gboolean colod_main_co(gpointer data) {
     ColodContext *ctx = data;
@@ -1053,7 +1125,7 @@ static gboolean _colod_main_co(Coroutine *coroutine, ColodContext *ctx) {
 
     co_begin(gboolean, G_SOURCE_CONTINUE);
 
-    if (ctx->role == ROLE_SECONDARY) {
+    if (!ctx->primary) {
         while (TRUE) {
             colod_replication_wait_co(result, ctx);
             if (result == RESULT_FAILED || result == RESULT_PEER_FAILOVER) {
@@ -1080,7 +1152,7 @@ static gboolean _colod_main_co(Coroutine *coroutine, ColodContext *ctx) {
     }
 
     // Now running primary standalone
-    ctx->role = ROLE_PRIMARY;
+    ctx->primary = TRUE;
     ctx->replication = FALSE;
 
     while (TRUE) {
@@ -1111,8 +1183,9 @@ static gboolean _colod_main_co(Coroutine *coroutine, ColodContext *ctx) {
             } else {
                 abort();
             }
-        } else if (colod_event_failed(event)) {
-            result = colod_failed_result(event);
+        } else if (event == EVENT_FAILED) {
+            // Ignore MESSAGE_PEER_FAILOVER
+            result = RESULT_FAILED;
             goto failed;
         } else if (colod_event_quit(event)) {
             return G_SOURCE_REMOVE;
@@ -1120,13 +1193,22 @@ static gboolean _colod_main_co(Coroutine *coroutine, ColodContext *ctx) {
     }
 
 failed:
+    qmp_set_timeout(ctx->qmp, ctx->qmp_timeout_low);
     ret = qmp_get_error(ctx->qmp, &local_errp);
     if (ret < 0) {
         log_error_fmt("qemu failed: %s", local_errp->message);
         g_error_free(local_errp);
         local_errp = NULL;
     }
+
     ctx->failed = TRUE;
+    colod_cpg_send(ctx, MESSAGE_FAILED);
+
+    if (ctx->autoquit) {
+        colod_quit(ctx);
+        return G_SOURCE_REMOVE;
+    }
+
     colod_stop_co(ret, ctx, &local_errp);
     if (ret < 0) {
         if (result == RESULT_PEER_FAILOVER) {
@@ -1137,12 +1219,14 @@ failed:
         local_errp = NULL;
     }
 
-    colod_cpg_send(ctx, MESSAGE_FAILED);
-
     while (TRUE) {
         ColodEvent event;
         colod_event_wait(event, ctx);
         if (colod_event_quit(event)) {
+            return G_SOURCE_REMOVE;
+        }
+        if (ctx->autoquit) {
+            colod_quit(ctx);
             return G_SOURCE_REMOVE;
         }
     }
@@ -1193,6 +1277,8 @@ static void colod_mainloop(ColodContext *ctx) {
     ctx->listener = client_listener_new(ctx->mngmt_listen_fd, ctx);
     ctx->watchdog = colod_watchdog_new(ctx);
     colod_main_coroutine(ctx);
+    qmp_add_notify_event(ctx->qmp, colod_qmp_event_cb, ctx);
+    qmp_hup_source(ctx->qmp, colod_hup_cb, ctx);
     if (!ctx->disable_cpg) {
         ctx->cpg_source_id = g_unix_fd_add(ctx->cpg_fd, G_IO_IN | G_IO_HUP,
                                            colod_cpg_readable, ctx);
@@ -1205,6 +1291,7 @@ static void colod_mainloop(ColodContext *ctx) {
     if (ctx->cpg_source_id) {
         g_source_remove(ctx->cpg_source_id);
     }
+    qmp_del_notify_event(ctx->qmp, colod_qmp_event_cb, ctx);
     colod_raise_timeout_coroutine_free(ctx);
     colod_main_free(ctx);
     colo_watchdog_free(ctx->watchdog);
@@ -1400,16 +1487,17 @@ static int colod_parse_options(ColodContext *ctx, int *argc, char ***argv,
     GOptionEntry entries[] =
     {
         {"daemonize", 'd', 0, G_OPTION_ARG_NONE, &ctx->daemonize, "Daemonize", NULL},
+        {"syslog", 's', 0, G_OPTION_ARG_NONE, &do_syslog, "Log to syslog", NULL},
         {"disable_cpg", 0, 0, G_OPTION_ARG_NONE, &ctx->disable_cpg, "Disable corosync communication", NULL},
         {"instance_name", 'i', 0, G_OPTION_ARG_STRING, &ctx->instance_name, "The CPG group name for corosync communication", NULL},
-        {"syslog", 's', 0, G_OPTION_ARG_NONE, &do_syslog, "Log to syslog", NULL},
         {"node_name", 'n', 0, G_OPTION_ARG_STRING, &ctx->node_name, "The node hostname", NULL},
         {"base_directory", 'b', 0, G_OPTION_ARG_FILENAME, &ctx->base_dir, "The base directory to store logs and sockets", NULL},
         {"qmp_path", 'q', 0, G_OPTION_ARG_FILENAME, &ctx->qmp_path, "The path to the qmp socket", NULL},
         {"timeout_low", 'l', 0, G_OPTION_ARG_INT, &ctx->qmp_timeout_low, "Low qmp timeout", NULL},
         {"timeout_high", 't', 0, G_OPTION_ARG_INT, &ctx->qmp_timeout_high, "High qmp timeout", NULL},
         {"watchdog_interval", 'a', 0, G_OPTION_ARG_INT, &ctx->watchdog_interval, "Watchdog interval (0 to disable)", NULL},
-        {NULL}
+        {"primary", 'p', 0, G_OPTION_ARG_NONE, &ctx->primary, "Startup in primary mode", NULL},
+        {0}
     };
 
     ctx->qmp_timeout_low = 600;
@@ -1428,7 +1516,7 @@ static int colod_parse_options(ColodContext *ctx, int *argc, char ***argv,
     if (!ctx->node_name || !ctx->instance_name || !ctx->base_dir ||
             !ctx->qmp_path) {
         g_set_error(errp, COLOD_ERROR, COLOD_ERROR_FATAL,
-                    "--node_name, --instance_name, --base_directory and --qmp_path need to be given.");
+                    "--instance_name, --node_name, --base_directory and --qmp_path need to be given.");
         return -1;
     }
 

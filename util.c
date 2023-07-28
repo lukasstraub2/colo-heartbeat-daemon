@@ -149,13 +149,17 @@ void queue_add(ColodQueue *queue, guint entry) {
     queue->write_pos = next_pos;
 }
 
+guint queue_peek(ColodQueue *queue) {
+    assert(!queue_empty(queue));
+
+    return queue->queue[queue->read_pos];
+}
+
 guint queue_remove(ColodQueue *queue) {
     guint size = queue_size();
     guint ret;
 
-    assert(!queue_empty(queue));
-
-    ret = queue->queue[queue->read_pos];
+    ret = queue_peek(queue);
     queue->read_pos = queue->read_pos + 1 % size;
     return ret;
 }
@@ -193,4 +197,10 @@ void colod_callback_del(ColodCallbackHead *head,
     assert(cb);
 
     QLIST_REMOVE(cb, next);
+}
+
+void colod_callback_clear(ColodCallbackHead *head) {
+    while (!QLIST_EMPTY(head)) {
+        QLIST_REMOVE(QLIST_FIRST(head), next);
+    }
 }

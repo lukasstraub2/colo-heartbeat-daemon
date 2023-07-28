@@ -48,6 +48,7 @@ typedef struct ColodQueue {
 
 gboolean queue_empty(ColodQueue *queue);
 void queue_add(ColodQueue *queue, guint entry);
+guint queue_peek(ColodQueue *queue);
 guint queue_remove(ColodQueue *queue);
 
 typedef void (*ColodCallbackFunc)(void);
@@ -65,5 +66,6 @@ void colod_callback_add(ColodCallbackHead *head,
                         ColodCallbackFunc func, gpointer user_data);
 void colod_callback_del(ColodCallbackHead *head,
                         ColodCallbackFunc func, gpointer user_data);
+void colod_callback_clear(ColodCallbackHead *head);
 
 #endif // UTIL_H

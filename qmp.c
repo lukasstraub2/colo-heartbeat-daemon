@@ -625,6 +625,10 @@ static Coroutine *qmp_event_coroutine(ColodQmpState *state,
     return coroutine;
 }
 
+guint qmp_hup_source(ColodQmpState *state, GIOFunc func, gpointer data) {
+    return g_io_add_watch(state->channel.channel, G_IO_HUP, func, data);
+}
+
 void qmp_set_yank_instances(ColodQmpState *state, JsonNode *instances) {
     if (state->yank_instances) {
         json_node_unref(state->yank_instances);
@@ -639,6 +643,9 @@ void qmp_set_timeout(ColodQmpState *state, guint timeout) {
 }
 
 void qmp_free(ColodQmpState *state) {
+    colod_callback_clear(&state->event_callbacks);
+    colod_callback_clear(&state->yank_callbacks);
+
     colod_shutdown_channel(state->yank_channel.channel);
     colod_shutdown_channel(state->channel.channel);
 
