@@ -471,8 +471,6 @@ int colod_start_migration(ColodContext *ctx) {
 static void colod_watchdog_inc_inhibit(ColodWatchdog *state);
 void colod_autoquit(ColodContext *ctx) {
     colod_watchdog_inc_inhibit(ctx->watchdog);
-
-    ctx->autoquit = TRUE;
     colod_event_queue(ctx, EVENT_AUTOQUIT);
 }
 
@@ -601,7 +599,7 @@ static gboolean _colod_watchdog_co(Coroutine *coroutine) {
         }
         state->timer_id = 0;
 
-        if (state->inhibit) {
+        if (state->inhibit || state->ctx->failed) {
             continue;
         }
 
@@ -774,6 +772,7 @@ static void colod_cpg_deliver(cpg_handle_t handle,
 
         case MESSAGE_FAILED:
             if (nodeid != myid) {
+                ctx->peer_failed = TRUE;
                 colod_event_queue(ctx, EVENT_DO_FAILOVER);
             }
         break;
@@ -793,6 +792,7 @@ static void colod_cpg_confchg(cpg_handle_t handle,
     cpg_context_get(handle, (void**) &ctx);
 
     if (left_list_entries) {
+        ctx->peer_failed = TRUE;
         colod_event_queue(ctx, EVENT_DO_FAILOVER);
     }
 }
@@ -1086,6 +1086,7 @@ static gboolean colod_main_co(gpointer data) {
     Coroutine *coroutine = ctx->main_coroutine;
     gboolean ret;
 
+    assert(coroutine);
     co_enter(ret, coroutine, _colod_main_co, ctx);
     if (coroutine->yield) {
         return GPOINTER_TO_INT(coroutine->yield_value);
@@ -1203,6 +1204,9 @@ failed:
     ctx->failed = TRUE;
     colod_cpg_send(ctx, MESSAGE_FAILED);
 
+    if (event == EVENT_PEER_FAILOVER) {
+        ctx->peer_failover = TRUE;
+    }
     if (event != EVENT_QEMU_QUIT) {
         colod_stop_co(ret, ctx, &local_errp);
         if (ret < 0) {
@@ -1218,7 +1222,9 @@ failed:
     while (TRUE) {
         ColodEvent event;
         colod_event_wait(event, ctx);
-        if (event == EVENT_QUIT) {
+        if (event == EVENT_PEER_FAILOVER) {
+            ctx->peer_failover = TRUE;
+        } else if (event == EVENT_QUIT) {
             return G_SOURCE_REMOVE;
         } else if (event == EVENT_AUTOQUIT) {
             if (ctx->qemu_exited) {
@@ -1232,10 +1238,14 @@ failed:
 
 autoquit:
     ctx->failed = TRUE;
+    colod_cpg_send(ctx, MESSAGE_FAILED);
+
     while (TRUE) {
         ColodEvent event;
         colod_event_wait(event, ctx);
-        if (event == EVENT_QUIT) {
+        if (event == EVENT_PEER_FAILOVER) {
+            ctx->peer_failover = TRUE;
+        } else if (event == EVENT_QUIT) {
             return G_SOURCE_REMOVE;
         } else if (event == EVENT_QEMU_QUIT) {
             colod_quit(ctx);
@@ -1245,6 +1255,7 @@ autoquit:
 
     co_end;
 
+    abort();
     return G_SOURCE_REMOVE;
 }
 
@@ -1278,7 +1289,7 @@ static void colod_mainloop(ColodContext *ctx) {
     ctx->mainloop = g_main_loop_new(ctx->mainctx, FALSE);
 
     ctx->qmp = qmp_new(ctx->qmp1_fd, ctx->qmp2_fd, ctx->qmp_timeout_low,
-                            &local_errp);
+                       &local_errp);
     if (local_errp) {
         colod_syslog(LOG_ERR, "Failed to initialize qmp: %s",
                      local_errp->message);
@@ -1413,48 +1424,23 @@ err:
 }
 
 static int colod_open_qmp(ColodContext *ctx, GError **errp) {
-    struct sockaddr_un address = { 0 };
-    int* fds[2] = { &ctx->qmp1_fd, &ctx->qmp2_fd };
+    int ret;
 
-    if (strlen(ctx->qmp_path) >= sizeof(address.sun_path)) {
-        colod_error_set(errp, "Qmp unix path too long");
+    ret = colod_unix_connect(ctx->qmp_path, errp);
+    if (ret < 0) {
         return -1;
     }
-    strcpy(address.sun_path, ctx->qmp_path);
-    address.sun_family = AF_UNIX;
+    ctx->qmp1_fd = ret;
 
-    for (int i = 0; i < 2; i++) {
-        int ret;
-        int *fd = fds[i];
-
-        ret = socket(AF_UNIX, SOCK_STREAM, 0);
-        if (ret < 0) {
-            colod_error_set(errp, "Failed to create qmp socket: %s",
-                            g_strerror(errno));
-            goto err;
-        }
-        *fd = ret;
-
-        ret = connect(*fd, (const struct sockaddr *) &address,
-                      sizeof(address));
-        if (ret < 0) {
-            colod_error_set(errp, "Failed to connect qmp socket: %s",
-                            g_strerror(errno));
-            goto err;
-        }
+    ret = colod_unix_connect(ctx->qmp_yank_path, errp);
+    if (ret < 0) {
+        close(ctx->qmp1_fd);
+        ctx->qmp1_fd = 0;
+        return -1;
     }
+    ctx->qmp2_fd = ret;
 
     return 0;
-
-err:
-    for (int i = 0; i < 2; i++) {
-        int *fd = fds[i];
-        if (*fd) {
-            close(*fd);
-            *fd = 0;
-        }
-    }
-    return -1;
 }
 
 static int colod_daemonize(ColodContext *ctx) {
@@ -1505,6 +1491,7 @@ static int colod_parse_options(ColodContext *ctx, int *argc, char ***argv,
         {"node_name", 'n', 0, G_OPTION_ARG_STRING, &ctx->node_name, "The node hostname", NULL},
         {"base_directory", 'b', 0, G_OPTION_ARG_FILENAME, &ctx->base_dir, "The base directory to store logs and sockets", NULL},
         {"qmp_path", 'q', 0, G_OPTION_ARG_FILENAME, &ctx->qmp_path, "The path to the qmp socket", NULL},
+        {"qmp_yank_path", 'y', 0, G_OPTION_ARG_FILENAME, &ctx->qmp_yank_path, "The path to the qmp socket used for yank", NULL},
         {"timeout_low", 'l', 0, G_OPTION_ARG_INT, &ctx->qmp_timeout_low, "Low qmp timeout", NULL},
         {"timeout_high", 't', 0, G_OPTION_ARG_INT, &ctx->qmp_timeout_high, "High qmp timeout", NULL},
         {"watchdog_interval", 'a', 0, G_OPTION_ARG_INT, &ctx->watchdog_interval, "Watchdog interval (0 to disable)", NULL},

@@ -19,11 +19,43 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <sys/socket.h>
+#include <sys/un.h>
 #include <fcntl.h>
 #include <errno.h>
 #include <assert.h>
 
 G_DEFINE_QUARK(colod-error-quark, colod_error)
+
+int colod_unix_connect(gchar *path, GError **errp) {
+    struct sockaddr_un address = { 0 };
+    int ret, fd;
+
+    if (strlen(path) >= sizeof(address.sun_path)) {
+        colod_error_set(errp, "Unix path too long");
+        return -1;
+    }
+    strcpy(address.sun_path, path);
+    address.sun_family = AF_UNIX;
+
+    ret = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (ret < 0) {
+        colod_error_set(errp, "Failed to create socket: %s",
+                        g_strerror(errno));
+        return -1;
+    }
+    fd = ret;
+
+    ret = connect(fd, (const struct sockaddr *) &address,
+                  sizeof(address));
+    if (ret < 0) {
+        colod_error_set(errp, "Failed to connect socket: %s",
+                        g_strerror(errno));
+        close(fd);
+        return -1;
+    }
+
+    return fd;
+}
 
 int colod_fd_set_blocking(int fd, gboolean blocking, GError **errp) {
     int flags, ret;

@@ -70,22 +70,31 @@ static ColodQmpResult *_handle_query_status_co(Coroutine *coroutine,
                                                ColodContext *ctx) {
     int ret;
     ColodQmpResult *result;
-    gboolean failed = FALSE;
+    gboolean failed;
 
-    ret = _colod_check_health_co(coroutine, ctx, NULL);
-    if (coroutine->yield) {
-        return NULL;
+    co_begin(ColodQmpResult*, NULL);
+
+    if (!ctx->failed) {
+        colod_check_health_co(ret, ctx, NULL);
+        if (coroutine->yield) {
+            return NULL;
+        }
+        if (ret < 0) {
+            failed = TRUE;
+        }
     }
-    if (ret < 0) {
-        failed = TRUE;
-    }
+
+    co_end;
 
     gchar *reply;
     reply = g_strdup_printf("{'return': "
-                            "{'primary': %s, 'replication': %s, 'failed': %s}}\n",
+                            "{'primary': %s, 'replication': %s, 'failed': %s,"
+                            " 'peer-failover': %s, 'peer-failed': %s}}\n",
                             bool_to_json(ctx->primary),
                             bool_to_json(ctx->replication),
-                            bool_to_json(failed || ctx->failed));
+                            bool_to_json(failed || ctx->failed),
+                            bool_to_json(ctx->peer_failover),
+                            bool_to_json(ctx->peer_failed));
 
     result = qmp_parse_result(reply, strlen(reply), NULL);
     assert(result);
@@ -356,6 +365,9 @@ static gboolean _colod_client_co(Coroutine *coroutine) {
                 handle_stop_co(CO result, client);
             } else if (!strcmp(command, "cont")) {
                 handle_cont_co(CO result, client);
+            } else if (!strcmp(command, "clear-peer-status")) {
+                client->ctx->peer_failed = FALSE;
+                CO result = create_reply("{}");
             } else {
                 CO result = create_error_reply("Unknown command");
             }

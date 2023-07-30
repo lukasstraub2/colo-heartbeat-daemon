@@ -25,7 +25,8 @@ typedef enum ColodEvent ColodEvent;
 
 typedef struct ColodContext {
     /* Parameters */
-    gchar *node_name, *instance_name, *base_dir, *qmp_path;
+    gchar *node_name, *instance_name, *base_dir;
+    gchar *qmp_path, *qmp_yank_path;
     gboolean daemonize;
     gboolean disable_cpg;
     guint qmp_timeout_low, qmp_timeout_high;
@@ -47,13 +48,12 @@ typedef struct ColodContext {
     ColodQueue events, critical_events;
     gboolean pending_action, transitioning;
     gboolean failed, yellow, qemu_exited;
-    gboolean autoquit;
 
     ColodClientListener *listener;
 
     ColodQmpState *qmp;
     gboolean primary;
-    gboolean replication;
+    gboolean replication, peer_failover, peer_failed;
 
     cpg_handle_t cpg_handle;
 } ColodContext;
