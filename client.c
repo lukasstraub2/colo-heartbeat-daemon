@@ -46,7 +46,7 @@ struct ColodClientListener {
 static ColodQmpResult *create_reply(const gchar *member) {
     ColodQmpResult *result;
 
-    gchar *reply = g_strdup_printf("{'return': %s}\n", member);
+    gchar *reply = g_strdup_printf("{\"return\": %s}\n", member);
     result = qmp_parse_result(reply, strlen(reply), NULL);
     assert(result);
 
@@ -56,7 +56,7 @@ static ColodQmpResult *create_reply(const gchar *member) {
 static ColodQmpResult *create_error_reply(const gchar *message) {
     ColodQmpResult *result;
 
-    gchar *reply = g_strdup_printf("{'error': '%s'}\n", message);
+    gchar *reply = g_strdup_printf("{\"error\": \"%s\"}\n", message);
     result = qmp_parse_result(reply, strlen(reply), NULL);
     assert(result);
 
@@ -70,16 +70,20 @@ static ColodQmpResult *_handle_query_status_co(Coroutine *coroutine,
                                                ColodContext *ctx) {
     int ret;
     ColodQmpResult *result;
-    gboolean failed;
+    gboolean failed = FALSE;
+    GError *local_errp = NULL;
 
     co_begin(ColodQmpResult*, NULL);
 
     if (!ctx->failed) {
-        colod_check_health_co(ret, ctx, NULL);
+        colod_check_health_co(ret, ctx, &local_errp);
         if (coroutine->yield) {
             return NULL;
         }
         if (ret < 0) {
+            log_error(local_errp->message);
+            g_error_free(local_errp);
+            local_errp = NULL;
             failed = TRUE;
         }
     }
@@ -87,9 +91,10 @@ static ColodQmpResult *_handle_query_status_co(Coroutine *coroutine,
     co_end;
 
     gchar *reply;
-    reply = g_strdup_printf("{'return': "
-                            "{'primary': %s, 'replication': %s, 'failed': %s,"
-                            " 'peer-failover': %s, 'peer-failed': %s}}\n",
+    reply = g_strdup_printf("{\"return\": "
+                            "{\"primary\": %s, \"replication\": %s,"
+                            " \"failed\": %s, \"peer-failover\": %s,"
+                            " \"peer-failed\": %s}}\n",
                             bool_to_json(ctx->primary),
                             bool_to_json(ctx->replication),
                             bool_to_json(failed || ctx->failed),

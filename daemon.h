@@ -71,7 +71,7 @@ typedef struct ColodCo {
 } ColodCo;
 
 typedef struct ColodArrayCo {
-    JsonReader *reader;
+    JsonArray *array;
     gchar *line;
     guint i, count;
 } ColodArrayCo;

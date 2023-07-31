@@ -19,6 +19,7 @@ import re
 import time
 import logging
 import logging.handlers
+import traceback
 
 # Constants
 OCF_SUCCESS = 0
@@ -33,26 +34,16 @@ OCF_RUNNING_MASTER = 8
 OCF_FAILED_MASTER = 9
 
 # Get environment variables
-OCF_RESKEY_CRM_meta_notify_type \
-    = os.getenv("OCF_RESKEY_CRM_meta_notify_type")
-OCF_RESKEY_CRM_meta_notify_operation \
-    = os.getenv("OCF_RESKEY_CRM_meta_notify_operation")
-OCF_RESKEY_CRM_meta_notify_key_operation \
-    = os.getenv("OCF_RESKEY_CRM_meta_notify_key_operation")
-OCF_RESKEY_CRM_meta_notify_start_uname \
-    = os.getenv("OCF_RESKEY_CRM_meta_notify_start_uname", "")
-OCF_RESKEY_CRM_meta_notify_stop_uname \
-    = os.getenv("OCF_RESKEY_CRM_meta_notify_stop_uname", "")
-OCF_RESKEY_CRM_meta_notify_active_uname \
-    = os.getenv("OCF_RESKEY_CRM_meta_notify_active_uname", "")
-OCF_RESKEY_CRM_meta_notify_promote_uname \
-    = os.getenv("OCF_RESKEY_CRM_meta_notify_promote_uname", "")
-OCF_RESKEY_CRM_meta_notify_demote_uname \
-    = os.getenv("OCF_RESKEY_CRM_meta_notify_demote_uname", "")
-OCF_RESKEY_CRM_meta_notify_master_uname \
-    = os.getenv("OCF_RESKEY_CRM_meta_notify_master_uname", "")
-OCF_RESKEY_CRM_meta_notify_slave_uname \
-    = os.getenv("OCF_RESKEY_CRM_meta_notify_slave_uname", "")
+OCF_RESKEY_CRM_meta_notify_type = os.getenv("OCF_RESKEY_CRM_meta_notify_type")
+OCF_RESKEY_CRM_meta_notify_operation = os.getenv("OCF_RESKEY_CRM_meta_notify_operation")
+OCF_RESKEY_CRM_meta_notify_key_operation = os.getenv("OCF_RESKEY_CRM_meta_notify_key_operation")
+OCF_RESKEY_CRM_meta_notify_start_uname = os.getenv("OCF_RESKEY_CRM_meta_notify_start_uname", "")
+OCF_RESKEY_CRM_meta_notify_stop_uname = os.getenv("OCF_RESKEY_CRM_meta_notify_stop_uname", "")
+OCF_RESKEY_CRM_meta_notify_active_uname = os.getenv("OCF_RESKEY_CRM_meta_notify_active_uname", "")
+OCF_RESKEY_CRM_meta_notify_promote_uname = os.getenv("OCF_RESKEY_CRM_meta_notify_promote_uname", "")
+OCF_RESKEY_CRM_meta_notify_demote_uname = os.getenv("OCF_RESKEY_CRM_meta_notify_demote_uname", "")
+OCF_RESKEY_CRM_meta_notify_master_uname = os.getenv("OCF_RESKEY_CRM_meta_notify_master_uname", "")
+OCF_RESKEY_CRM_meta_notify_slave_uname = os.getenv("OCF_RESKEY_CRM_meta_notify_slave_uname", "")
 
 HA_RSCTMP = os.getenv("HA_RSCTMP", "/run/resource-agents")
 HA_LOGFACILITY = os.getenv("HA_LOGFACILITY")
@@ -60,22 +51,14 @@ HA_LOGFILE = os.getenv("HA_LOGFILE")
 HA_DEBUG = os.getenv("HA_debug", "0")
 HA_DEBUGLOG = os.getenv("HA_DEBUGLOG")
 OCF_RESOURCE_INSTANCE = os.getenv("OCF_RESOURCE_INSTANCE", "default-instance")
-OCF_RESKEY_CRM_meta_timeout \
-    = int(os.getenv("OCF_RESKEY_CRM_meta_timeout", "60000"))
-OCF_RESKEY_CRM_meta_interval \
-    = int(os.getenv("OCF_RESKEY_CRM_meta_interval", "1"))
-OCF_RESKEY_CRM_meta_clone_max \
-    = int(os.getenv("OCF_RESKEY_CRM_meta_clone_max", "1"))
-OCF_RESKEY_CRM_meta_clone_node_max \
-    = int(os.getenv("OCF_RESKEY_CRM_meta_clone_node_max", "1"))
-OCF_RESKEY_CRM_meta_master_max \
-    = int(os.getenv("OCF_RESKEY_CRM_meta_master_max", "1"))
-OCF_RESKEY_CRM_meta_master_node_max \
-    = int(os.getenv("OCF_RESKEY_CRM_meta_master_node_max", "1"))
-OCF_RESKEY_CRM_meta_notify \
-    = os.getenv("OCF_RESKEY_CRM_meta_notify")
-OCF_RESKEY_CRM_meta_globally_unique \
-    = os.getenv("OCF_RESKEY_CRM_meta_globally_unique")
+OCF_RESKEY_CRM_meta_timeout = int(os.getenv("OCF_RESKEY_CRM_meta_timeout", "60000"))
+OCF_RESKEY_CRM_meta_interval = int(os.getenv("OCF_RESKEY_CRM_meta_interval", "1"))
+OCF_RESKEY_CRM_meta_clone_max = int(os.getenv("OCF_RESKEY_CRM_meta_clone_max", "1"))
+OCF_RESKEY_CRM_meta_clone_node_max = int(os.getenv("OCF_RESKEY_CRM_meta_clone_node_max", "1"))
+OCF_RESKEY_CRM_meta_master_max = int(os.getenv("OCF_RESKEY_CRM_meta_master_max", "1"))
+OCF_RESKEY_CRM_meta_master_node_max = int(os.getenv("OCF_RESKEY_CRM_meta_master_node_max", "1"))
+OCF_RESKEY_CRM_meta_notify = os.getenv("OCF_RESKEY_CRM_meta_notify")
+OCF_RESKEY_CRM_meta_globally_unique = os.getenv("OCF_RESKEY_CRM_meta_globally_unique")
 
 HOSTNAME = os.getenv("OCF_RESKEY_CRM_meta_on_node", socket.gethostname())
 
@@ -91,6 +74,7 @@ OCF_RESKEY_log_dir_default = HA_RSCTMP
 OCF_RESKEY_options_default = ""
 OCF_RESKEY_active_hidden_dir_default = ""
 OCF_RESKEY_listen_address_default = "0.0.0.0"
+OCF_RESKEY_host_map_default = "{}"
 OCF_RESKEY_base_port_default = "9000"
 OCF_RESKEY_checkpoint_interval_default = "20000"
 OCF_RESKEY_compare_timeout_default = "3000"
@@ -98,47 +82,36 @@ OCF_RESKEY_expired_scan_cycle_default = "3000"
 OCF_RESKEY_max_queue_size_default = "1024"
 OCF_RESKEY_use_filter_rewriter_default = "true"
 OCF_RESKEY_vnet_hdr_default = "false"
+OCF_RESKEY_threads_default = "1"
+OCF_RESKEY_bps_rd_default = "0"
+OCF_RESKEY_bps_wr_default = "0"
 OCF_RESKEY_max_disk_errors_default = "1"
 OCF_RESKEY_low_yank_timeout_default = "1000"
 OCF_RESKEY_high_yank_timeout_default = "20000"
 OCF_RESKEY_debug_default = "0"
 
-OCF_RESKEY_qemu_binary \
-    = os.getenv("OCF_RESKEY_qemu_binary", OCF_RESKEY_qemu_binary_default)
-OCF_RESKEY_colod_binary \
-    = os.getenv("OCF_RESKEY_colod_binary", OCF_RESKEY_colod_binary_default)
-OCF_RESKEY_qemu_img_binary \
-    = os.getenv("OCF_RESKEY_qemu_img_binary", OCF_RESKEY_qemu_img_binary_default)
-OCF_RESKEY_log_dir \
-    = os.getenv("OCF_RESKEY_log_dir", OCF_RESKEY_log_dir_default)
-OCF_RESKEY_options \
-    = os.getenv("OCF_RESKEY_options", OCF_RESKEY_options_default)
-OCF_RESKEY_active_hidden_dir \
-    = os.getenv("OCF_RESKEY_active_hidden_dir", OCF_RESKEY_active_hidden_dir_default)
-OCF_RESKEY_listen_address \
-    = os.getenv("OCF_RESKEY_listen_address", OCF_RESKEY_listen_address_default)
-OCF_RESKEY_base_port \
-    = os.getenv("OCF_RESKEY_base_port", OCF_RESKEY_base_port_default)
-OCF_RESKEY_checkpoint_interval \
-    = os.getenv("OCF_RESKEY_checkpoint_interval", OCF_RESKEY_checkpoint_interval_default)
-OCF_RESKEY_compare_timeout \
-    = os.getenv("OCF_RESKEY_compare_timeout", OCF_RESKEY_compare_timeout_default)
-OCF_RESKEY_expired_scan_cycle \
-    = os.getenv("OCF_RESKEY_expired_scan_cycle", OCF_RESKEY_expired_scan_cycle_default)
-OCF_RESKEY_max_queue_size \
-    = os.getenv("OCF_RESKEY_max_queue_size", OCF_RESKEY_max_queue_size_default)
-OCF_RESKEY_use_filter_rewriter \
-    = os.getenv("OCF_RESKEY_use_filter_rewriter", OCF_RESKEY_use_filter_rewriter_default)
-OCF_RESKEY_vnet_hdr \
-    = os.getenv("OCF_RESKEY_vnet_hdr", OCF_RESKEY_vnet_hdr_default)
-OCF_RESKEY_max_disk_errors \
-    = os.getenv("OCF_RESKEY_max_disk_errors", OCF_RESKEY_max_disk_errors_default)
-OCF_RESKEY_low_yank_timeout \
-    = os.getenv("OCF_RESKEY_low_yank_timeout", OCF_RESKEY_low_yank_timeout_default)
-OCF_RESKEY_high_yank_timeout \
-    = os.getenv("OCF_RESKEY_high_yank_timeout", OCF_RESKEY_high_yank_timeout_default)
-OCF_RESKEY_debug \
-    = os.getenv("OCF_RESKEY_debug", OCF_RESKEY_debug_default)
+OCF_RESKEY_qemu_binary = os.getenv("OCF_RESKEY_qemu_binary", OCF_RESKEY_qemu_binary_default)
+OCF_RESKEY_colod_binary = os.getenv("OCF_RESKEY_colod_binary", OCF_RESKEY_colod_binary_default)
+OCF_RESKEY_qemu_img_binary = os.getenv("OCF_RESKEY_qemu_img_binary", OCF_RESKEY_qemu_img_binary_default)
+OCF_RESKEY_log_dir = os.getenv("OCF_RESKEY_log_dir", OCF_RESKEY_log_dir_default)
+OCF_RESKEY_options = os.getenv("OCF_RESKEY_options", OCF_RESKEY_options_default)
+OCF_RESKEY_active_hidden_dir = os.getenv("OCF_RESKEY_active_hidden_dir", OCF_RESKEY_active_hidden_dir_default)
+OCF_RESKEY_listen_address = os.getenv("OCF_RESKEY_listen_address", OCF_RESKEY_listen_address_default)
+OCF_RESKEY_host_map = os.getenv("OCF_RESKEY_host_map", OCF_RESKEY_host_map_default)
+OCF_RESKEY_base_port = os.getenv("OCF_RESKEY_base_port", OCF_RESKEY_base_port_default)
+OCF_RESKEY_checkpoint_interval = os.getenv("OCF_RESKEY_checkpoint_interval", OCF_RESKEY_checkpoint_interval_default)
+OCF_RESKEY_compare_timeout = os.getenv("OCF_RESKEY_compare_timeout", OCF_RESKEY_compare_timeout_default)
+OCF_RESKEY_expired_scan_cycle = os.getenv("OCF_RESKEY_expired_scan_cycle", OCF_RESKEY_expired_scan_cycle_default)
+OCF_RESKEY_max_queue_size = os.getenv("OCF_RESKEY_max_queue_size", OCF_RESKEY_max_queue_size_default)
+OCF_RESKEY_use_filter_rewriter = os.getenv("OCF_RESKEY_use_filter_rewriter", OCF_RESKEY_use_filter_rewriter_default)
+OCF_RESKEY_vnet_hdr = os.getenv("OCF_RESKEY_vnet_hdr", OCF_RESKEY_vnet_hdr_default)
+OCF_RESKEY_threads = os.getenv("OCF_RESKEY_threads", OCF_RESKEY_threads_default)
+OCF_RESKEY_bps_rd = os.getenv("OCF_RESKEY_bps_rd", OCF_RESKEY_bps_rd_default)
+OCF_RESKEY_bps_wr = os.getenv("OCF_RESKEY_bps_wr", OCF_RESKEY_bps_wr_default)
+OCF_RESKEY_max_disk_errors = os.getenv("OCF_RESKEY_max_disk_errors", OCF_RESKEY_max_disk_errors_default)
+OCF_RESKEY_low_yank_timeout = os.getenv("OCF_RESKEY_low_yank_timeout", OCF_RESKEY_low_yank_timeout_default)
+OCF_RESKEY_high_yank_timeout = os.getenv("OCF_RESKEY_high_yank_timeout", OCF_RESKEY_high_yank_timeout_default)
+OCF_RESKEY_debug = os.getenv("OCF_RESKEY_debug", OCF_RESKEY_debug_default)
 
 ACTIVE_IMAGE = os.path.join(OCF_RESKEY_active_hidden_dir, \
                             OCF_RESOURCE_INSTANCE + "-active.qcow2")
@@ -168,19 +141,23 @@ class Error(Exception):
 
 def setup_constants():
     # This function is called after the parameters where validated
-    global OCF_RESKEY_CRM_meta_timeout
-
     global MIGRATE_PORT, MIRROR_PORT, COMPARE_IN_PORT, NBD_PORT
     MIGRATE_PORT = int(OCF_RESKEY_base_port)
     MIRROR_PORT = int(OCF_RESKEY_base_port) + 1
     COMPARE_IN_PORT = int(OCF_RESKEY_base_port) + 2
     NBD_PORT = int(OCF_RESKEY_base_port) + 3
 
+    bps_params = ""
+    if int(OCF_RESKEY_bps_rd) != 0:
+        bps_params += (",bps_rd=%(OCF_RESKEY_bps_rd)s") % globals()
+    if int(OCF_RESKEY_bps_wr) != 0:
+        bps_params += (",bps_wr=%(OCF_RESKEY_bps_wr)s") % globals()
+
     global QEMU_PRIMARY_CMDLINE
     QEMU_PRIMARY_CMDLINE = \
         ("'%(OCF_RESKEY_qemu_binary)s' %(OCF_RESKEY_options)s"
         " -drive if=none,node-name=colo-disk0,driver=quorum,read-pattern=fifo,"
-        "vote-threshold=1,children.0=parent0") % globals()
+        "vote-threshold=1,children.0=parent0" + bps_params) % globals()
 
     global QEMU_SECONDARY_CMDLINE
     QEMU_SECONDARY_CMDLINE = \
@@ -205,8 +182,9 @@ def setup_constants():
         "file.backing.file.filename='%(HIDDEN_IMAGE)s',"
         "file.backing.backing=parent0"
         " -drive if=none,node-name=colo-disk0,driver=quorum,read-pattern=fifo,"
-        "vote-threshold=1,children.0=childs0"
-        " -incoming defer") % globals()
+        "vote-threshold=1,children.0=childs0" + bps_params) % globals()
+
+    QEMU_SECONDARY_CMDLINE += " -incoming defer"
 
     global QEMU_DUMMY_CMDLINE
     QEMU_DUMMY_CMDLINE = \
@@ -224,7 +202,7 @@ def setup_constants():
                    "logfile='%(QMP_LOG)s',logappend") % globals()
     else:
         common += (" -qmp unix:'%(QMP_SOCK)s',server=on,wait=off") % globals()
-        common += (" -qmp unix:'%(QMP_YANK_SOCK)s',server=on,wait=off,") \
+        common += (" -qmp unix:'%(QMP_YANK_SOCK)s',server=on,wait=off") \
                   % globals()
 
     QEMU_PRIMARY_CMDLINE += common
@@ -237,7 +215,8 @@ def setup_constants():
         " -i '%(OCF_RESOURCE_INSTANCE)s' -n '%(HOSTNAME)s'"
         " -b '%(BASE_DIR)s' -q '%(QMP_SOCK)s' -y '%(QMP_YANK_SOCK)s'"
         " -l %(OCF_RESKEY_low_yank_timeout)s"
-        " -t %(OCF_RESKEY_high_yank_timeout)s") % globals()
+        " -t %(OCF_RESKEY_high_yank_timeout)s"
+        " -a 100") % globals()
 
 def qemu_colo_meta_data():
     print("""\
@@ -254,7 +233,7 @@ manually set to show which node has up-to-date data. So you copy your
 image to one host (and create empty images the other host(s)) and then
 run "crm_master -r name_of_your_primitive -v 10" on that host.
 Also, you have to set 'notify=true' in the metadata attributes when
-defining the master/slave instance.
+defining the primary/secondary instance.
 
 Note:
 -If the instance is stopped cluster-wide, the resource agent will do a
@@ -270,29 +249,25 @@ these failures will show up with exitreason="Simulated failure".
     <parameter name="qemu_binary" unique="0" required="0">
         <longdesc lang="en">qemu binary to use</longdesc>
         <shortdesc lang="en">qemu binary</shortdesc>
-        <content type="string" default=\"""" \
-            + OCF_RESKEY_qemu_binary_default + """\"/>
+        <content type="string" default=\"""" + OCF_RESKEY_qemu_binary_default + """\"/>
     </parameter>
 
     <parameter name="colod_binary" unique="0" required="0">
         <longdesc lang="en">colod binary to use</longdesc>
         <shortdesc lang="en">colod binary</shortdesc>
-        <content type="string" default=\"""" \
-            + OCF_RESKEY_colod_binary_default + """\"/>
+        <content type="string" default=\"""" + OCF_RESKEY_colod_binary_default + """\"/>
     </parameter>
 
     <parameter name="qemu_img_binary" unique="0" required="0">
         <longdesc lang="en">qemu-img binary to use</longdesc>
         <shortdesc lang="en">qemu-img binary</shortdesc>
-        <content type="string" default=\"""" \
-            + OCF_RESKEY_qemu_img_binary_default + """\"/>
+        <content type="string" default=\"""" + OCF_RESKEY_qemu_img_binary_default + """\"/>
     </parameter>
 
     <parameter name="log_dir" unique="0" required="0">
         <longdesc lang="en">Directory to place logs in</longdesc>
         <shortdesc lang="en">Log directory</shortdesc>
-        <content type="string" default=\"""" \
-            + OCF_RESKEY_log_dir_default + """\"/>
+        <content type="string" default=\"""" + OCF_RESKEY_log_dir_default + """\"/>
     </parameter>
 
     <parameter name="options" unique="0" required="1">
@@ -315,15 +290,23 @@ Directory where the active and hidden images will be stored. It is
 recommended to put this on a ramdisk.
         </longdesc>
         <shortdesc lang="en">Path to active and hidden images</shortdesc>
-        <content type="string" default=\"""" \
-            + OCF_RESKEY_active_hidden_dir_default + """\"/>
+        <content type="string" default=\"""" + OCF_RESKEY_active_hidden_dir_default + """\"/>
     </parameter>
 
     <parameter name="listen_address" unique="0" required="0">
         <longdesc lang="en">Address to listen on.</longdesc>
         <shortdesc lang="en">Listen address</shortdesc>
-        <content type="string" default=\"""" \
-            + OCF_RESKEY_listen_address_default + """\"/>
+        <content type="string" default=\"""" + OCF_RESKEY_listen_address_default + """\"/>
+    </parameter>
+
+    <parameter name="host_map" unique="0" required="0">
+        <longdesc lang="en">
+Map each host to a ip address to use for replication. Must be a valid json dict.
+Example:
+{"node1": "192.168.222.10", "node2": "192.168.222.11"}
+        </longdesc>
+        <shortdesc lang="en">Host map</shortdesc>
+        <content type="string" default=\"""" + OCF_RESKEY_host_map_default + """\"/>
     </parameter>
 
     <parameter name="base_port" unique="1" required="0">
@@ -331,8 +314,7 @@ recommended to put this on a ramdisk.
 4 tcp ports that are unique for each instance. (base_port to base_port + 3)
         </longdesc>
         <shortdesc lang="en">Ports to use</shortdesc>
-        <content type="integer" default=\"""" \
-            + OCF_RESKEY_base_port_default + """\"/>
+        <content type="integer" default=\"""" + OCF_RESKEY_base_port_default + """\"/>
     </parameter>
 
     <parameter name="checkpoint_interval" unique="0" required="0">
@@ -340,8 +322,7 @@ recommended to put this on a ramdisk.
 Interval for regular checkpoints in milliseconds.
         </longdesc>
         <shortdesc lang="en">Interval for regular checkpoints</shortdesc>
-        <content type="integer" default=\"""" \
-            + OCF_RESKEY_checkpoint_interval_default + """\"/>
+        <content type="integer" default=\"""" + OCF_RESKEY_checkpoint_interval_default + """\"/>
     </parameter>
 
     <parameter name="compare_timeout" unique="0" required="0">
@@ -351,8 +332,7 @@ in milliseconds.
 You should also adjust "expired_scan_cycle" accordingly.
         </longdesc>
         <shortdesc lang="en">Compare timeout</shortdesc>
-        <content type="integer" default=\"""" \
-            + OCF_RESKEY_compare_timeout_default + """\"/>
+        <content type="integer" default=\"""" + OCF_RESKEY_compare_timeout_default + """\"/>
     </parameter>
 
     <parameter name="expired_scan_cycle" unique="0" required="0">
@@ -360,8 +340,7 @@ You should also adjust "expired_scan_cycle" accordingly.
 Interval for checking for expired primary packets in milliseconds.
         </longdesc>
         <shortdesc lang="en">Expired packet check interval</shortdesc>
-        <content type="integer" default=\"""" \
-            + OCF_RESKEY_expired_scan_cycle_default + """\"/>
+        <content type="integer" default=\"""" + OCF_RESKEY_expired_scan_cycle_default + """\"/>
     </parameter>
 
     <parameter name="max_queue_size" unique="0" required="0">
@@ -369,8 +348,7 @@ Interval for checking for expired primary packets in milliseconds.
 Maximum queue size for network packets.
         </longdesc>
         <shortdesc lang="en">Maximum queue size</shortdesc>
-        <content type="integer" default=\"""" \
-            + OCF_RESKEY_max_queue_size_default + """\"/>
+        <content type="integer" default=\"""" + OCF_RESKEY_max_queue_size_default + """\"/>
     </parameter>
 
     <parameter name="use_filter_rewriter" unique="0" required="0">
@@ -378,8 +356,7 @@ Maximum queue size for network packets.
 Use filter-rewriter to increase similarity between the VMs.
         </longdesc>
         <shortdesc lang="en">Use filter-rewriter</shortdesc>
-        <content type="string" default=\"""" \
-            + OCF_RESKEY_use_filter_rewriter_default + """\"/>
+        <content type="string" default=\"""" + OCF_RESKEY_use_filter_rewriter_default + """\"/>
     </parameter>
 
     <parameter name="vnet_hdr" unique="0" required="0">
@@ -388,8 +365,35 @@ Set this to true if your system supports vnet_hdr and you enabled
 it on the tap netdev.
         </longdesc>
         <shortdesc lang="en">vnet_hdr support</shortdesc>
-        <content type="string" default=\"""" \
-            + OCF_RESKEY_vnet_hdr_default + """\"/>
+        <content type="string" default=\"""" + OCF_RESKEY_vnet_hdr_default + """\"/>
+    </parameter>
+
+    <parameter name="threads" unique="0" required="0">
+        <longdesc lang="en">
+Number of threads to use for the colo replication. "0" disables multithreading.
+        </longdesc>
+        <shortdesc lang="en">Number of threads</shortdesc>
+        <content type="integer" default=\"""" + OCF_RESKEY_threads_default + """\"/>
+    </parameter>
+
+    <parameter name="threads" unique="0" required="0">
+        <longdesc lang="en">
+Number of threads to use for the colo replication. "0" disables multithreading.
+        </longdesc>
+        <shortdesc lang="en">Number of threads</shortdesc>
+        <content type="integer" default=\"""" + OCF_RESKEY_threads_default + """\"/>
+    </parameter>
+
+    <parameter name="bps_rd" unique="0" required="0">
+        <longdesc lang="en">Disk read throttle in Bytes/s. "0" disables throttling.</longdesc>
+        <shortdesc lang="en">Disk read throttle in Bytes/s</shortdesc>
+        <content type="integer" default=\"""" + OCF_RESKEY_bps_rd_default + """\"/>
+    </parameter>
+
+    <parameter name="bps_wr" unique="0" required="0">
+        <longdesc lang="en">Disk write throttle in Bytes/s. "0" disables throttling.</longdesc>
+        <shortdesc lang="en">Disk write throttle in Bytes/s</shortdesc>
+        <content type="integer" default=\"""" + OCF_RESKEY_bps_wr_default + """\"/>
     </parameter>
 
     <parameter name="max_disk_errors" unique="0" required="0">
@@ -400,8 +404,7 @@ A value of 0 will disable disk error handling.
 Primary disk errors are only handled if there is a healthy secondary.
         </longdesc>
         <shortdesc lang="en">Maximum disk errors</shortdesc>
-        <content type="integer" default=\"""" \
-            + OCF_RESKEY_max_disk_errors_default + """\"/>
+        <content type="integer" default=\"""" + OCF_RESKEY_max_disk_errors_default + """\"/>
     </parameter>
 
     <parameter name="low_yank_timeout" unique="0" required="0">
@@ -411,8 +414,7 @@ in milliseconds.
 Must be lower than any of the action timeouts.
         </longdesc>
         <shortdesc lang="en">Low yank timeout</shortdesc>
-        <content type="integer" default=\"""" \
-            + OCF_RESKEY_low_yank_timeout_default + """\"/>
+        <content type="integer" default=\"""" + OCF_RESKEY_low_yank_timeout_default + """\"/>
     </parameter>
 
     <parameter name="high_yank_timeout" unique="0" required="0">
@@ -424,8 +426,7 @@ Used during critical sections where the qemu mainloop will be blocked
 longer than usual.
         </longdesc>
         <shortdesc lang="en">High yank timeout</shortdesc>
-        <content type="integer" default=\"""" \
-            + OCF_RESKEY_high_yank_timeout_default + """\"/>
+        <content type="integer" default=\"""" + OCF_RESKEY_high_yank_timeout_default + """\"/>
     </parameter>
 
     <parameter name="debug" unique="0" required="0">
@@ -436,8 +437,7 @@ Control debugging:
 2: + dump core of hanging qemu
         </longdesc>
         <shortdesc lang="en">Control debugging</shortdesc>
-        <content type="integer" default=\"""" \
-            + OCF_RESKEY_debug_default + """\"/>
+        <content type="integer" default=\"""" + OCF_RESKEY_debug_default + """\"/>
     </parameter>
 
     </parameters>
@@ -482,6 +482,18 @@ def qemu_colo_validate_all():
         log.error("max_queue_size needs to be a number")
         return OCF_ERR_CONFIGURED
 
+    if not str.isdigit(OCF_RESKEY_threads):
+        log.error("threads needs to be a number")
+        return OCF_ERR_CONFIGURED
+
+    if not str.isdigit(OCF_RESKEY_bps_rd):
+        log.error("bps_rd needs to be a number")
+        return OCF_ERR_CONFIGURED
+
+    if not str.isdigit(OCF_RESKEY_bps_wr):
+        log.error("bps_wr needs to be a number")
+        return OCF_ERR_CONFIGURED
+
     if not str.isdigit(OCF_RESKEY_max_disk_errors):
         log.error("max_disk_errors needs to be a number")
         return OCF_ERR_CONFIGURED
@@ -501,6 +513,11 @@ def qemu_colo_validate_all():
     if not OCF_RESKEY_active_hidden_dir:
         log.error("active_hidden_dir needs to be specified")
         return OCF_ERR_CONFIGURED
+
+    try:
+        json.loads(OCF_RESKEY_host_map)
+    except Exception as e:
+        log.error("host_map is not valid json: %s" % str(e))
 
     # Check resource meta configuration
     if OCF_ACTION != "stop":
@@ -711,6 +728,13 @@ def qmp_open():
 
     return fd
 
+def map_host(remote):
+    host_map = json.loads(OCF_RESKEY_host_map)
+    if remote in host_map:
+        return host_map[remote]
+    else:
+        return remote
+
 # Get the disk size of the (user supplied) parent disk
 def qmp_get_disk_size(fd):
     block_nodes = qmp_execute(fd, [{"execute": "query-named-block-nodes", "arguments": {"flat": True}}])
@@ -738,12 +762,14 @@ def qmp_check_resync(fd):
             return job
     return None
 
-def qmp_start_resync(fd, remote):
-    answer = qmp_execute(fd, [{"execute": "blockdev-add", "arguments": {"driver": "nbd", "node-name": "nbd0", "server": {"type": "inet", "host": str(remote), "port": str(NBD_PORT)}, "export": "parent0", "detect-zeroes": "on"}}], ignore_error = True)
+def qmp_start_resync(fd, peer):
+    ip = map_host(peer)
+
+    answer = qmp_execute(fd, [{"execute": "blockdev-add", "arguments": {"driver": "nbd", "node-name": "nbd0", "server": {"type": "inet", "host": str(ip), "port": str(NBD_PORT)}, "export": "parent0", "detect-zeroes": "on"}}], ignore_error = True)
     if "error" in answer:
         log.warning("Failed to add nbd node: %s" % json.dumps(answer))
         log.warning("Assuming peer failure")
-        report_remote_failure(remote)
+        report_remote_failure(peer)
     else:
         qmp_execute(fd, [{"execute": "blockdev-mirror", "arguments": {"device": "colo-disk0", "job-id": "resync", "target": "nbd0", "sync": "full", "on-target-error": "report", "on-source-error": "ignore", "auto-dismiss": False}}])
 
@@ -814,13 +840,20 @@ def qmp_setup_colod(fd):
 
 def qmp_migrate_settings(fd):
     qmp_execute(fd, [
-        {"execute": "migrate-set-capabilities", "arguments": {"capabilities": [ {"capability": "x-colo", "state": true }, {"capability": "multifd", "state": true }]}},
-        {"execute": "migrate-set-parameters", "arguments": {"multifd-channels": 4, "x-colo-flush-threads": 4}},
+        {"execute": "migrate-set-capabilities", "arguments": {"capabilities": [{"capability": "x-colo", "state": True}]}},
+        {"execute": "migrate-set-parameters", "arguments": {"x-colo-periodic": False, "multifd-channels": int(OCF_RESKEY_threads), "x-colo-flush-threads": int(OCF_RESKEY_threads)}},
         {"execute": "migrate-set-parameters", "arguments": {"x-checkpoint-delay": int(OCF_RESKEY_checkpoint_interval)}},
         {"execute": "migrate-set-parameters", "arguments": {"x-dirty-check-delay": 10, "x-dirty-threshold": 33554432}}
     ])
 
-def qmp_start_migration(fd, remote):
+    if int(OCF_RESKEY_threads) == 0:
+        qmp_execute(fd, [{"execute": "migrate-set-capabilities", "arguments": {"capabilities": [{"capability": "multifd", "state": False}]}}])
+    else:
+        qmp_execute(fd, [{"execute": "migrate-set-capabilities", "arguments": {"capabilities": [{"capability": "multifd", "state": True}]}}])
+
+def qmp_start_migration(fd, peer):
+    ip = map_host(peer)
+
     # Check if we have a filter-rewriter
     answer = qmp_execute(fd, [{"execute": "qom-list", "arguments": {"path": "/objects/rew0"}}], ignore_error = True)
     if "error" in answer:
@@ -853,12 +886,12 @@ def qmp_start_migration(fd, remote):
 
     # Connect mirror and compare_in to secondary
     qmp_execute(fd, [
-        {"execute": "chardev-add", "arguments": {"id": "comp_pri_in0..", "backend": {"type": "socket", "data": {"addr": {"type": "unix", "data": {"path": str(COMP_SOCK)}}, "server": True}}}},
-        {"execute": "chardev-add", "arguments": {"id": "comp_pri_in0", "backend": {"type": "socket", "data": {"addr": {"type": "unix", "data": {"path": str(COMP_SOCK)}}, "server": False}}}},
+        {"execute": "chardev-add", "arguments": {"id": "comp_pri_in0..", "backend": {"type": "socket", "data": {"addr": {"type": "unix", "data": {"path": str(COMP_PRI_SOCK)}}, "server": True}}}},
+        {"execute": "chardev-add", "arguments": {"id": "comp_pri_in0", "backend": {"type": "socket", "data": {"addr": {"type": "unix", "data": {"path": str(COMP_PRI_SOCK)}}, "server": False}}}},
         {"execute": "chardev-add", "arguments": {"id": "comp_out0..", "backend": {"type": "socket", "data": {"addr": {"type": "unix", "data": {"path": str(COMP_OUT_SOCK)}}, "server": True}}}},
         {"execute": "chardev-add", "arguments": {"id": "comp_out0", "backend": {"type": "socket", "data": {"addr": {"type": "unix", "data": {"path": str(COMP_OUT_SOCK)}}, "server": False}}}},
-        {"execute": "chardev-add", "arguments": {"id": "mirror0", "backend": {"type": "socket", "data": {"addr": {"type": "inet", "data": {"host": str(remote), "port": str(MIRROR_PORT)}}, "server": False, "nodelay": True }}}},
-        {"execute": "chardev-add", "arguments": {"id": "comp_sec_in0", "backend": {"type": "socket", "data": {"addr": {"type": "inet", "data": {"host": str(remote), "port": str(COMPARE_IN_PORT)}}, "server": False, "nodelay": True }}}}
+        {"execute": "chardev-add", "arguments": {"id": "mirror0", "backend": {"type": "socket", "data": {"addr": {"type": "inet", "data": {"host": str(ip), "port": str(MIRROR_PORT)}}, "server": False, "nodelay": True }}}},
+        {"execute": "chardev-add", "arguments": {"id": "comp_sec_in0", "backend": {"type": "socket", "data": {"addr": {"type": "inet", "data": {"host": str(ip), "port": str(COMPARE_IN_PORT)}}, "server": False, "nodelay": True }}}}
         ])
 
     # Add the COLO filters
@@ -884,7 +917,7 @@ def qmp_start_migration(fd, remote):
     qmp_migrate_settings(fd)
     qmp_execute(fd, [
         {"exec-colod": "start-migration"},
-        {"execute": "migrate", "arguments": {"uri": "tcp:%s:%s" % (remote, MIGRATE_PORT)}}
+        {"execute": "migrate", "arguments": {"uri": "tcp:%s:%s" % (ip, MIGRATE_PORT)}}
         ])
 
 def qmp_query_status(fd):
@@ -932,6 +965,7 @@ def qemu_colo_monitor():
 
     status = qmp_query_status(fd)
     if status["failed"]:
+        log.error("qemu failed: %s" % status)
         return OCF_ERR_GENERIC
 
     if OCF_RESKEY_CRM_meta_interval != 0:
@@ -1141,6 +1175,7 @@ def calculate_master_score(status, shutdown_guest):
             set_master_score(11)
         else:
             raise Error()
+
     else:
         if not primary and not replication:
             pass
@@ -1173,6 +1208,9 @@ def qemu_colo_stop():
     return ret
 
 def new_peer(fd, peer):
+    if qmp_query_store(fd)["peer"]:
+        return
+
     qmp_start_resync(fd, peer)
     qmp_update_store(fd, {"peer": peer})
     # The secondary has inconsistent data until resync is finished
@@ -1203,7 +1241,8 @@ def qemu_colo_notify():
             fd.close()
 
     elif action == "pre-stop":
-        if not env_do_shutdown_guest() and status["primary"] \
+        if not env_do_shutdown_guest() \
+           and (status["primary"] or status["replication"]) \
            and HOSTNAME != str.strip(OCF_RESKEY_CRM_meta_notify_stop_uname):
             fd = qmp_open()
             peer = qmp_query_store(fd)["peer"]
@@ -1248,8 +1287,14 @@ def qemu_colo_promote():
         fd.close()
 
         return OCF_SUCCESS
-    elif pretend_secondary:
+    elif (status["primary"] or status["replication"]):
         fd = qmp_open()
+
+        # Wait for promotion
+        while not qmp_query_status(fd)["primary"]:
+            log.debug("Waiting for promotion")
+            time.sleep(1)
+
         qmp_update_store(fd, {"pretend-secondary": False})
         set_master_score(101)
 
@@ -1297,7 +1342,9 @@ try:
         status = qemu_colo_validate_all()
     else:
         status = OCF_ERR_UNIMPLEMENTED
-except Error:
+except Exception as e:
+    log.error(str(e))
+    log.error(traceback.format_exec())
     exit(OCF_ERR_GENERIC)
 else:
     exit(status)

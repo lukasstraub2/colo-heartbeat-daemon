@@ -292,40 +292,33 @@ ColodQmpResult *_qmp_execute_nocheck_co(Coroutine *coroutine,
 
 static gchar *pick_yank_instances(JsonNode *result,
                                   JsonNode *yank_matches) {
-    JsonArray *array;
-    gchar *instances_str;
-    JsonNode *instances;
-    JsonReader *reader;
+    JsonArray *result_array;
+    JsonArray *output_array;
+    gchar *output_str;
+    JsonNode *output_node;
 
     assert(JSON_NODE_HOLDS_OBJECT(result));
     assert(JSON_NODE_HOLDS_ARRAY(yank_matches));
 
-    instances = json_node_new(JSON_NODE_ARRAY);
-    array = json_array_new();
-    json_node_set_array(instances, array);
-    g_object_unref(array);
+    output_node = json_node_alloc();
+    output_array = json_array_new();
+    json_node_init_array(output_node, output_array);
 
-    reader = json_reader_new(result);
-
-    json_reader_read_member(reader, "return");
-    guint count = json_reader_count_elements(reader);
+    result = get_member_node(result, "return");
+    result_array = json_node_get_array(result);
+    guint count = json_array_get_length(result_array);
     for (guint i = 0; i < count; i++) {
-        json_reader_read_element(reader, i);
-        JsonNode *element = json_reader_get_value(reader);
+        JsonNode *element = json_array_get_element(result_array, i);
         assert(element);
 
         if (object_matches_match_array(element, yank_matches)) {
-            json_array_add_element(array, element);
+            json_array_add_element(output_array, element);
         }
-
-        json_reader_end_element(reader);
     }
-    json_reader_end_member(reader);
-    g_object_unref(reader);
 
-    instances_str = json_to_string(instances, FALSE);
-    g_object_unref(instances);
-    return instances_str;
+    output_str = json_to_string(output_node, FALSE);
+    json_node_unref(output_node);
+    return output_str;
 }
 
 int _qmp_yank_co(Coroutine *coroutine, ColodQmpState *state,
@@ -357,16 +350,18 @@ int _qmp_yank_co(Coroutine *coroutine, ColodQmpState *state,
 
     ___qmp_execute_co(result, state, &state->yank_channel, FALSE, errp,
                       CO command);
-    g_free(CO command);
     if (!result) {
+        g_free(CO command);
         return -1;
     }
     if (has_member(result->json_root, "error")) {
         g_set_error(errp, COLOD_ERROR, COLOD_ERROR_FATAL,
-                    "qmp yank: %s", result->line);
+                    "qmp yank: %s: %s", CO command, result->line);
         qmp_result_free(result);
+        g_free(CO command);
         return -1;
     }
+    g_free(CO command);
     qmp_set_yank(state);
 
     qmp_result_free(result);
@@ -474,17 +469,15 @@ static Coroutine *qmp_handshake_coroutine(ColodQmpState *state,
 
 typedef struct ColodWaitState {
     Coroutine *coroutine;
-    const gchar *event;
+    JsonNode *match;
     ColodQmpState *state;
     gboolean fired;
 } ColodWaitState;
 
 static void qmp_wait_event_cb(gpointer data, ColodQmpResult *result) {
     ColodWaitState *state = data;
-    const gchar *event;
 
-    event = get_member_str(result->json_root, "event");
-    if (!strcmp(event, state->event)) {
+    if (object_matches(result->json_root, state->match)) {
         state->fired = TRUE;
         g_idle_add(state->coroutine->cb.plain, state->coroutine);
         qmp_del_notify_event(state->state, qmp_wait_event_cb, state);
@@ -492,15 +485,19 @@ static void qmp_wait_event_cb(gpointer data, ColodQmpResult *result) {
 }
 
 int _qmp_wait_event_co(Coroutine *coroutine, ColodQmpState *state,
-                       guint timeout, const gchar *event, GError **errp) {
+                       guint timeout, const gchar *match, GError **errp) {
     ColodQmpCo *co = co_stack(qmpco);
+    JsonNode *parsed;
     int ret = 0;
 
     co_begin(int, -1);
 
+    parsed = json_from_string(match, NULL);
+    assert(parsed);
+
     CO wait_state = g_new0(ColodWaitState, 1);
     CO wait_state->coroutine = coroutine;
-    CO wait_state->event = event;
+    CO wait_state->match = parsed;
     CO wait_state->state = state;
     qmp_add_notify_event(state, qmp_wait_event_cb, CO wait_state);
     CO timeout_source_id = 0;
@@ -514,11 +511,11 @@ int _qmp_wait_event_co(Coroutine *coroutine, ColodQmpState *state,
         if (g_source_get_id(g_main_current_source()) == CO timeout_source_id) {
             g_set_error(errp, COLOD_ERROR, COLOD_ERROR_TIMEOUT,
                         "Timeout reached while waiting for qmp event: %s",
-                        event);
+                        match);
         } else {
             g_set_error(errp, COLOD_ERROR, COLOD_ERROR_INTERRUPT,
                         "Got interrupted while waiting for qmp event: %s",
-                        event);
+                        match);
         }
         qmp_del_notify_event(state, qmp_wait_event_cb, CO wait_state);
         ret = -1;
@@ -527,6 +524,7 @@ int _qmp_wait_event_co(Coroutine *coroutine, ColodQmpState *state,
     if (timeout) {
         g_source_remove(CO timeout_source_id);
     }
+    json_node_unref(CO wait_state->match);
     g_free(CO wait_state);
 
     co_end;

@@ -229,10 +229,13 @@ void colod_callback_del(ColodCallbackHead *head,
     assert(cb);
 
     QLIST_REMOVE(cb, next);
+    g_free(cb);
 }
 
 void colod_callback_clear(ColodCallbackHead *head) {
     while (!QLIST_EMPTY(head)) {
-        QLIST_REMOVE(QLIST_FIRST(head), next);
+        ColodCallback *cb = QLIST_FIRST(head);
+        QLIST_REMOVE(cb, next);
+        g_free(cb);
     }
 }

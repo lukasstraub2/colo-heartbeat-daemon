@@ -115,7 +115,6 @@ static gboolean colod_event_pending(ColodContext *ctx) {
     return !queue_empty(&ctx->events) || !queue_empty(&ctx->critical_events);
 }
 
-static gboolean colod_main_co(gpointer data);
 static void colod_event_queue(ColodContext *ctx, ColodEvent event) {
     ColodQueue *queue;
 
@@ -126,7 +125,7 @@ static void colod_event_queue(ColodContext *ctx, ColodEvent event) {
     }
 
     if (queue_empty(queue) && ctx->main_coroutine) {
-        g_idle_add(colod_main_co, ctx);
+        g_idle_add(ctx->main_coroutine->cb.plain, ctx->main_coroutine);
     }
 
     if (!queue_empty(queue)) {
@@ -164,13 +163,13 @@ static gboolean colod_critical_pending(ColodContext *ctx) {
 #define colod_qmp_event_wait_co(result, ctx, timeout, event, errp) \
     co_call_co(result, _colod_qmp_event_wait_co, ctx, timeout, event, errp)
 static int _colod_qmp_event_wait_co(Coroutine *coroutine, ColodContext *ctx,
-                                    guint timeout, const gchar* event,
+                                    guint timeout, const gchar* match,
                                     GError **errp) {
     int ret;
     GError *local_errp = NULL;
 
     while (TRUE) {
-        ret = _qmp_wait_event_co(coroutine, ctx->qmp, timeout, event,
+        ret = _qmp_wait_event_co(coroutine, ctx->qmp, timeout, match,
                                  &local_errp);
         if (coroutine->yield) {
             return -1;
@@ -309,7 +308,7 @@ ColodQmpResult *_colod_execute_co(Coroutine *coroutine,
     co_call_co((ret), _colod_execute_array_co, (ctx), (array), \
                (ignore_errors), (errp))
 static int _colod_execute_array_co(Coroutine *coroutine, ColodContext *ctx,
-                                   JsonNode *array, gboolean ignore_errors,
+                                   JsonNode *array_node, gboolean ignore_errors,
                                    GError **errp) {
     ColodArrayCo *co = co_stack(colodarrayco);
     int ret = 0;
@@ -318,14 +317,12 @@ static int _colod_execute_array_co(Coroutine *coroutine, ColodContext *ctx,
     co_begin(int, -1);
 
     assert(!errp || !*errp);
-    assert(JSON_NODE_HOLDS_ARRAY(array));
+    assert(JSON_NODE_HOLDS_ARRAY(array_node));
 
-    CO reader = json_reader_new(array);
-
-    CO count = json_reader_count_elements(CO reader);
+    CO array = json_node_get_array(array_node);
+    CO count = json_array_get_length(CO array);
     for (CO i = 0; CO i < CO count; CO i++) {
-        json_reader_read_element(CO reader, CO i);
-        JsonNode *node = json_reader_get_value(CO reader);
+        JsonNode *node = json_array_get_element(CO array, CO i);
         assert(node);
 
         gchar *tmp = json_to_string(node, FALSE);
@@ -342,17 +339,12 @@ static int _colod_execute_array_co(Coroutine *coroutine, ColodContext *ctx,
             local_errp = NULL;
         } else if (!result) {
             g_propagate_error(errp, local_errp);
-            json_reader_end_element(CO reader);
             g_free(CO line);
             ret = -1;
             break;
         }
         qmp_result_free(result);
-
-        json_reader_end_element(CO reader);
     }
-    json_reader_end_member(CO reader);
-    g_object_unref(CO reader);
 
     co_end;
 
@@ -451,7 +443,11 @@ int _colod_check_health_co(Coroutine *coroutine, ColodContext *ctx,
 
     if (!ctx->transitioning &&
             (ctx->primary != primary || ctx->replication != replication)) {
-        colod_error_set(errp, "qemu status mismatch");
+        colod_error_set(errp, "qemu status mismatch: (%s, %s)"
+                        " Expected: (%s, %s)",
+                        bool_to_json(primary), bool_to_json(replication),
+                        bool_to_json(ctx->primary),
+                        bool_to_json(ctx->replication));
         colod_event_queue(ctx, EVENT_FAILED);
         return -1;
     }
@@ -659,11 +655,17 @@ static ColodWatchdog *colod_watchdog_new(ColodContext *ctx) {
     return state;
 }
 
+typedef struct ColodRaiseCoroutine {
+    Coroutine coroutine;
+    ColodContext *ctx;
+} ColodRaiseCoroutine;
+
 static gboolean _colod_raise_timeout_co(Coroutine *coroutine,
                                         ColodContext *ctx);
 static gboolean colod_raise_timeout_co(gpointer data) {
-    ColodContext *ctx = data;
-    Coroutine *coroutine = ctx->raise_timeout_coroutine;
+    ColodRaiseCoroutine *raiseco = data;
+    Coroutine *coroutine = &raiseco->coroutine;
+    ColodContext *ctx = raiseco->ctx;
     gboolean ret;
 
     co_enter(ret, coroutine, _colod_raise_timeout_co, ctx);
@@ -693,12 +695,12 @@ static gboolean _colod_raise_timeout_co(Coroutine *coroutine,
 
     co_begin(gboolean, G_SOURCE_CONTINUE);
 
-    qmp_wait_event_co(ret, ctx->qmp, 0, "STOP", NULL);
+    qmp_wait_event_co(ret, ctx->qmp, 0, "{'event': 'STOP'}", NULL);
     if (ret < 0) {
         return G_SOURCE_REMOVE;
     }
 
-    qmp_wait_event_co(ret, ctx->qmp, 0, "CONT", NULL);
+    qmp_wait_event_co(ret, ctx->qmp, 0, "{'event': 'RESUME'}", NULL);
     if (ret < 0) {
         return G_SOURCE_REMOVE;
     }
@@ -709,11 +711,11 @@ static gboolean _colod_raise_timeout_co(Coroutine *coroutine,
 }
 
 static void colod_raise_timeout_coroutine_free(ColodContext *ctx) {
-    if (ctx->raise_timeout_coroutine) {
+    if (!ctx->raise_timeout_coroutine) {
         return;
     }
 
-    g_idle_add(colod_raise_timeout_co, ctx);
+    g_idle_add(colod_raise_timeout_co, ctx->raise_timeout_coroutine);
 
     while (ctx->raise_timeout_coroutine) {
         g_main_context_iteration(g_main_context_default(), TRUE);
@@ -721,6 +723,7 @@ static void colod_raise_timeout_coroutine_free(ColodContext *ctx) {
 }
 
 static Coroutine *colod_raise_timeout_coroutine(ColodContext *ctx) {
+    ColodRaiseCoroutine *raiseco;
     Coroutine *coroutine;
 
     if (ctx->raise_timeout_coroutine) {
@@ -729,11 +732,14 @@ static Coroutine *colod_raise_timeout_coroutine(ColodContext *ctx) {
 
     qmp_set_timeout(ctx->qmp, ctx->qmp_timeout_high);
 
-    coroutine = g_new0(Coroutine, 1);
+    raiseco = g_new0(ColodRaiseCoroutine, 1);
+    coroutine = &raiseco->coroutine;
     coroutine->cb.plain = colod_raise_timeout_co;
     coroutine->cb.iofunc = colod_raise_timeout_co_wrap;
+    raiseco->ctx = ctx;
     ctx->raise_timeout_coroutine = coroutine;
 
+    g_idle_add(colod_raise_timeout_co, raiseco);
     return coroutine;
 }
 
@@ -921,7 +927,9 @@ static ColodEvent _colod_start_migration_co(Coroutine *coroutine,
     }
 
     colod_qmp_event_wait_co(ret, ctx, 5*60*1000,
-                            "MIGRATION_STATUS_PRE_SWITCHOVER", &local_errp);
+                            "{'event': 'MIGRATION',"
+                            " 'data': {'status': 'pre-switchover'}}",
+                            &local_errp);
     if (ret < 0) {
         goto qmp_error;
     }
@@ -930,7 +938,7 @@ static ColodEvent _colod_start_migration_co(Coroutine *coroutine,
                         &local_errp);
     if (g_error_matches(local_errp, COLOD_ERROR, COLOD_ERROR_QMP)) {
         goto qmp_error;
-    } else if (!qmp_result) {
+    } else if (ret < 0) {
         goto qemu_failed;
     }
     if (colod_critical_pending(ctx)) {
@@ -956,7 +964,9 @@ static ColodEvent _colod_start_migration_co(Coroutine *coroutine,
     }
 
     ctx->transitioning = TRUE;
-    colod_qmp_event_wait_co(ret, ctx, 10000, "MIGRATION_STATUS_COLO",
+    colod_qmp_event_wait_co(ret, ctx, 10000,
+                            "{'event': 'MIGRATION',"
+                            " 'data': {'status': 'colo'}}",
                             &local_errp);
     ctx->transitioning = FALSE;
     if (ret < 0) {
@@ -1038,7 +1048,7 @@ static ColodEvent _colod_replication_wait_co(Coroutine *coroutine,
 
     while (TRUE) {
         ctx->transitioning = TRUE;
-        colod_qmp_event_wait_co(ret, ctx, 0, "MIGRATION_STATUS_COLO",
+        colod_qmp_event_wait_co(ret, ctx, 0, "{'event': 'RESUME'}",
                                 &local_errp);
         ctx->transitioning = FALSE;
         if (ret < 0) {
@@ -1052,6 +1062,8 @@ static ColodEvent _colod_replication_wait_co(Coroutine *coroutine,
         }
         break;
     }
+
+    colod_raise_timeout_coroutine(ctx);
 
     co_end;
 
@@ -1080,13 +1092,18 @@ static ColodEvent _colod_replication_running_co(Coroutine *coroutine,
     return EVENT_FAILED;
 }
 
+typedef struct ColodMainCoroutine {
+    Coroutine coroutine;
+    ColodContext *ctx;
+} ColodMainCoroutine;
+
 static gboolean _colod_main_co(Coroutine *coroutine, ColodContext *ctx);
 static gboolean colod_main_co(gpointer data) {
-    ColodContext *ctx = data;
-    Coroutine *coroutine = ctx->main_coroutine;
+    ColodMainCoroutine *mainco = data;
+    Coroutine *coroutine = data;
+    ColodContext *ctx = mainco->ctx;
     gboolean ret;
 
-    assert(coroutine);
     co_enter(ret, coroutine, _colod_main_co, ctx);
     if (coroutine->yield) {
         return GPOINTER_TO_INT(coroutine->yield_value);
@@ -1107,7 +1124,7 @@ static gboolean colod_main_co_wrap(
 }
 
 static gboolean _colod_main_co(Coroutine *coroutine, ColodContext *ctx) {
-    ColodEvent event;
+    ColodEvent event = EVENT_NONE;
     int ret;
     GError *local_errp = NULL;
 
@@ -1177,6 +1194,7 @@ static gboolean _colod_main_co(Coroutine *coroutine, ColodContext *ctx) {
              } else if (event == EVENT_AUTOQUIT) {
                  goto autoquit;
              } else if (event == EVENT_DID_FAILOVER) {
+                ctx->replication = FALSE;
                 continue;
              } else {
                  abort();
@@ -1204,6 +1222,9 @@ failed:
     ctx->failed = TRUE;
     colod_cpg_send(ctx, MESSAGE_FAILED);
 
+    if (event == EVENT_NONE) {
+        log_error("Failed with EVENT_NONE");
+    }
     if (event == EVENT_PEER_FAILOVER) {
         ctx->peer_failover = TRUE;
     }
@@ -1255,21 +1276,23 @@ autoquit:
 
     co_end;
 
-    abort();
     return G_SOURCE_REMOVE;
 }
 
 static Coroutine *colod_main_coroutine(ColodContext *ctx) {
+    ColodMainCoroutine *mainco;
     Coroutine *coroutine;
 
     assert(!ctx->main_coroutine);
 
-    coroutine = g_new0(Coroutine, 1);
+    mainco = g_new0(ColodMainCoroutine, 1);
+    coroutine = &mainco->coroutine;
     coroutine->cb.plain = colod_main_co;
     coroutine->cb.iofunc = colod_main_co_wrap;
+    mainco->ctx = ctx;
     ctx->main_coroutine = coroutine;
 
-    g_idle_add(colod_main_co, ctx);
+    g_idle_add(colod_main_co, mainco);
     return coroutine;
 }
 
@@ -1526,7 +1549,8 @@ int main(int argc, char **argv) {
     GError *errp = NULL;
     ColodContext ctx_struct = { 0 };
     ColodContext *ctx = &ctx_struct;
-    int ret, pipefd;
+    int ret;
+    int pipefd = 0;
 
     ret = colod_parse_options(ctx, &argc, &argv, &errp);
     if (ret < 0) {
@@ -1539,6 +1563,7 @@ int main(int argc, char **argv) {
         pipefd = colod_daemonize(ctx);
     }
     prctl(PR_SET_PTRACER, PR_SET_PTRACER_ANY, 0, 0, 0);
+    prctl(PR_SET_DUMPABLE, 1);
 
     signal(SIGPIPE, SIG_IGN); // TODO: Handle this properly
 

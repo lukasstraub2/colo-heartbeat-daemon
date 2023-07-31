@@ -71,8 +71,8 @@ gboolean object_matches(JsonNode *node, JsonNode *match) {
     object = json_node_get_object(node);
     match_object = json_node_get_object(match);
 
-    json_object_iter_init (&iter, match_object);
-    while (json_object_iter_next (&iter, &match_member, &match_node))
+    json_object_iter_init(&iter, match_object);
+    while (json_object_iter_next(&iter, &match_member, &match_node))
     {
         if (!json_object_has_member(object, match_member)) {
             return FALSE;
@@ -88,27 +88,20 @@ gboolean object_matches(JsonNode *node, JsonNode *match) {
 }
 
 gboolean object_matches_match_array(JsonNode *node, JsonNode *match_array) {
-    JsonReader *reader;
+    JsonArray *array;
 
     assert(JSON_NODE_HOLDS_ARRAY(match_array));
 
-    reader = json_reader_new(match_array);
-
-    guint count = json_reader_count_elements(reader);
+    array = json_node_get_array(match_array);
+    guint count = json_array_get_length(array);
     for (guint i = 0; i < count; i++) {
-        json_reader_read_element(reader, i);
-        JsonNode *match = json_reader_get_value(reader);
+        JsonNode *match = json_array_get_element(array, i);
         assert(match);
 
         if (object_matches(node, match)) {
-            g_object_unref(reader);
             return TRUE;
         }
-
-        json_reader_end_element(reader);
     }
-    json_reader_end_member(reader);
-    g_object_unref(reader);
 
     return FALSE;
 }
