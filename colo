@@ -1089,15 +1089,10 @@ def env_find_secondary():
     # we found no secondary
     return None
 
-def _qemu_colo_stop(failed, shutdown_guest):
+def stop_qemu(failed, shutdown_guest):
     # stop action must do everything possible to stop the resource
 
-    if pid_running(COLOD_PIDFILE):
-        fd = qmp_open()
-        qmp_execute(fd, [{"exec-colod": "autoquit"}])
-        fd.close()
-
-    if  not pid_running(QEMU_PIDFILE):
+    if not pid_running(QEMU_PIDFILE):
         log.info("resource is already stopped")
         return OCF_SUCCESS
 
@@ -1154,9 +1149,22 @@ def _qemu_colo_stop(failed, shutdown_guest):
         pass
 
     while pid_running(QEMU_PIDFILE):
+        log.debug("Waiting for qemu to stop")
         time.sleep(1)
 
     return OCF_SUCCESS
+
+def _qemu_colo_stop(failed, shutdown_guest):
+    if pid_running(COLOD_PIDFILE):
+        fd = qmp_open()
+        qmp_execute(fd, [{"exec-colod": "autoquit"}])
+        fd.close()
+
+    stop_qemu(failed, shutdown_guest)
+
+    while pid_running(COLOD_PIDFILE):
+        log.debug("Waiting for colod to stop")
+        time.sleep(1)
 
 def calculate_master_score(status, shutdown_guest):
     primary = status["primary"]
