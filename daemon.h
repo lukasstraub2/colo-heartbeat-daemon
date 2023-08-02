@@ -11,6 +11,7 @@
 #define DAEMON_H
 
 #include <syslog.h>
+#include <stdio.h>
 
 #include <glib-2.0/glib.h>
 
@@ -32,6 +33,7 @@ typedef struct ColodContext {
     guint qmp_timeout_low, qmp_timeout_high;
     guint checkpoint_interval;
     guint watchdog_interval;
+    gboolean do_trace;
 
     /* Variables */
     GMainContext *mainctx;
@@ -47,7 +49,7 @@ typedef struct ColodContext {
     Coroutine *main_coroutine;
     ColodQueue events, critical_events;
     gboolean pending_action, transitioning;
-    gboolean failed, yellow, qemu_exited;
+    gboolean failed, yellow, qemu_quit;
 
     ColodClientListener *listener;
 
@@ -59,7 +61,10 @@ typedef struct ColodContext {
 } ColodContext;
 
 typedef struct ColodCo {
-    JsonNode *commands;
+    union {
+        JsonNode *commands;
+        guint event;
+    };
     union {
         ColodQmpResult *result;
         ColodQmpResult *qemu_status;
@@ -82,6 +87,8 @@ void colod_syslog(int pri, const char *fmt, ...)
     colod_syslog(LOG_ERR, "%s: %s", __func__, message)
 #define log_error_fmt(fmt, ...) \
     colod_syslog(LOG_ERR, "%s: " fmt, __func__, ##__VA_ARGS__)
+
+void colod_trace(const char *fmt, ...);
 
 #define colod_check_health_co(result, ctx, errp) \
     co_call_co((result), _colod_check_health_co, (ctx), (errp))

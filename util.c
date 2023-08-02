@@ -170,7 +170,7 @@ gboolean queue_empty(ColodQueue *queue) {
 
 void queue_add(ColodQueue *queue, guint entry) {
     guint size = queue_size();
-    guint next_pos = queue->write_pos + 1 % size;
+    guint next_pos = (queue->write_pos + 1) % size;
 
     if (next_pos == queue->read_pos) {
         // queue full
@@ -192,7 +192,7 @@ guint queue_remove(ColodQueue *queue) {
     guint ret;
 
     ret = queue_peek(queue);
-    queue->read_pos = queue->read_pos + 1 % size;
+    queue->read_pos = (queue->read_pos + 1) % size;
     return ret;
 }
 

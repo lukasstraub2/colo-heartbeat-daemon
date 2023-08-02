@@ -147,17 +147,14 @@ def setup_constants():
     COMPARE_IN_PORT = int(OCF_RESKEY_base_port) + 2
     NBD_PORT = int(OCF_RESKEY_base_port) + 3
 
-    bps_params = ""
-    if int(OCF_RESKEY_bps_rd) != 0:
-        bps_params += (",bps_rd=%(OCF_RESKEY_bps_rd)s") % globals()
-    if int(OCF_RESKEY_bps_wr) != 0:
-        bps_params += (",bps_wr=%(OCF_RESKEY_bps_wr)s") % globals()
-
     global QEMU_PRIMARY_CMDLINE
     QEMU_PRIMARY_CMDLINE = \
         ("'%(OCF_RESKEY_qemu_binary)s' %(OCF_RESKEY_options)s"
-        " -drive if=none,node-name=colo-disk0,driver=quorum,read-pattern=fifo,"
-        "vote-threshold=1,children.0=parent0" + bps_params) % globals()
+        " -drive if=none,node-name=quorum0,driver=quorum,"
+        "read-pattern=fifo,vote-threshold=1,children.0=parent0"
+        " -drive if=none,node-name=colo-disk0,driver=throttle,"
+        "throttle-group=throttle0,file.driver=raw,file.file=quorum0") \
+        % globals()
 
     global QEMU_SECONDARY_CMDLINE
     QEMU_SECONDARY_CMDLINE = \
@@ -181,8 +178,11 @@ def setup_constants():
         "file.file.filename='%(ACTIVE_IMAGE)s',file.backing.driver=qcow2,"
         "file.backing.file.filename='%(HIDDEN_IMAGE)s',"
         "file.backing.backing=parent0"
-        " -drive if=none,node-name=colo-disk0,driver=quorum,read-pattern=fifo,"
-        "vote-threshold=1,children.0=childs0" + bps_params) % globals()
+        " -drive if=none,node-name=quorum0,driver=quorum,"
+        "read-pattern=fifo,vote-threshold=1,children.0=childs0"
+        " -drive if=none,node-name=colo-disk0,driver=throttle,"
+        "throttle-group=throttle0,file.driver=raw,"
+        "file.file=quorum0") % globals()
 
     QEMU_SECONDARY_CMDLINE += " -incoming defer"
 
@@ -193,17 +193,15 @@ def setup_constants():
 
     common = \
         (" -no-shutdown -daemonize -D '%(QEMU_LOG)s'"
-        " -pidfile '%(QEMU_PIDFILE)s'") % globals()
+        " -pidfile '%(QEMU_PIDFILE)s'"
+        " -qmp unix:'%(QMP_SOCK)s',server=on,wait=off"
+        " -qmp unix:'%(QMP_YANK_SOCK)s',server=on,wait=off") % globals()
 
-    if int(OCF_RESKEY_debug) >= 1:
-        common += (" -qmp unix:'%(QMP_SOCK)s',server=on,wait=off,"
-                   "logfile='%(QMP_LOG)s',logappend") % globals()
-        common += (" -qmp unix:'%(QMP_YANK_SOCK)s',server=on,wait=off,"
-                   "logfile='%(QMP_LOG)s',logappend") % globals()
-    else:
-        common += (" -qmp unix:'%(QMP_SOCK)s',server=on,wait=off") % globals()
-        common += (" -qmp unix:'%(QMP_YANK_SOCK)s',server=on,wait=off") \
-                  % globals()
+    common += " -object throttle-group,id=throttle0"
+    if int(OCF_RESKEY_bps_rd) != 0:
+        common += (",x-bps-read=%(OCF_RESKEY_bps_rd)s") % globals()
+    if int(OCF_RESKEY_bps_wr) != 0:
+        common += (",x-bps-write=%(OCF_RESKEY_bps_wr)s") % globals()
 
     QEMU_PRIMARY_CMDLINE += common
     QEMU_SECONDARY_CMDLINE += common
@@ -215,8 +213,10 @@ def setup_constants():
         " -i '%(OCF_RESOURCE_INSTANCE)s' -n '%(HOSTNAME)s'"
         " -b '%(BASE_DIR)s' -q '%(QMP_SOCK)s' -y '%(QMP_YANK_SOCK)s'"
         " -l %(OCF_RESKEY_low_yank_timeout)s"
-        " -t %(OCF_RESKEY_high_yank_timeout)s"
-        " -a 100") % globals()
+        " -t %(OCF_RESKEY_high_yank_timeout)s") % globals()
+
+    if int(OCF_RESKEY_debug) >= 1:
+        COLOD_CMDLINE += " --trace"
 
 def qemu_colo_meta_data():
     print("""\
@@ -366,14 +366,6 @@ it on the tap netdev.
         </longdesc>
         <shortdesc lang="en">vnet_hdr support</shortdesc>
         <content type="string" default=\"""" + OCF_RESKEY_vnet_hdr_default + """\"/>
-    </parameter>
-
-    <parameter name="threads" unique="0" required="0">
-        <longdesc lang="en">
-Number of threads to use for the colo replication. "0" disables multithreading.
-        </longdesc>
-        <shortdesc lang="en">Number of threads</shortdesc>
-        <content type="integer" default=\"""" + OCF_RESKEY_threads_default + """\"/>
     </parameter>
 
     <parameter name="threads" unique="0" required="0">
@@ -675,8 +667,11 @@ def get_remote_master_score(remote):
 
 # Tell Pacemaker that the remote resource failed
 def report_remote_failure(remote):
-    run_command("crm_resource --resource '%s' --fail --node '%s'"
-                % (OCF_RESOURCE_INSTANCE, remote))
+    try:
+        run_command("crm_resource --resource '%s' --fail --node '%s'"
+                    % (OCF_RESOURCE_INSTANCE, remote))
+    except Exception as e:
+        log.error(str(e));
 
 def recv_line(fd):
     line = b''
@@ -774,7 +769,7 @@ def qmp_start_resync(fd, peer):
         qmp_execute(fd, [{"execute": "blockdev-mirror", "arguments": {"device": "colo-disk0", "job-id": "resync", "target": "nbd0", "sync": "full", "on-target-error": "report", "on-source-error": "ignore", "auto-dismiss": False}}])
 
 def qmp_cancel_resync(fd):
-    timeout = START_TIME + (OCF_RESKEY_CRM_meta_timeout*2/3/1000)
+    timeout = START_TIME + (OCF_RESKEY_CRM_meta_timeout*1/2/1000)
 
     if qmp_check_resync(fd)["status"] != "concluded":
         qmp_execute(fd, [{"execute": "block-job-cancel", "arguments": {"device": "resync", "force": True}}], ignore_error = True)
@@ -813,7 +808,7 @@ def qmp_setup_colod(fd):
         {"exec-colod": "set-primary-failover", "commands": [
             {"execute": "qom-set", "arguments": {"path": "/objects/mirror0", "property": "status", "value": "off"}},
             {"execute": "qom-set", "arguments": {"path": "/objects/comp_pri_in0", "property": "status", "value": "off"}},
-            {"execute": "x-blockdev-change", "arguments": {"parent": "colo-disk0", "child": "children.1"}},
+            {"execute": "x-blockdev-change", "arguments": {"parent": "quorum0", "child": "children.1"}},
             {"execute": "x-colo-lost-heartbeat"},
             {"execute": "blockdev-del", "arguments": {"node-name": "nbd0"}},
             {"execute": "object-del", "arguments": {"id": "mirror0"}},
@@ -874,13 +869,13 @@ def qmp_start_migration(fd, peer):
 
     # Wait for the block-job to finish
     while qmp_check_resync(fd)["status"] != "concluded":
-        log.debug("Waiting for block-job to finish in qmp_start_colo()")
+        log.debug("Waiting for block-job to finish in qmp_start_migration()")
         time.sleep(1)
 
     # Add nbd to the quorum node
     qmp_execute(fd, [
         {"execute": "block-job-dismiss", "arguments": {"id": "resync"}},
-        {"execute": "x-blockdev-change", "arguments": {"parent": "colo-disk0", "node": "nbd0"}},
+        {"execute": "x-blockdev-change", "arguments": {"parent": "quorum0", "node": "nbd0"}},
         {"exec-colod": "cont"}
         ])
 
@@ -956,6 +951,21 @@ def pid_running(pidfile):
 def check_running_pid():
     return pid_running(QEMU_PIDFILE) or pid_running(COLOD_PIDFILE)
 
+def new_peer(fd, peer):
+    if qmp_query_store(fd)["peer"]:
+        return
+
+    qmp_start_resync(fd, peer)
+    qmp_update_store(fd, {"peer": peer})
+    qmp_execute(fd, [{"exec-colod": "clear-peer-status"}])
+    # The secondary has inconsistent data until resync is finished
+    set_remote_master_score(peer, 0)
+
+def del_peer(fd):
+    if qmp_check_resync(fd):
+        qmp_cancel_resync(fd)
+    qmp_update_store(fd, {"peer": None})
+
 def qemu_colo_monitor():
     running = check_running_pid()
     if not running:
@@ -976,11 +986,16 @@ def qemu_colo_monitor():
                 if "error" in block_job:
                     log.error("resync error: %s" % block_job["error"])
                     peer = qmp_query_store(fd)["peer"]
-                    qmp_cancel_resync(fd)
+                    del_peer(fd)
+                    report_remote_failure(peer)
+
+                elif status["peer-failed"]:
+                    peer = qmp_query_store(fd)["peer"]
+                    del_peer(fd)
                     report_remote_failure(peer)
 
                 elif block_job["ready"]:
-                    log.info("resync done, starting colo")
+                    log.info("resync done, starting migration")
                     peer = qmp_query_store(fd)["peer"]
                     qmp_start_migration(fd, peer)
 
@@ -1206,21 +1221,6 @@ def qemu_colo_stop():
         calculate_master_score(status, shutdown_guest)
 
     return ret
-
-def new_peer(fd, peer):
-    if qmp_query_store(fd)["peer"]:
-        return
-
-    qmp_start_resync(fd, peer)
-    qmp_update_store(fd, {"peer": peer})
-    # The secondary has inconsistent data until resync is finished
-    set_remote_master_score(peer, 0)
-
-def del_peer(fd):
-    if qmp_check_resync(fd):
-        qmp_cancel_resync(fd)
-    qmp_update_store(fd, {"peer": None})
-    qmp_execute(fd, [{"exec-colod": "clear-peer-status"}])
 
 def qemu_colo_notify():
     fd = qmp_open()

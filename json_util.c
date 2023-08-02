@@ -87,6 +87,15 @@ gboolean object_matches(JsonNode *node, JsonNode *match) {
     return TRUE;
 }
 
+gboolean object_matches_json(JsonNode *node, const gchar *match) {
+    JsonNode *match_node = json_from_string(match, NULL);
+    assert(match_node);
+
+    gboolean ret = object_matches(node, match_node);
+    json_node_unref(match_node);
+    return ret;
+}
+
 gboolean object_matches_match_array(JsonNode *node, JsonNode *match_array) {
     JsonArray *array;
 

@@ -336,6 +336,7 @@ static gboolean _colod_client_co(Coroutine *coroutine) {
             goto error_client;
         }
 
+        colod_trace("client: %s", CO request->line);
         if (has_member(CO request->json_root, "exec-colod")) {
             const gchar *command = get_member_str(CO request->json_root,
                                                   "exec-colod");
@@ -388,6 +389,7 @@ static gboolean _colod_client_co(Coroutine *coroutine) {
 
         qmp_result_free(CO request);
 
+        colod_trace("client: %s", CO result->line);
         colod_channel_write_timeout_co(ret, client->channel, CO result->line,
                                        CO result->len, 1000, &local_errp);
         if (ret != G_IO_STATUS_NORMAL) {
