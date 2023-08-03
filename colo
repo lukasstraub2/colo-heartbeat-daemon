@@ -73,18 +73,10 @@ OCF_RESKEY_qemu_img_binary_default = "qemu-img"
 OCF_RESKEY_log_dir_default = HA_RSCTMP
 OCF_RESKEY_options_default = ""
 OCF_RESKEY_active_hidden_dir_default = ""
+OCF_RESKEY_advanced_config_default = "{}"
 OCF_RESKEY_listen_address_default = "0.0.0.0"
 OCF_RESKEY_host_map_default = "{}"
 OCF_RESKEY_base_port_default = "9000"
-OCF_RESKEY_checkpoint_interval_default = "20000"
-OCF_RESKEY_compare_timeout_default = "3000"
-OCF_RESKEY_expired_scan_cycle_default = "3000"
-OCF_RESKEY_max_queue_size_default = "1024"
-OCF_RESKEY_use_filter_rewriter_default = "true"
-OCF_RESKEY_vnet_hdr_default = "false"
-OCF_RESKEY_threads_default = "1"
-OCF_RESKEY_bps_rd_default = "0"
-OCF_RESKEY_bps_wr_default = "0"
 OCF_RESKEY_max_disk_errors_default = "1"
 OCF_RESKEY_low_yank_timeout_default = "1000"
 OCF_RESKEY_high_yank_timeout_default = "20000"
@@ -96,18 +88,10 @@ OCF_RESKEY_qemu_img_binary = os.getenv("OCF_RESKEY_qemu_img_binary", OCF_RESKEY_
 OCF_RESKEY_log_dir = os.getenv("OCF_RESKEY_log_dir", OCF_RESKEY_log_dir_default)
 OCF_RESKEY_options = os.getenv("OCF_RESKEY_options", OCF_RESKEY_options_default)
 OCF_RESKEY_active_hidden_dir = os.getenv("OCF_RESKEY_active_hidden_dir", OCF_RESKEY_active_hidden_dir_default)
+OCF_RESKEY_advanced_config = os.getenv("OCF_RESKEY_advanced_config", OCF_RESKEY_advanced_config_default)
 OCF_RESKEY_listen_address = os.getenv("OCF_RESKEY_listen_address", OCF_RESKEY_listen_address_default)
 OCF_RESKEY_host_map = os.getenv("OCF_RESKEY_host_map", OCF_RESKEY_host_map_default)
 OCF_RESKEY_base_port = os.getenv("OCF_RESKEY_base_port", OCF_RESKEY_base_port_default)
-OCF_RESKEY_checkpoint_interval = os.getenv("OCF_RESKEY_checkpoint_interval", OCF_RESKEY_checkpoint_interval_default)
-OCF_RESKEY_compare_timeout = os.getenv("OCF_RESKEY_compare_timeout", OCF_RESKEY_compare_timeout_default)
-OCF_RESKEY_expired_scan_cycle = os.getenv("OCF_RESKEY_expired_scan_cycle", OCF_RESKEY_expired_scan_cycle_default)
-OCF_RESKEY_max_queue_size = os.getenv("OCF_RESKEY_max_queue_size", OCF_RESKEY_max_queue_size_default)
-OCF_RESKEY_use_filter_rewriter = os.getenv("OCF_RESKEY_use_filter_rewriter", OCF_RESKEY_use_filter_rewriter_default)
-OCF_RESKEY_vnet_hdr = os.getenv("OCF_RESKEY_vnet_hdr", OCF_RESKEY_vnet_hdr_default)
-OCF_RESKEY_threads = os.getenv("OCF_RESKEY_threads", OCF_RESKEY_threads_default)
-OCF_RESKEY_bps_rd = os.getenv("OCF_RESKEY_bps_rd", OCF_RESKEY_bps_rd_default)
-OCF_RESKEY_bps_wr = os.getenv("OCF_RESKEY_bps_wr", OCF_RESKEY_bps_wr_default)
 OCF_RESKEY_max_disk_errors = os.getenv("OCF_RESKEY_max_disk_errors", OCF_RESKEY_max_disk_errors_default)
 OCF_RESKEY_low_yank_timeout = os.getenv("OCF_RESKEY_low_yank_timeout", OCF_RESKEY_low_yank_timeout_default)
 OCF_RESKEY_high_yank_timeout = os.getenv("OCF_RESKEY_high_yank_timeout", OCF_RESKEY_high_yank_timeout_default)
@@ -139,76 +123,87 @@ START_TIME = time.time()
 class Error(Exception):
     pass
 
-def setup_constants():
-    # This function is called after the parameters where validated
-    global MIGRATE_PORT, MIRROR_PORT, COMPARE_IN_PORT, NBD_PORT
-    MIGRATE_PORT = int(OCF_RESKEY_base_port)
-    MIRROR_PORT = int(OCF_RESKEY_base_port) + 1
-    COMPARE_IN_PORT = int(OCF_RESKEY_base_port) + 2
-    NBD_PORT = int(OCF_RESKEY_base_port) + 3
+def nbd_port():
+    return int(OCF_RESKEY_base_port)
 
-    global QEMU_PRIMARY_CMDLINE
-    QEMU_PRIMARY_CMDLINE = \
-        ("'%(OCF_RESKEY_qemu_binary)s' %(OCF_RESKEY_options)s"
+def migrate_port():
+    return int(OCF_RESKEY_base_port) + 1
+
+def mirror_port():
+    return int(OCF_RESKEY_base_port) + 2
+
+def compare_in_port():
+    return int(OCF_RESKEY_base_port) + 3
+
+def common_cmdline():
+    return \
+        (" -no-shutdown -daemonize -D '%(QEMU_LOG)s'"
+        " -pidfile '%(QEMU_PIDFILE)s'"
+        " -qmp unix:'%(QMP_SOCK)s',server=on,wait=off"
+        " -qmp unix:'%(QMP_YANK_SOCK)s',server=on,wait=off"
+        " -object throttle-group,id=throttle0") % globals()
+
+def qemu_primary_cmdline(config):
+    cmdline = \
+        ("'%s' %s"
         " -drive if=none,node-name=quorum0,driver=quorum,"
         "read-pattern=fifo,vote-threshold=1,children.0=parent0"
         " -drive if=none,node-name=colo-disk0,driver=throttle,"
         "throttle-group=throttle0,file.driver=raw,file.file=quorum0") \
-        % globals()
+        % (OCF_RESKEY_qemu_binary, config["qemu-options-str"])
 
-    global QEMU_SECONDARY_CMDLINE
-    QEMU_SECONDARY_CMDLINE = \
-        ("'%(OCF_RESKEY_qemu_binary)s' %(OCF_RESKEY_options)s"
-        " -chardev socket,id=mirror0,host='%(OCF_RESKEY_listen_address)s',"
-        "port=%(MIRROR_PORT)s,server=on,wait=off,nodelay=on"
-        " -chardev socket,id=comp_sec_in0,host='%(OCF_RESKEY_listen_address)s',"
-        "port=%(COMPARE_IN_PORT)s,server=on,wait=off,nodelay=on"
+    cmdline += common_cmdline()
+
+    return cmdline
+
+def qemu_secondary_cmdline(config):
+    listen_address = OCF_RESKEY_listen_address
+    cmdline = \
+        ("'%s' %s"
+        " -chardev socket,id=mirror0,host='%s',port=%s,"
+        "server=on,wait=off,nodelay=on"
+        " -chardev socket,id=comp_sec_in0,host='%s',port=%s,"
+        "server=on,wait=off,nodelay=on"
         " -object filter-redirector,id=mirror0,netdev=hn0,queue=tx,"
         "indev=mirror0"
         " -object filter-redirector,id=comp_sec_in0,netdev=hn0,queue=rx,"
-        "outdev=comp_sec_in0") % globals()
+        "outdev=comp_sec_in0") \
+        % (OCF_RESKEY_qemu_binary, config["qemu-options-str"],
+            listen_address, mirror_port(),
+            listen_address, compare_in_port())
 
-    if is_true(OCF_RESKEY_use_filter_rewriter):
-        QEMU_SECONDARY_CMDLINE += \
-            " -object filter-rewriter,id=rew0,netdev=hn0,queue=all"
+    if config["filter-rewriter"]:
+        cmdline += " -object filter-rewriter,id=rew0,netdev=hn0,queue=all"
 
-    QEMU_SECONDARY_CMDLINE += \
+    cmdline += \
         (" -drive if=none,node-name=childs0,top-id=colo-disk0,"
         "driver=replication,mode=secondary,file.driver=qcow2,"
-        "file.file.filename='%(ACTIVE_IMAGE)s',file.backing.driver=qcow2,"
-        "file.backing.file.filename='%(HIDDEN_IMAGE)s',"
+        "file.file.filename='%s',"
+        "file.backing.driver=qcow2,file.backing.file.filename='%s',"
         "file.backing.backing=parent0"
         " -drive if=none,node-name=quorum0,driver=quorum,"
         "read-pattern=fifo,vote-threshold=1,children.0=childs0"
         " -drive if=none,node-name=colo-disk0,driver=throttle,"
         "throttle-group=throttle0,file.driver=raw,"
-        "file.file=quorum0") % globals()
+        "file.file=quorum0"
+        " -incoming defer") \
+        % (ACTIVE_IMAGE, HIDDEN_IMAGE)
 
-    QEMU_SECONDARY_CMDLINE += " -incoming defer"
+    cmdline += common_cmdline()
 
-    global QEMU_DUMMY_CMDLINE
-    QEMU_DUMMY_CMDLINE = \
-        ("'%(OCF_RESKEY_qemu_binary)s' %(OCF_RESKEY_options)s"
-        " -drive if=none,node-name=colo-disk0,driver=null-co -S") % globals()
+    return cmdline
 
-    common = \
-        (" -no-shutdown -daemonize -D '%(QEMU_LOG)s'"
-        " -pidfile '%(QEMU_PIDFILE)s'"
-        " -qmp unix:'%(QMP_SOCK)s',server=on,wait=off"
-        " -qmp unix:'%(QMP_YANK_SOCK)s',server=on,wait=off") % globals()
+def qemu_dummy_cmdline():
+    cmdline = \
+        ("'%s' %s -drive if=none,node-name=colo-disk0,driver=null-co -S") \
+        % (OCF_RESKEY_qemu_binary, config["qemu-options-str"])
 
-    common += " -object throttle-group,id=throttle0"
-    if int(OCF_RESKEY_bps_rd) != 0:
-        common += (",x-bps-read=%(OCF_RESKEY_bps_rd)s") % globals()
-    if int(OCF_RESKEY_bps_wr) != 0:
-        common += (",x-bps-write=%(OCF_RESKEY_bps_wr)s") % globals()
+    cmdline += common_cmdline()
 
-    QEMU_PRIMARY_CMDLINE += common
-    QEMU_SECONDARY_CMDLINE += common
-    QEMU_DUMMY_CMDLINE += common
+    return cmdline
 
-    global COLOD_CMDLINE
-    COLOD_CMDLINE = \
+def colod_cmdline():
+    cmdline = \
         ("'%(OCF_RESKEY_colod_binary)s' -ds"
         " -i '%(OCF_RESOURCE_INSTANCE)s' -n '%(HOSTNAME)s'"
         " -b '%(BASE_DIR)s' -q '%(QMP_SOCK)s' -y '%(QMP_YANK_SOCK)s'"
@@ -216,7 +211,9 @@ def setup_constants():
         " -t %(OCF_RESKEY_high_yank_timeout)s") % globals()
 
     if int(OCF_RESKEY_debug) >= 1:
-        COLOD_CMDLINE += " --trace"
+        cmdline += " --trace"
+
+    return cmdline
 
 def qemu_colo_meta_data():
     print("""\
@@ -270,7 +267,7 @@ these failures will show up with exitreason="Simulated failure".
         <content type="string" default=\"""" + OCF_RESKEY_log_dir_default + """\"/>
     </parameter>
 
-    <parameter name="options" unique="0" required="1">
+    <parameter name="options" unique="0" required="0">
         <longdesc lang="en">
 Options to pass to qemu. These will be passed alongside COLO specific
 options, so you need to follow these conventions: The netdev should have
@@ -293,6 +290,48 @@ recommended to put this on a ramdisk.
         <content type="string" default=\"""" + OCF_RESKEY_active_hidden_dir_default + """\"/>
     </parameter>
 
+    <parameter name="advanced_config" unique="0" required="0">
+        <shortdesc lang="en">Advanced config options</shortdesc>
+        <longdesc lang="en">
+Json object containing advanced configuration options.
+
+If the object contains a "include" member, it's value is parsed as a
+file name. The file is parsed as a json object which is then updated
+with values of the current object e.g. values of the current object
+take precedence over the values of the included object.
+The file may contain another "include" member, which is parsed
+recursively.
+
+If "qemu-options-str" is configured here, it takes precedence over the
+"options" parameter to the resource-agent.
+"qemu-options-str" may be a list of strings, which will be concatenated.
+
+Consult the qemu qmp documentation for more information at
+https://www.qemu.org/docs/master/interop/qemu-qmp-ref.html
+
+Example using a config file:
+    advanced_config='{"include": "/etc/debian_vm.json"}'
+
+/etc/debian_vm.json:
+{
+    "qemu-options-str": [
+        " -vnc :0 -enable-kvm -cpu qemu64,+kvmclock -m 2048",
+        " -netdev bridge,id=hn0 -device e1000,netdev=hn0",
+        " -device virtio-blk,drive=colo-disk0",
+        " -drive if=none,node-name=parent0,format=qcow2,",
+        "file=/mnt/vms/debian_vm.qcow2"
+    ],
+    "vnet-hdr": false,
+    "filter-rewriter": true,
+    "colo-compare-options": {"expired_scan_cycle": 100},
+    "migration-parameters": {"multifd-channels": 4},
+    "migration-capabilities": [{"capability": "multifd", "state": true}],
+    "throttle-limits": {"bps-read": 104857600, "bps-write": 104857600}
+}
+        </longdesc>
+        <content type="string" default=\"""" + OCF_RESKEY_advanced_config_default + """\"/>
+    </parameter>
+
     <parameter name="listen_address" unique="0" required="0">
         <longdesc lang="en">Address to listen on.</longdesc>
         <shortdesc lang="en">Listen address</shortdesc>
@@ -301,7 +340,7 @@ recommended to put this on a ramdisk.
 
     <parameter name="host_map" unique="0" required="0">
         <longdesc lang="en">
-Map each host to a ip address to use for replication. Must be a valid json dict.
+Map each host to a ip address to use for replication. Must be a valid json object.
 Example:
 {"node1": "192.168.222.10", "node2": "192.168.222.11"}
         </longdesc>
@@ -315,77 +354,6 @@ Example:
         </longdesc>
         <shortdesc lang="en">Ports to use</shortdesc>
         <content type="integer" default=\"""" + OCF_RESKEY_base_port_default + """\"/>
-    </parameter>
-
-    <parameter name="checkpoint_interval" unique="0" required="0">
-        <longdesc lang="en">
-Interval for regular checkpoints in milliseconds.
-        </longdesc>
-        <shortdesc lang="en">Interval for regular checkpoints</shortdesc>
-        <content type="integer" default=\"""" + OCF_RESKEY_checkpoint_interval_default + """\"/>
-    </parameter>
-
-    <parameter name="compare_timeout" unique="0" required="0">
-        <longdesc lang="en">
-Maximum time to hold a primary packet if secondary hasn't sent it yet,
-in milliseconds.
-You should also adjust "expired_scan_cycle" accordingly.
-        </longdesc>
-        <shortdesc lang="en">Compare timeout</shortdesc>
-        <content type="integer" default=\"""" + OCF_RESKEY_compare_timeout_default + """\"/>
-    </parameter>
-
-    <parameter name="expired_scan_cycle" unique="0" required="0">
-        <longdesc lang="en">
-Interval for checking for expired primary packets in milliseconds.
-        </longdesc>
-        <shortdesc lang="en">Expired packet check interval</shortdesc>
-        <content type="integer" default=\"""" + OCF_RESKEY_expired_scan_cycle_default + """\"/>
-    </parameter>
-
-    <parameter name="max_queue_size" unique="0" required="0">
-        <longdesc lang="en">
-Maximum queue size for network packets.
-        </longdesc>
-        <shortdesc lang="en">Maximum queue size</shortdesc>
-        <content type="integer" default=\"""" + OCF_RESKEY_max_queue_size_default + """\"/>
-    </parameter>
-
-    <parameter name="use_filter_rewriter" unique="0" required="0">
-        <longdesc lang="en">
-Use filter-rewriter to increase similarity between the VMs.
-        </longdesc>
-        <shortdesc lang="en">Use filter-rewriter</shortdesc>
-        <content type="string" default=\"""" + OCF_RESKEY_use_filter_rewriter_default + """\"/>
-    </parameter>
-
-    <parameter name="vnet_hdr" unique="0" required="0">
-        <longdesc lang="en">
-Set this to true if your system supports vnet_hdr and you enabled
-it on the tap netdev.
-        </longdesc>
-        <shortdesc lang="en">vnet_hdr support</shortdesc>
-        <content type="string" default=\"""" + OCF_RESKEY_vnet_hdr_default + """\"/>
-    </parameter>
-
-    <parameter name="threads" unique="0" required="0">
-        <longdesc lang="en">
-Number of threads to use for the colo replication. "0" disables multithreading.
-        </longdesc>
-        <shortdesc lang="en">Number of threads</shortdesc>
-        <content type="integer" default=\"""" + OCF_RESKEY_threads_default + """\"/>
-    </parameter>
-
-    <parameter name="bps_rd" unique="0" required="0">
-        <longdesc lang="en">Disk read throttle in Bytes/s. "0" disables throttling.</longdesc>
-        <shortdesc lang="en">Disk read throttle in Bytes/s</shortdesc>
-        <content type="integer" default=\"""" + OCF_RESKEY_bps_rd_default + """\"/>
-    </parameter>
-
-    <parameter name="bps_wr" unique="0" required="0">
-        <longdesc lang="en">Disk write throttle in Bytes/s. "0" disables throttling.</longdesc>
-        <shortdesc lang="en">Disk write throttle in Bytes/s</shortdesc>
-        <content type="integer" default=\"""" + OCF_RESKEY_bps_wr_default + """\"/>
     </parameter>
 
     <parameter name="max_disk_errors" unique="0" required="0">
@@ -451,39 +419,76 @@ Control debugging:
 </resource-agent>
 """)
 
+def check_config(config):
+    if not isinstance(config["qemu-options-str"], str):
+        log.error("advanced_config: qemu-options-str needs to be a string "
+                  "or an array of strings")
+        return OCF_ERR_CONFIGURED
+
+    if not isinstance(config["vnet-hdr"], bool):
+        log.error("advanced_config: vnet-hdr needs to be a bool")
+        return OCF_ERR_CONFIGURED
+
+    if not isinstance(config["filter-rewriter"], bool):
+        log.error("advanced_config: filter-rewriter needs to be a bool")
+        return OCF_ERR_CONFIGURED
+
+    if not isinstance(config["colo-compare-options"], dict):
+        log.error("advanced_config: colo-compare-options needs to be an object")
+        return OCF_ERR_CONFIGURED
+
+    if not isinstance(config["migration-parameters"], dict):
+        log.error("advanced_config: migration-parameters needs to be an object")
+        return OCF_ERR_CONFIGURED
+
+    if not isinstance(config["migration-capabilities"], list):
+        log.error("advanced_config: migration-capabilities needs to be an array")
+        return OCF_ERR_CONFIGURED
+
+    if not isinstance(config["throttle-limits"], dict):
+        log.error("advanced_config: throttle-limits needs to be an object")
+        return OCF_ERR_CONFIGURED
+
+    return OCF_SUCCESS
+
+def _parse_config(config_str):
+    parsed = json.loads(config_str)
+
+    if "include" in parsed:
+        with open(config_str["include"], "r") as fd:
+            include_str = fd.read()
+
+        include = _parse_config(include_str)
+        include.update(parsed)
+        return include
+
+    return parsed
+
+def parse_config(config_str):
+    config = {
+        "qemu-options-str": OCF_RESKEY_options,
+        "vnet-hdr": False,
+        "filter-rewriter": True,
+        "colo-compare-options": {},
+        "migration-parameters": {},
+        "migration-capabilities": [],
+        "throttle-limits": {}
+    }
+
+    parsed = _parse_config(config_str)
+    config.update(parsed)
+
+    qemu_options = config["qemu-options-str"]
+    if isinstance(qemu_options, list):
+        config["qemu-options-str"] = "".join(qemu_options)
+
+    return config
+
 # Sanity checks: check parameters, files, binaries, etc.
 def qemu_colo_validate_all():
     # Check resource parameters
     if not str.isdigit(OCF_RESKEY_base_port):
         log.error("base_port needs to be a number")
-        return OCF_ERR_CONFIGURED
-
-    if not str.isdigit(OCF_RESKEY_checkpoint_interval):
-        log.error("checkpoint_interval needs to be a number")
-        return OCF_ERR_CONFIGURED
-
-    if not str.isdigit(OCF_RESKEY_compare_timeout):
-        log.error("compare_timeout needs to be a number")
-        return OCF_ERR_CONFIGURED
-
-    if not str.isdigit(OCF_RESKEY_expired_scan_cycle):
-        log.error("expired_scan_cycle needs to be a number")
-        return OCF_ERR_CONFIGURED
-
-    if not str.isdigit(OCF_RESKEY_max_queue_size):
-        log.error("max_queue_size needs to be a number")
-        return OCF_ERR_CONFIGURED
-
-    if not str.isdigit(OCF_RESKEY_threads):
-        log.error("threads needs to be a number")
-        return OCF_ERR_CONFIGURED
-
-    if not str.isdigit(OCF_RESKEY_bps_rd):
-        log.error("bps_rd needs to be a number")
-        return OCF_ERR_CONFIGURED
-
-    if not str.isdigit(OCF_RESKEY_bps_wr):
-        log.error("bps_wr needs to be a number")
         return OCF_ERR_CONFIGURED
 
     if not str.isdigit(OCF_RESKEY_max_disk_errors):
@@ -505,6 +510,15 @@ def qemu_colo_validate_all():
     if not OCF_RESKEY_active_hidden_dir:
         log.error("active_hidden_dir needs to be specified")
         return OCF_ERR_CONFIGURED
+
+    try:
+        config = parse_config(OCF_RESKEY_advanced_config)
+    except Exception as e:
+        log.error("Failed parsing advanced_config: %s" % str(e))
+
+    result = check_config(config)
+    if result != OCF_SUCCESS:
+        return result
 
     try:
         json.loads(OCF_RESKEY_host_map)
@@ -760,7 +774,7 @@ def qmp_check_resync(fd):
 def qmp_start_resync(fd, peer):
     ip = map_host(peer)
 
-    answer = qmp_execute(fd, [{"execute": "blockdev-add", "arguments": {"driver": "nbd", "node-name": "nbd0", "server": {"type": "inet", "host": str(ip), "port": str(NBD_PORT)}, "export": "parent0", "detect-zeroes": "on"}}], ignore_error = True)
+    answer = qmp_execute(fd, [{"execute": "blockdev-add", "arguments": {"driver": "nbd", "node-name": "nbd0", "server": {"type": "inet", "host": str(ip), "port": str(nbd_port())}, "export": "parent0", "detect-zeroes": "on"}}], ignore_error = True)
     if "error" in answer:
         log.warning("Failed to add nbd node: %s" % json.dumps(answer))
         log.warning("Assuming peer failure")
@@ -833,20 +847,20 @@ def qmp_setup_colod(fd):
             {"execute": "chardev-remove", "arguments": {"id": "comp_sec_in0"}}]}
     ])
 
-def qmp_migrate_settings(fd):
+def qmp_throttle_settings(fd, config):
+    qmp_execute(fd, [
+        {"execute": "qom-set", "arguments": {"path": "/objects/throttle0", "property": "limits", "value": config["throttle-limits"]}}
+        ])
+
+def qmp_migrate_settings(fd, config):
     qmp_execute(fd, [
         {"execute": "migrate-set-capabilities", "arguments": {"capabilities": [{"capability": "x-colo", "state": True}]}},
-        {"execute": "migrate-set-parameters", "arguments": {"x-colo-periodic": False, "multifd-channels": int(OCF_RESKEY_threads), "x-colo-flush-threads": int(OCF_RESKEY_threads)}},
-        {"execute": "migrate-set-parameters", "arguments": {"x-checkpoint-delay": int(OCF_RESKEY_checkpoint_interval)}},
-        {"execute": "migrate-set-parameters", "arguments": {"x-dirty-check-delay": 10, "x-dirty-threshold": 33554432}}
+        {"execute": "migrate-set-capabilities", "arguments": {"capabilities": config["migration-capabilities"]}},
+        {"execute": "migrate-set-parameters", "arguments": config["migration-parameters"]}
     ])
 
-    if int(OCF_RESKEY_threads) == 0:
-        qmp_execute(fd, [{"execute": "migrate-set-capabilities", "arguments": {"capabilities": [{"capability": "multifd", "state": False}]}}])
-    else:
-        qmp_execute(fd, [{"execute": "migrate-set-capabilities", "arguments": {"capabilities": [{"capability": "multifd", "state": True}]}}])
-
 def qmp_start_migration(fd, peer):
+    config = parse_config(OCF_RESKEY_advanced_config)
     ip = map_host(peer)
 
     # Check if we have a filter-rewriter
@@ -885,34 +899,36 @@ def qmp_start_migration(fd, peer):
         {"execute": "chardev-add", "arguments": {"id": "comp_pri_in0", "backend": {"type": "socket", "data": {"addr": {"type": "unix", "data": {"path": str(COMP_PRI_SOCK)}}, "server": False}}}},
         {"execute": "chardev-add", "arguments": {"id": "comp_out0..", "backend": {"type": "socket", "data": {"addr": {"type": "unix", "data": {"path": str(COMP_OUT_SOCK)}}, "server": True}}}},
         {"execute": "chardev-add", "arguments": {"id": "comp_out0", "backend": {"type": "socket", "data": {"addr": {"type": "unix", "data": {"path": str(COMP_OUT_SOCK)}}, "server": False}}}},
-        {"execute": "chardev-add", "arguments": {"id": "mirror0", "backend": {"type": "socket", "data": {"addr": {"type": "inet", "data": {"host": str(ip), "port": str(MIRROR_PORT)}}, "server": False, "nodelay": True }}}},
-        {"execute": "chardev-add", "arguments": {"id": "comp_sec_in0", "backend": {"type": "socket", "data": {"addr": {"type": "inet", "data": {"host": str(ip), "port": str(COMPARE_IN_PORT)}}, "server": False, "nodelay": True }}}}
+        {"execute": "chardev-add", "arguments": {"id": "mirror0", "backend": {"type": "socket", "data": {"addr": {"type": "inet", "data": {"host": str(ip), "port": str(mirror_port())}}, "server": False, "nodelay": True }}}},
+        {"execute": "chardev-add", "arguments": {"id": "comp_sec_in0", "backend": {"type": "socket", "data": {"addr": {"type": "inet", "data": {"host": str(ip), "port": str(compare_in_port())}}, "server": False, "nodelay": True }}}}
         ])
 
     # Add the COLO filters
-    vnet_hdr_support = is_true(OCF_RESKEY_vnet_hdr)
+    vnet_hdr_support = config["vnet-hdr"]
     if have_filter_rewriter:
         qmp_execute(fd, [
             {"execute": "object-add", "arguments": {"qom-type": "filter-mirror", "id": "mirror0", "status": "off", "insert": "before", "position": "id=rew0", "netdev": "hn0", "queue": "tx", "outdev": "mirror0", "vnet_hdr_support": vnet_hdr_support}},
             {"execute": "object-add", "arguments": {"qom-type": "filter-redirector", "id": "comp_out0", "insert": "before", "position": "id=rew0", "netdev": "hn0", "queue": "rx", "indev": "comp_out0..", "vnet_hdr_support": vnet_hdr_support}},
-            {"execute": "object-add", "arguments": {"qom-type": "filter-redirector", "id": "comp_pri_in0", "status": "off", "insert": "before", "position": "id=rew0", "netdev": "hn0", "queue": "rx", "outdev": "comp_pri_in0..", "vnet_hdr_support": vnet_hdr_support}},
-            {"execute": "object-add", "arguments": {"qom-type": "iothread", "id": "iothread1"}},
-            {"execute": "object-add", "arguments": {"qom-type": "colo-compare", "id": "comp0", "primary_in": "comp_pri_in0", "secondary_in": "comp_sec_in0", "outdev": "comp_out0", "iothread": "iothread1", "compare_timeout": int(OCF_RESKEY_compare_timeout), "expired_scan_cycle": int(OCF_RESKEY_expired_scan_cycle), "max_queue_size": int(OCF_RESKEY_max_queue_size), "vnet_hdr_support": vnet_hdr_support}}
+            {"execute": "object-add", "arguments": {"qom-type": "filter-redirector", "id": "comp_pri_in0", "status": "off", "insert": "before", "position": "id=rew0", "netdev": "hn0", "queue": "rx", "outdev": "comp_pri_in0..", "vnet_hdr_support": vnet_hdr_support}}
             ])
     else:
         qmp_execute(fd, [
             {"execute": "object-add", "arguments": {"qom-type": "filter-mirror", "id": "mirror0", "status": "off", "netdev": "hn0", "queue": "tx", "outdev": "mirror0", "vnet_hdr_support": vnet_hdr_support}},
             {"execute": "object-add", "arguments": {"qom-type": "filter-redirector", "id": "comp_out0", "netdev": "hn0", "queue": "rx", "indev": "comp_out0..", "vnet_hdr_support": vnet_hdr_support}},
-            {"execute": "object-add", "arguments": {"qom-type": "filter-redirector", "id": "comp_pri_in0", "status": "off", "netdev": "hn0", "queue": "rx", "outdev": "comp_pri_in0..", "vnet_hdr_support": vnet_hdr_support}},
-            {"execute": "object-add", "arguments": {"qom-type": "iothread", "id": "iothread1"}},
-            {"execute": "object-add", "arguments": {"qom-type": "colo-compare", "id": "comp0", "primary_in": "comp_pri_in0", "secondary_in": "comp_sec_in0", "outdev": "comp_out0", "iothread": "iothread1", "compare_timeout": int(OCF_RESKEY_compare_timeout), "expired_scan_cycle": int(OCF_RESKEY_expired_scan_cycle), "max_queue_size": int(OCF_RESKEY_max_queue_size), "vnet_hdr_support": vnet_hdr_support}}
+            {"execute": "object-add", "arguments": {"qom-type": "filter-redirector", "id": "comp_pri_in0", "status": "off", "netdev": "hn0", "queue": "rx", "outdev": "comp_pri_in0..", "vnet_hdr_support": vnet_hdr_support}}
             ])
 
+    colo_compare_options = config["colo-compare-options"]
+    qmp_execute(fd, [
+        {"execute": "object-add", "arguments": {"qom-type": "iothread", "id": "iothread1"}},
+        {"execute": "object-add", "arguments": {"qom-type": "colo-compare", "id": "comp0", "primary_in": "comp_pri_in0", "secondary_in": "comp_sec_in0", "outdev": "comp_out0", "iothread": "iothread1", "vnet_hdr_support": vnet_hdr_support}.update(colo_compare_options)}
+        ])
+
     # Start migration
-    qmp_migrate_settings(fd)
+    qmp_migrate_settings(fd, config)
     qmp_execute(fd, [
         {"exec-colod": "start-migration"},
-        {"execute": "migrate", "arguments": {"uri": "tcp:%s:%s" % (ip, MIGRATE_PORT)}}
+        {"execute": "migrate", "arguments": {"uri": "tcp:%s:%s" % (ip, migrate_port())}}
         ])
 
 def qmp_query_status(fd):
@@ -930,9 +946,8 @@ def get_pid(pidfile):
     if not os.path.exists(pidfile):
         return None
 
-    fd = open(pidfile, "r")
-    pid = int(str.strip(fd.readline()))
-    fd.close()
+    with open(pidfile, "r") as fd:
+        pid = int(str.strip(fd.readline()))
 
     return pid
 
@@ -1022,6 +1037,11 @@ def qemu_colo_start():
         log.info("qemu is already running")
         return OCF_SUCCESS
 
+    config = parse_config(OCF_RESKEY_advanced_config)
+    result = check_config(config)
+    if result != OCF_SUCCESS:
+        return result
+
     try:
         os.mkdir(BASE_DIR)
     except FileExistsError as e:
@@ -1030,8 +1050,8 @@ def qemu_colo_start():
     rotate_logfile(QEMU_LOG, 8)
     rotate_logfile(QMP_LOG, 8)
 
-    run_command(QEMU_DUMMY_CMDLINE)
-    run_command(COLOD_CMDLINE)
+    run_command(qemu_dummy_cmdline())
+    run_command(colod_cmdline())
     fd = qmp_open()
     disk_size = qmp_get_disk_size(fd)
     fd.close()
@@ -1042,17 +1062,18 @@ def qemu_colo_start():
     run_command("'%s' create -q -f qcow2 %s %s" \
             % (OCF_RESKEY_qemu_img_binary, HIDDEN_IMAGE, disk_size))
 
-    run_command(QEMU_SECONDARY_CMDLINE)
-    run_command(COLOD_CMDLINE)
+    run_command(qemu_secondary_cmdline(config))
+    run_command(colod_cmdline())
 
     fd = qmp_open()
     qmp_setup_colod(fd)
-    qmp_migrate_settings(fd)
     qmp_update_store(fd, {"pretend-secondary": True})
+    qmp_throttle_settings(fd, config)
+    qmp_migrate_settings(fd, config)
     qmp_execute(fd, [
-        {"execute": "nbd-server-start", "arguments": {"addr": {"type": "inet", "data": {"host": str(OCF_RESKEY_listen_address), "port": str(NBD_PORT)}}}},
+        {"execute": "nbd-server-start", "arguments": {"addr": {"type": "inet", "data": {"host": str(OCF_RESKEY_listen_address), "port": str(nbd_port())}}}},
         {"execute": "nbd-server-add", "arguments": {"device": "parent0", "writable": True}},
-        {"execute": "migrate-incoming", "arguments": {"uri": "tcp:%s:%s" % (OCF_RESKEY_listen_address, MIGRATE_PORT)}}
+        {"execute": "migrate-incoming", "arguments": {"uri": "tcp:%s:%s" % (OCF_RESKEY_listen_address, migrate_port())}}
         ])
     fd.close()
 
@@ -1277,18 +1298,24 @@ def qemu_colo_promote():
         return OCF_ERR_GENERIC
 
     if not status["primary"] and not status["replication"]:
+        config = parse_config(OCF_RESKEY_advanced_config)
+        result = check_config(config)
+        if result != OCF_SUCCESS:
+            return result
+
         status = _qemu_colo_stop(False, False)
         if status != OCF_SUCCESS:
             return status
 
         rotate_logfile(QEMU_LOG, 8)
         rotate_logfile(QMP_LOG, 8)
-        run_command(QEMU_PRIMARY_CMDLINE)
-        run_command(COLOD_CMDLINE + " --primary")
+        run_command(qemu_primary_cmdline(config))
+        run_command(colod_cmdline() + " --primary")
         set_master_score(101)
 
         fd = qmp_open()
         qmp_setup_colod(fd)
+        qmp_throttle_settings(fd, config)
         peer = env_find_secondary()
         if peer:
             new_peer(fd, peer)
