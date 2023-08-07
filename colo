@@ -193,7 +193,7 @@ def qemu_secondary_cmdline(config):
 
     return cmdline
 
-def qemu_dummy_cmdline():
+def qemu_dummy_cmdline(config):
     cmdline = \
         ("'%s' %s -drive if=none,node-name=colo-disk0,driver=null-co -S") \
         % (OCF_RESKEY_qemu_binary, config["qemu-options-str"])
@@ -449,13 +449,18 @@ def check_config(config):
         log.error("advanced_config: throttle-limits needs to be an object")
         return OCF_ERR_CONFIGURED
 
+    if not isinstance(config["blockdev-mirror-arguments"], dict):
+        log.error("advanced_config: blockdev-mirror-arguments needs to be "
+                  "an object")
+        return OCF_ERR_CONFIGURED
+
     return OCF_SUCCESS
 
 def _parse_config(config_str):
     parsed = json.loads(config_str)
 
     if "include" in parsed:
-        with open(config_str["include"], "r") as fd:
+        with open(parsed["include"], "r") as fd:
             include_str = fd.read()
 
         include = _parse_config(include_str)
@@ -472,7 +477,8 @@ def parse_config(config_str):
         "colo-compare-options": {},
         "migration-parameters": {},
         "migration-capabilities": [],
-        "throttle-limits": {}
+        "throttle-limits": {},
+        "blockdev-mirror-arguments": {}
     }
 
     parsed = _parse_config(config_str)
@@ -772,6 +778,7 @@ def qmp_check_resync(fd):
     return None
 
 def qmp_start_resync(fd, peer):
+    config = parse_config(OCF_RESKEY_advanced_config)
     ip = map_host(peer)
 
     answer = qmp_execute(fd, [{"execute": "blockdev-add", "arguments": {"driver": "nbd", "node-name": "nbd0", "server": {"type": "inet", "host": str(ip), "port": str(nbd_port())}, "export": "parent0", "detect-zeroes": "on"}}], ignore_error = True)
@@ -780,7 +787,9 @@ def qmp_start_resync(fd, peer):
         log.warning("Assuming peer failure")
         report_remote_failure(peer)
     else:
-        qmp_execute(fd, [{"execute": "blockdev-mirror", "arguments": {"device": "colo-disk0", "job-id": "resync", "target": "nbd0", "sync": "full", "on-target-error": "report", "on-source-error": "ignore", "auto-dismiss": False}}])
+        blockdev_mirror_arguments = {"device": "colo-disk0", "job-id": "resync", "target": "nbd0", "sync": "full", "on-target-error": "report", "on-source-error": "ignore", "auto-dismiss": False}
+        blockdev_mirror_arguments.update(config["blockdev-mirror-arguments"])
+        qmp_execute(fd, [{"execute": "blockdev-mirror", "arguments": blockdev_mirror_arguments}])
 
 def qmp_cancel_resync(fd):
     timeout = START_TIME + (OCF_RESKEY_CRM_meta_timeout*1/2/1000)
@@ -919,9 +928,11 @@ def qmp_start_migration(fd, peer):
             ])
 
     colo_compare_options = config["colo-compare-options"]
+    colo_compare_arguments = {"qom-type": "colo-compare", "id": "comp0", "primary_in": "comp_pri_in0", "secondary_in": "comp_sec_in0", "outdev": "comp_out0", "iothread": "iothread1", "vnet_hdr_support": vnet_hdr_support}
+    colo_compare_arguments.update(colo_compare_options)
     qmp_execute(fd, [
         {"execute": "object-add", "arguments": {"qom-type": "iothread", "id": "iothread1"}},
-        {"execute": "object-add", "arguments": {"qom-type": "colo-compare", "id": "comp0", "primary_in": "comp_pri_in0", "secondary_in": "comp_sec_in0", "outdev": "comp_out0", "iothread": "iothread1", "vnet_hdr_support": vnet_hdr_support}.update(colo_compare_options)}
+        {"execute": "object-add", "arguments": colo_compare_arguments}
         ])
 
     # Start migration
@@ -1050,7 +1061,7 @@ def qemu_colo_start():
     rotate_logfile(QEMU_LOG, 8)
     rotate_logfile(QMP_LOG, 8)
 
-    run_command(qemu_dummy_cmdline())
+    run_command(qemu_dummy_cmdline(config))
     run_command(colod_cmdline())
     fd = qmp_open()
     disk_size = qmp_get_disk_size(fd)
@@ -1181,11 +1192,13 @@ def _qemu_colo_stop(failed, shutdown_guest):
         qmp_execute(fd, [{"exec-colod": "autoquit"}])
         fd.close()
 
-    stop_qemu(failed, shutdown_guest)
+    result = stop_qemu(failed, shutdown_guest)
 
     while pid_running(COLOD_PIDFILE):
         log.debug("Waiting for colod to stop")
         time.sleep(1)
+
+    return result
 
 def calculate_master_score(status, shutdown_guest):
     primary = status["primary"]
@@ -1357,8 +1370,6 @@ status = qemu_colo_validate_all()
 # Exit here if our sanity checks fail, but try to continue if we need to stop
 if status != OCF_SUCCESS and OCF_ACTION != "stop":
     exit(status)
-
-setup_constants()
 
 try:
     if OCF_ACTION == "start":

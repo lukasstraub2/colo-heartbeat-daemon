@@ -222,20 +222,6 @@ static int _colod_qmp_event_wait_co(Coroutine *coroutine, ColodContext *ctx,
     return ret;
 }
 
-void colod_syslog(int pri, const char *fmt, ...) {
-    va_list args;
-    va_start(args, fmt);
-
-    if (do_syslog) {
-        vsyslog(pri, fmt, args);
-    } else {
-        vfprintf(stderr, fmt, args);
-        fwrite("\n", 1, 1, stderr);
-    }
-
-    va_end(args);
-}
-
 void colod_trace(const char *fmt, ...) {
     va_list args;
     va_start(args, fmt);
@@ -245,6 +231,27 @@ void colod_trace(const char *fmt, ...) {
         fflush(trace);
     }
 
+    va_end(args);
+}
+
+void colod_syslog(int pri, const char *fmt, ...) {
+    va_list args;
+
+    if (trace) {
+        va_start(args, fmt);
+        vfprintf(trace, fmt, args);
+        fwrite("\n", 1, 1, trace);
+        fflush(trace);
+        va_end(args);
+    }
+
+    va_start(args, fmt);
+    if (do_syslog) {
+        vsyslog(pri, fmt, args);
+    } else {
+        vfprintf(stderr, fmt, args);
+        fwrite("\n", 1, 1, stderr);
+    }
     va_end(args);
 }
 
@@ -400,6 +407,7 @@ static gboolean qemu_runnng(const gchar *status) {
     return !strcmp(status, "running")
             || !strcmp(status, "finish-migrate")
             || !strcmp(status, "colo")
+            || !strcmp(status, "prelaunch")
             || !strcmp(status, "paused");
 }
 
@@ -533,6 +541,7 @@ static gboolean colod_hup_cb(G_GNUC_UNUSED GIOChannel *channel,
     return G_SOURCE_REMOVE;
 }
 
+static Coroutine *colod_raise_timeout_coroutine(ColodContext *ctx);
 static void colod_qmp_event_cb(gpointer data, ColodQmpResult *result) {
     ColodContext *ctx = data;
     const gchar *event;
@@ -562,6 +571,8 @@ static void colod_qmp_event_cb(gpointer data, ColodQmpResult *result) {
         if (!strcmp(reason, "error")) {
             colod_event_queue(ctx, EVENT_FAILOVER_SYNC, "COLO_EXIT");
         }
+    } else if (!strcmp(event, "RESET")) {
+        colod_raise_timeout_coroutine(ctx);
     }
 }
 
@@ -1215,6 +1226,7 @@ static gboolean _colod_main_co(Coroutine *coroutine, ColodContext *ctx) {
     co_begin(gboolean, G_SOURCE_CONTINUE);
 
     if (!ctx->primary) {
+        colod_syslog(LOG_INFO, "starting in secondary mode");
         while (TRUE) {
             colod_replication_wait_co(event, ctx);
             assert(event_escalate(event));
@@ -1244,6 +1256,8 @@ static gboolean _colod_main_co(Coroutine *coroutine, ColodContext *ctx) {
                 abort();
             }
         }
+    } else {
+        colod_syslog(LOG_INFO, "starting in primary mode");
     }
 
     // Now running primary standalone

@@ -162,7 +162,7 @@ static ColodQmpResult *_qmp_read_line_co(Coroutine *coroutine,
                                            &CO len, state->timeout,
                                            &local_errp);
         if (ret == G_IO_STATUS_ERROR) {
-            colod_trace("%s:%u: ", __func__, __LINE__, local_errp->message);
+            log_error(local_errp->message);
             if (g_error_matches(local_errp, COLOD_ERROR, COLOD_ERROR_TIMEOUT)) {
                 if (yank) {
                     g_error_free(local_errp);
@@ -196,7 +196,8 @@ static ColodQmpResult *_qmp_read_line_co(Coroutine *coroutine,
         }
 
         if (!object_matches_json(result->json_root,
-                                 "{'event': 'MIGRATION_PASS'}")) {
+                                 "{'event': 'MIGRATION_PASS'}")
+                && !channel->discard_events) {
             colod_trace("%s", result->line);
         }
 
