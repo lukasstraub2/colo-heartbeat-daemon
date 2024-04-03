@@ -1,3 +1,11 @@
+/*
+ * COLO background daemon
+ *
+ * Copyright (c) Lukas Straub <lukasstraub2@web.de>
+ *
+ * This work is licensed under the terms of the GNU GPL, version 2 or later.
+ * See the COPYING file in the top-level directory.
+ */
 
 #include <glib-2.0/glib.h>
 

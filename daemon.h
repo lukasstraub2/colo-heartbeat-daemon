@@ -122,4 +122,11 @@ ColodQmpResult *_colod_execute_co(Coroutine *coroutine,
                                   GError **errp,
                                   const gchar *command);
 
+typedef enum ColodMessage {
+    MESSAGE_FAILOVER,
+    MESSAGE_FAILED
+} ColodMessage;
+
+void colod_cpg_send(ColodContext *ctx, uint32_t message);
+
 #endif // DAEMON_H
