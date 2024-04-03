@@ -34,6 +34,7 @@
 #include "util.h"
 #include "client.h"
 #include "qmp.h"
+#include "watchdog.h"
 #include "coroutine_stack.h"
 
 static FILE *trace = NULL;
@@ -295,7 +296,6 @@ int _colod_yank_co(Coroutine *coroutine, ColodContext *ctx, GError **errp) {
     return ret;
 }
 
-static void colod_watchdog_refresh(ColodWatchdog *state);
 ColodQmpResult *_colod_execute_nocheck_co(Coroutine *coroutine,
                                           ColodContext *ctx,
                                           GError **errp,
@@ -521,7 +521,6 @@ int colod_start_migration(ColodContext *ctx) {
     return 0;
 }
 
-static void colod_watchdog_inc_inhibit(ColodWatchdog *state);
 void colod_autoquit(ColodContext *ctx) {
     colod_watchdog_inc_inhibit(ctx->watchdog);
     colod_event_queue(ctx, EVENT_AUTOQUIT, "client request");
@@ -575,142 +574,6 @@ static void colod_qmp_event_cb(gpointer data, ColodQmpResult *result) {
     } else if (!strcmp(event, "RESET")) {
         colod_raise_timeout_coroutine(ctx);
     }
-}
-
-typedef struct ColodWatchdog {
-    Coroutine coroutine;
-    ColodContext *ctx;
-    guint interval;
-    guint timer_id;
-    guint inhibit;
-    gboolean quit;
-} ColodWatchdog;
-
-static void colod_watchdog_refresh(ColodWatchdog *state) {
-    if (state->timer_id) {
-        g_source_remove(state->timer_id);
-        state->timer_id = g_timeout_add_full(G_PRIORITY_LOW,
-                                             state->interval,
-                                             state->coroutine.cb.plain,
-                                             &state->coroutine, NULL);
-    }
-}
-
-static void colod_watchdog_inc_inhibit(ColodWatchdog *state) {
-    state->inhibit++;
-}
-
-static void colod_watchdog_dec_inhibit(ColodWatchdog *state) {
-    assert(state->inhibit != 0);
-
-    state->inhibit--;
-}
-
-static void colod_watchdog_event_cb(gpointer data,
-                                    G_GNUC_UNUSED ColodQmpResult *result) {
-    ColodWatchdog *state = data;
-    colod_watchdog_refresh(state);
-}
-
-static gboolean _colod_watchdog_co(Coroutine *coroutine);
-static gboolean colod_watchdog_co(gpointer data) {
-    ColodWatchdog *state = data;
-    Coroutine *coroutine = &state->coroutine;
-    gboolean ret;
-
-    co_enter(coroutine, ret = _colod_watchdog_co(coroutine));
-    if (coroutine->yield) {
-        return GPOINTER_TO_INT(coroutine->yield_value);
-    }
-
-    g_source_remove_by_user_data(coroutine);
-    assert(!g_source_remove_by_user_data(coroutine));
-    return ret;
-}
-
-static gboolean colod_watchdog_co_wrap(
-        G_GNUC_UNUSED GIOChannel *channel,
-        G_GNUC_UNUSED GIOCondition revents,
-        gpointer data) {
-    return colod_watchdog_co(data);
-}
-
-static gboolean _colod_watchdog_co(Coroutine *coroutine) {
-    ColodWatchdog *state = (ColodWatchdog *) coroutine;
-    int ret;
-    GError *local_errp = NULL;
-
-    co_begin(gboolean, G_SOURCE_CONTINUE);
-
-    while (!state->quit) {
-        state->timer_id = g_timeout_add_full(G_PRIORITY_LOW,
-                                             state->interval,
-                                             coroutine->cb.plain,
-                                             coroutine, NULL);
-        co_yield_int(G_SOURCE_REMOVE);
-        if (state->quit) {
-            break;
-        }
-        state->timer_id = 0;
-
-        if (state->inhibit || state->ctx->failed) {
-            continue;
-        }
-
-        co_recurse(ret = colod_check_health_co(coroutine, state->ctx, &local_errp));
-        if (ret < 0) {
-            log_error_fmt("colod check health: %s", local_errp->message);
-            g_error_free(local_errp);
-            local_errp = NULL;
-            return G_SOURCE_REMOVE;
-        }
-    }
-
-    co_end;
-
-    return G_SOURCE_REMOVE;
-}
-
-static void colo_watchdog_free(ColodWatchdog *state) {
-
-    if (!state->interval) {
-        g_free(state);
-        return;
-    }
-
-    state->quit = TRUE;
-
-    qmp_del_notify_event(state->ctx->qmp, colod_watchdog_event_cb, state);
-
-    if (state->timer_id) {
-        g_source_remove(state->timer_id);
-        state->timer_id = 0;
-        g_idle_add(colod_watchdog_co, &state->coroutine);
-    }
-
-    while (!state->coroutine.quit) {
-        g_main_context_iteration(g_main_context_default(), TRUE);
-    }
-
-    g_free(state);
-}
-
-static ColodWatchdog *colod_watchdog_new(ColodContext *ctx) {
-    ColodWatchdog *state;
-    Coroutine *coroutine;
-
-    state = g_new0(ColodWatchdog, 1);
-    coroutine = &state->coroutine;
-    coroutine->cb.plain = colod_watchdog_co;
-    coroutine->cb.iofunc = colod_watchdog_co_wrap;
-    state->ctx = ctx;
-    state->interval = ctx->watchdog_interval;
-
-    if (state->interval) {
-        g_idle_add(colod_watchdog_co, coroutine);
-        qmp_add_notify_event(ctx->qmp, colod_watchdog_event_cb, state);
-    }
-    return state;
 }
 
 typedef struct ColodRaiseCoroutine {
