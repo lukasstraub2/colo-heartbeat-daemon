@@ -309,7 +309,11 @@ static gboolean colod_client_co_wrap(G_GNUC_UNUSED GIOChannel *channel,
 
 static gboolean _colod_client_co(Coroutine *coroutine) {
     ColodClient *client = (ColodClient *) coroutine;
-    ColodClientCo *co;
+    struct {
+        gchar *line;
+        gsize len;
+        ColodQmpResult *request, *result;
+    } *co;
     GIOStatus ret;
     GError *local_errp = NULL;
 

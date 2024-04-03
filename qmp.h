@@ -26,19 +26,6 @@ typedef struct ColodQmpResult {
     gsize len;
 } ColodQmpResult;
 
-typedef struct ColodQmpCo {
-    gchar *line;
-    union {
-        gsize len;
-        guint timeout_source_id;
-    };
-    union {
-        gchar *command;
-        ColodWaitState *wait_state;
-    };
-    ColodQmpResult *result;
-} ColodQmpCo;
-
 typedef void (*QmpYankCallback)(gpointer user_data);
 typedef void (*QmpEventCallback)(gpointer user_data, ColodQmpResult *event);
 

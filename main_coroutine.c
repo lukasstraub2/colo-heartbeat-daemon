@@ -293,7 +293,11 @@ ColodQmpResult *_colod_execute_co(Coroutine *coroutine,
 static int _colod_execute_array_co(Coroutine *coroutine, ColodContext *ctx,
                                    JsonNode *array_node, gboolean ignore_errors,
                                    GError **errp) {
-    ColodArrayCo *co;
+    struct {
+        JsonArray *array;
+        gchar *line;
+        guint i, count;
+    } *co;
     int ret = 0;
     GError *local_errp = NULL;
 
@@ -348,7 +352,9 @@ static gboolean qemu_runnng(const gchar *status) {
 static int _qemu_query_status_co(Coroutine *coroutine, ColodContext *ctx,
                                  gboolean *primary, gboolean *replication,
                                  GError **errp) {
-    ColodCo *co;
+    struct {
+        ColodQmpResult *qemu_status, *colo_status;
+    } *co;
 
     co_frame(co, sizeof(*co));
     co_begin(int, -1);
@@ -573,7 +579,9 @@ static int _colod_stop_co(Coroutine *coroutine, ColodContext *ctx,
 #define colod_failover_co(...) \
     co_wrap(_colod_failover_co(__VA_ARGS__))
 static ColodEvent _colod_failover_co(Coroutine *coroutine, ColodContext *ctx) {
-    ColodCo *co;
+    struct {
+        JsonNode *commands;
+    } *co;
     int ret;
     GError *local_errp = NULL;
 
@@ -641,7 +649,9 @@ static ColodEvent _colod_failover_sync_co(Coroutine *coroutine,
     co_wrap(_colod_start_migration_co(__VA_ARGS__))
 static ColodEvent _colod_start_migration_co(Coroutine *coroutine,
                                             ColodContext *ctx) {
-    ColodCo *co;
+    struct {
+        guint event;
+    } *co;
     ColodQmpState *qmp = ctx->qmp;
     ColodQmpResult *qmp_result;
     ColodEvent result;

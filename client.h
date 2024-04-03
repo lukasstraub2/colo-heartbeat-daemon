@@ -15,19 +15,6 @@
 #include "base_types.h"
 #include "daemon.h"
 
-typedef struct ColodClientCo {
-    gchar *line;
-    gsize len;
-    union {
-        ColodQmpResult *result;
-        ColodQmpResult *qemu_status;
-    };
-    union {
-        ColodQmpResult *request;
-        ColodQmpResult *colo_status;
-    };
-} ColodClientCo;
-
 void client_listener_free(ColodClientListener *listener);
 ColodClientListener *client_listener_new(int socket, ColodContext *ctx);
 

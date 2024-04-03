@@ -60,27 +60,6 @@ typedef struct ColodContext {
     cpg_handle_t cpg_handle;
 } ColodContext;
 
-typedef struct ColodCo {
-    union {
-        JsonNode *commands;
-        guint event;
-    };
-    union {
-        ColodQmpResult *result;
-        ColodQmpResult *qemu_status;
-    };
-    union {
-        ColodQmpResult *request;
-        ColodQmpResult *colo_status;
-    };
-} ColodCo;
-
-typedef struct ColodArrayCo {
-    JsonArray *array;
-    gchar *line;
-    guint i, count;
-} ColodArrayCo;
-
 void colod_syslog(int pri, const char *fmt, ...)
      __attribute__ ((__format__ (__printf__, 2, 3)));
 #define log_error(message) \

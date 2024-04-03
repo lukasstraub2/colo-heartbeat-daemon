@@ -148,7 +148,10 @@ static ColodQmpResult *_qmp_read_line_co(Coroutine *coroutine,
                                          gboolean yank,
                                          gboolean skip_events,
                                          GError **errp) {
-    ColodQmpCo *co;
+    struct {
+        gchar *line;
+        gsize len;
+    } *co;
     ColodQmpResult *result;
     int ret;
     GError *local_errp = NULL;
@@ -336,7 +339,9 @@ static gchar *pick_yank_instances(JsonNode *result,
 
 int _qmp_yank_co(Coroutine *coroutine, ColodQmpState *state,
                  GError **errp) {
-    ColodQmpCo *co;
+    struct {
+        gchar *command;
+    } *co;
     ColodQmpResult *result;
 
     co_frame(co, sizeof(*co));
@@ -504,7 +509,10 @@ static void qmp_wait_event_cb(gpointer data, ColodQmpResult *result) {
 
 int _qmp_wait_event_co(Coroutine *coroutine, ColodQmpState *state,
                        guint timeout, const gchar *match, GError **errp) {
-    ColodQmpCo *co;
+    struct {
+        ColodWaitState *wait_state;
+        guint timeout_source_id;
+    } *co;
     JsonNode *parsed;
     int ret = 0;
 
