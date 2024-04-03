@@ -6,7 +6,7 @@ LDFLAGS=-lcorosync_common -lcpg `pkg-config --libs glib-2.0 json-glib-1.0`
 %.o: %.c *.h
 	$(CC) -c -o $@ $< $(CFLAGS)
 
-colod: util.o qemu_util.o json_util.o coutil.o qmp.o client.o watchdog.o main_coroutine.o daemon.o
+colod: util.o qemu_util.o json_util.o coutil.o qmp.o client.o watchdog.o cpg.o main_coroutine.o daemon.o
 	$(CC) -o $@ $^ $(CFLAGS) $(LDFLAGS)
 
 .PHONY: clean

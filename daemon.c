@@ -23,9 +23,6 @@
 #include <glib-2.0/glib.h>
 #include <glib-2.0/glib-unix.h>
 
-#include <corosync/cpg.h>
-#include <corosync/corotypes.h>
-
 #include "base_types.h"
 #include "daemon.h"
 #include "main_coroutine.h"
@@ -35,6 +32,7 @@
 #include "util.h"
 #include "client.h"
 #include "qmp.h"
+#include "cpg.h"
 #include "watchdog.h"
 
 static FILE *trace = NULL;
@@ -73,94 +71,7 @@ void colod_syslog(int pri, const char *fmt, ...) {
     va_end(args);
 }
 
-static void colod_cpg_deliver(cpg_handle_t handle,
-                              G_GNUC_UNUSED const struct cpg_name *group_name,
-                              uint32_t nodeid,
-                              G_GNUC_UNUSED uint32_t pid,
-                              void *msg,
-                              size_t msg_len) {
-    ColodContext *ctx;
-    uint32_t conv;
-    uint32_t myid;
 
-    cpg_context_get(handle, (void**) &ctx);
-    cpg_local_get(handle, &myid);
-
-    if (msg_len != sizeof(conv)) {
-        log_error_fmt("Got message of invalid length %zu", msg_len);
-        return;
-    }
-    conv = ntohl((*(uint32_t*)msg));
-
-    switch (conv) {
-        case MESSAGE_FAILOVER:
-            if (nodeid == myid) {
-                colod_event_queue(ctx, EVENT_FAILOVER_WIN, "");
-            } else {
-                colod_event_queue(ctx, EVENT_PEER_FAILOVER, "");
-            }
-        break;
-
-        case MESSAGE_FAILED:
-            if (nodeid != myid) {
-                log_error("Peer failed");
-                ctx->peer_failed = TRUE;
-                colod_event_queue(ctx, EVENT_PEER_FAILED, "got MESSAGE_FAILED");
-            }
-        break;
-    }
-}
-
-static void colod_cpg_confchg(cpg_handle_t handle,
-    G_GNUC_UNUSED const struct cpg_name *group_name,
-    G_GNUC_UNUSED const struct cpg_address *member_list,
-    G_GNUC_UNUSED size_t member_list_entries,
-    G_GNUC_UNUSED const struct cpg_address *left_list,
-    size_t left_list_entries,
-    G_GNUC_UNUSED const struct cpg_address *joined_list,
-    G_GNUC_UNUSED size_t joined_list_entries) {
-    ColodContext *ctx;
-
-    cpg_context_get(handle, (void**) &ctx);
-
-    if (left_list_entries) {
-        log_error("Peer failed");
-        ctx->peer_failed = TRUE;
-        colod_event_queue(ctx, EVENT_PEER_FAILED, "peer left cpg group");
-    }
-}
-
-static void colod_cpg_totem_confchg(G_GNUC_UNUSED cpg_handle_t handle,
-                                    G_GNUC_UNUSED struct cpg_ring_id ring_id,
-                                    G_GNUC_UNUSED uint32_t member_list_entries,
-                                    G_GNUC_UNUSED const uint32_t *member_list) {
-
-}
-
-static gboolean colod_cpg_readable(G_GNUC_UNUSED gint fd,
-                                   G_GNUC_UNUSED GIOCondition events,
-                                   gpointer data) {
-    ColodContext *ctx = data;
-    cpg_dispatch(ctx->cpg_handle, CS_DISPATCH_ALL);
-    return G_SOURCE_CONTINUE;
-}
-
-void colod_cpg_send(ColodContext *ctx, uint32_t message) {
-    struct iovec vec;
-    uint32_t conv = htonl(message);
-
-    if (ctx->disable_cpg) {
-        if (message == MESSAGE_FAILOVER) {
-            colod_event_queue(ctx, EVENT_FAILOVER_WIN,
-                              "running without corosync");
-        }
-        return;
-    }
-
-    vec.iov_len = sizeof(conv);
-    vec.iov_base = &conv;
-    cpg_mcast_joined(ctx->cpg_handle, CPG_TYPE_AGREED, &vec, 1);
-}
 
 static gboolean colod_hup_cb(G_GNUC_UNUSED GIOChannel *channel,
                              G_GNUC_UNUSED GIOCondition revents,
@@ -211,8 +122,8 @@ static void colod_mainloop(ColodContext *ctx) {
     GError *local_errp = NULL;
 
     // g_main_context_default creates the global context on demand
-    ctx->mainctx = g_main_context_default();
-    ctx->mainloop = g_main_loop_new(ctx->mainctx, FALSE);
+    GMainContext *main_context = g_main_context_default();
+    ctx->mainloop = g_main_loop_new(main_context, FALSE);
 
     ctx->qmp = qmp_new(ctx->qmp1_fd, ctx->qmp2_fd, ctx->qmp_timeout_low,
                        &local_errp);
@@ -229,8 +140,13 @@ static void colod_mainloop(ColodContext *ctx) {
     qmp_add_notify_event(ctx->qmp, colod_qmp_event_cb, ctx);
     qmp_hup_source(ctx->qmp, colod_hup_cb, ctx);
     if (!ctx->disable_cpg) {
-        ctx->cpg_source_id = g_unix_fd_add(ctx->cpg_fd, G_IO_IN | G_IO_HUP,
-                                           colod_cpg_readable, ctx);
+        ctx->cpg_source_id = cpg_new(ctx->cpg_handle, ctx, &local_errp);
+        if (local_errp) {
+            colod_syslog(LOG_ERR, "Failed to initialize cpg: %s",
+                         local_errp->message);
+            g_error_free(local_errp);
+            exit(EXIT_FAILURE);
+        }
     }
 
     g_main_loop_run(ctx->mainloop);
@@ -247,57 +163,7 @@ static void colod_mainloop(ColodContext *ctx) {
     client_listener_free(ctx->listener);
     qmp_free(ctx->qmp);
 
-    g_main_context_unref(ctx->mainctx);
-}
-
-cpg_model_v1_data_t cpg_data = {
-    CPG_MODEL_V1,
-    colod_cpg_deliver,
-    colod_cpg_confchg,
-    colod_cpg_totem_confchg,
-    0
-};
-
-static int colod_open_cpg(ColodContext *ctx, GError **errp) {
-    cs_error_t ret;
-    int fd;
-    struct cpg_name name;
-
-    if (strlen(ctx->instance_name) >= sizeof(name.value)) {
-        colod_error_set(errp, "Instance name too long");
-        return -1;
-    }
-    strcpy(name.value, ctx->instance_name);
-    name.length = strlen(name.value);
-
-    ret = cpg_model_initialize(&ctx->cpg_handle, CPG_MODEL_V1,
-                               (cpg_model_data_t*) &cpg_data, ctx);
-    if (ret != CS_OK) {
-        colod_error_set(errp, "Failed to initialize cpg: %s", cs_strerror(ret));
-        return -1;
-    }
-
-    ret = cpg_join(ctx->cpg_handle, &name);
-    if (ret != CS_OK) {
-        colod_error_set(errp, "Failed to join cpg group: %s", cs_strerror(ret));
-        goto err;
-    }
-
-    ret = cpg_fd_get(ctx->cpg_handle, &fd);
-    if (ret != CS_OK) {
-        colod_error_set(errp, "Failed to get cpg file descriptor: %s",
-                        cs_strerror(ret));
-        goto err_joined;
-    }
-
-    ctx->cpg_fd = fd;
-    return 0;
-
-err_joined:
-    cpg_leave(ctx->cpg_handle, &name);
-err:
-    cpg_finalize(ctx->cpg_handle);
-    return -1;
+    g_main_context_unref(main_context);
 }
 
 static int colod_open_mngmt(ColodContext *ctx, GError **errp) {

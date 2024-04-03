@@ -17,6 +17,7 @@
 #include "coroutine_stack.h"
 #include "client.h"
 #include "watchdog.h"
+#include "cpg.h"
 #include "json_util.h"
 
 static const gchar *event_str(ColodEvent event) {
