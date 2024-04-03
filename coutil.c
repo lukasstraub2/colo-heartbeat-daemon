@@ -20,9 +20,12 @@ GIOStatus _colod_channel_read_line_timeout_co(Coroutine *coroutine,
                                               gsize *len,
                                               guint timeout,
                                               GError **errp) {
-    CoroutineUtilCo *co = co_stack(utilco);
+    struct {
+        guint timeout_source_id, io_source_id;
+    } *co;
     GIOStatus ret;
 
+    co_frame(co, sizeof(*co));
     co_begin(GIOStatus, 0);
 
     if (timeout) {
@@ -74,11 +77,14 @@ GIOStatus _colod_channel_write_timeout_co(Coroutine *coroutine,
                                           gsize len,
                                           guint timeout,
                                           GError **errp) {
-    CoroutineUtilCo *co = co_stack(utilco);
+    struct {
+        guint timeout_source_id, io_source_id;
+        gsize offset;
+    } *co;
     GIOStatus ret;
     gsize write_len;
-    CO offset = 0;
 
+    co_frame(co, sizeof(*co));
     co_begin(GIOStatus, 0);
 
     if (timeout) {
@@ -86,6 +92,7 @@ GIOStatus _colod_channel_write_timeout_co(Coroutine *coroutine,
                                              coroutine);
     }
 
+    CO offset = 0;
     while (CO offset < len) {
         ret = g_io_channel_write_chars(channel,
                                        buf + CO offset,

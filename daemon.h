@@ -90,8 +90,8 @@ void colod_syslog(int pri, const char *fmt, ...)
 
 void colod_trace(const char *fmt, ...);
 
-#define colod_check_health_co(result, ctx, errp) \
-    co_call_co((result), _colod_check_health_co, (ctx), (errp))
+#define colod_check_health_co(...) \
+    co_wrap(_colod_check_health_co(__VA_ARGS__))
 int _colod_check_health_co(Coroutine *coroutine, ColodContext *ctx,
                            GError **errp);
 
@@ -104,19 +104,19 @@ void colod_autoquit(ColodContext *ctx);
 void colod_quit(ColodContext *ctx);
 void colod_qemu_failed(ColodContext *ctx);
 
-#define colod_yank(ret, ctx, errp) \
-    co_call_co((ret), _colod_yank_co, (ctx), (errp))
+#define colod_yank(...) \
+    co_wrap(_colod_yank_co(__VA_ARGS__))
 int _colod_yank_co(Coroutine *coroutine, ColodContext *ctx, GError **errp);
 
-#define colod_execute_nocheck_co(result, ctx, errp, command) \
-    co_call_co((result), _colod_execute_nocheck_co, (ctx), (errp), (command))
+#define colod_execute_nocheck_co(...) \
+    co_wrap(_colod_execute_nocheck_co(__VA_ARGS__))
 ColodQmpResult *_colod_execute_nocheck_co(Coroutine *coroutine,
                                           ColodContext *ctx,
                                           GError **errp,
                                           const gchar *command);
 
-#define colod_execute_co(result, ctx, errp, command) \
-    co_call_co((result), _colod_execute_co, (ctx), (errp), (command))
+#define colod_execute_co(...) \
+    co_wrap(_colod_execute_co(__VA_ARGS__))
 ColodQmpResult *_colod_execute_co(Coroutine *coroutine,
                                   ColodContext *ctx,
                                   GError **errp,

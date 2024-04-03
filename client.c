@@ -63,9 +63,8 @@ static ColodQmpResult *create_error_reply(const gchar *message) {
     return result;
 }
 
-#define handle_query_status_co(result, ctx) \
-    co_call_co((result), _handle_query_status_co, (ctx))
-
+#define handle_query_status_co(...) \
+    co_wrap(_handle_query_status_co(__VA_ARGS__))
 static ColodQmpResult *_handle_query_status_co(Coroutine *coroutine,
                                                ColodContext *ctx) {
     int ret;
@@ -76,7 +75,7 @@ static ColodQmpResult *_handle_query_status_co(Coroutine *coroutine,
     co_begin(ColodQmpResult*, NULL);
 
     if (!ctx->failed) {
-        colod_check_health_co(ret, ctx, &local_errp);
+        co_recurse(ret = colod_check_health_co(coroutine, ctx, &local_errp));
         if (coroutine->yield) {
             return NULL;
         }
@@ -215,8 +214,8 @@ static ColodQmpResult *handle_set_yank(ColodQmpResult *request,
     return create_reply("{}");
 }
 
-#define handle_yank_co(result, ctx) \
-    co_call_co((result), _handle_yank_co, (ctx))
+#define handle_yank_co(...) \
+    co_wrap(_handle_yank_co(__VA_ARGS__))
 static ColodQmpResult *_handle_yank_co(Coroutine *coroutine,
                                        ColodContext *ctx) {
     ColodQmpResult *result;
@@ -236,8 +235,8 @@ static ColodQmpResult *_handle_yank_co(Coroutine *coroutine,
     return create_reply("{}");
 }
 
-#define handle_stop_co(result, client) \
-    co_call_co((result), _handle_stop_co, (client))
+#define handle_stop_co(...) \
+    co_wrap(_handle_stop_co(__VA_ARGS__))
 static ColodQmpResult *_handle_stop_co(Coroutine *coroutine,
                                        ColodClient *client) {
     ColodQmpResult *result;
@@ -258,8 +257,8 @@ static ColodQmpResult *_handle_stop_co(Coroutine *coroutine,
     return result;
 }
 
-#define handle_cont_co(result, client) \
-    co_call_co((result), _handle_cont_co, (client))
+#define handle_cont_co(...) \
+    co_wrap(_handle_cont_co(__VA_ARGS__))
 static ColodQmpResult *_handle_cont_co(Coroutine *coroutine,
                                        ColodClient *client) {
     ColodQmpResult *result;
@@ -292,7 +291,7 @@ static gboolean colod_client_co(gpointer data) {
     Coroutine *coroutine = &client->coroutine;
     gboolean ret;
 
-    co_enter(ret, coroutine, _colod_client_co);
+    co_enter(coroutine, ret = _colod_client_co(coroutine));
     if (coroutine->yield) {
         return GPOINTER_TO_INT(coroutine->yield_value);
     }
@@ -310,17 +309,18 @@ static gboolean colod_client_co_wrap(G_GNUC_UNUSED GIOChannel *channel,
 
 static gboolean _colod_client_co(Coroutine *coroutine) {
     ColodClient *client = (ColodClient *) coroutine;
-    ColodClientCo *co = co_stack(clientco);
+    ColodClientCo *co;
     GIOStatus ret;
     GError *local_errp = NULL;
 
+    co_frame(co, sizeof(*co));
     co_begin(gboolean, G_SOURCE_CONTINUE);
 
     while (!client->quit) {
         CO line = NULL;
         client->busy = FALSE;
-        colod_channel_read_line_co(ret, client->channel, &CO line,
-                                   &CO len, &local_errp);
+        co_recurse(ret = colod_channel_read_line_co(coroutine, client->channel,
+                                                    &CO line, &CO len, &local_errp));
         if (client->quit) {
             g_free(CO line);
             break;
@@ -344,7 +344,7 @@ static gboolean _colod_client_co(Coroutine *coroutine) {
                 CO result = create_error_reply("Could not get exec-colod "
                                                "member");
             } else if (!strcmp(command, "query-status")) {
-                handle_query_status_co(CO result, client->ctx);
+                co_recurse(CO result = handle_query_status_co(coroutine, client->ctx));
             } else if (!strcmp(command, "query-store")) {
                 CO result = handle_query_store(client);
             } else if (!strcmp(command, "set-store")) {
@@ -366,11 +366,11 @@ static gboolean _colod_client_co(Coroutine *coroutine) {
             } else if (!strcmp(command, "set-yank")) {
                 CO result = handle_set_yank(CO request, client->ctx);
             } else if (!strcmp(command, "yank")) {
-                handle_yank_co(CO result, client->ctx);
+                co_recurse(CO result = handle_yank_co(coroutine, client->ctx));
             } else if (!strcmp(command, "stop")) {
-                handle_stop_co(CO result, client);
+                co_recurse(CO result = handle_stop_co(coroutine, client));
             } else if (!strcmp(command, "cont")) {
-                handle_cont_co(CO result, client);
+                co_recurse(CO result = handle_cont_co(coroutine, client));
             } else if (!strcmp(command, "clear-peer-status")) {
                 client->ctx->peer_failed = FALSE;
                 CO result = create_reply("{}");
@@ -378,8 +378,9 @@ static gboolean _colod_client_co(Coroutine *coroutine) {
                 CO result = create_error_reply("Unknown command");
             }
         } else {
-            colod_execute_nocheck_co(CO result, client->ctx, &local_errp,
-                                     CO request->line);
+            co_recurse(CO result = colod_execute_nocheck_co(coroutine, client->ctx,
+                                                            &local_errp,
+                                                            CO request->line));
             if (!CO result) {
                 CO result = create_error_reply(local_errp->message);
                 g_error_free(local_errp);
@@ -390,8 +391,10 @@ static gboolean _colod_client_co(Coroutine *coroutine) {
         qmp_result_free(CO request);
 
         colod_trace("client: %s", CO result->line);
-        colod_channel_write_timeout_co(ret, client->channel, CO result->line,
-                                       CO result->len, 1000, &local_errp);
+        co_recurse(ret = colod_channel_write_timeout_co(coroutine, client->channel,
+                                                        CO result->line,
+                                                        CO result->len, 1000,
+                                                        &local_errp));
         if (ret != G_IO_STATUS_NORMAL) {
             qmp_result_free(CO result);
             goto error_client;
@@ -410,8 +413,8 @@ error_client:
     }
 
     if (client->stopped_qemu) {
-        colod_execute_co(CO result, client->ctx, &local_errp,
-                         "{'execute': 'cont'}\n");
+        co_recurse(CO result = colod_execute_co(coroutine, client->ctx, &local_errp,
+                                                "{'execute': 'cont'}\n"));
         if (!CO result) {
             log_error(local_errp->message);
             g_error_free(local_errp);
