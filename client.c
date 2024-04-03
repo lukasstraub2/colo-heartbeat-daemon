@@ -11,6 +11,7 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <syslog.h>
+#include <sys/socket.h>
 
 #include <glib-2.0/glib.h>
 #include <glib-2.0/glib-unix.h>

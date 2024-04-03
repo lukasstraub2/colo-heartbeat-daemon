@@ -623,7 +623,7 @@ static ColodEvent _colod_failover_sync_co(Coroutine *coroutine,
 
     co_begin(ColodEvent, EVENT_FAILED);
 
-    colod_cpg_send(ctx, MESSAGE_FAILOVER);
+    colod_cpg_send(ctx->cpg, MESSAGE_FAILOVER);
 
     while (TRUE) {
         ColodEvent event;
@@ -989,7 +989,7 @@ failed:
     }
 
     ctx->failed = TRUE;
-    colod_cpg_send(ctx, MESSAGE_FAILED);
+    colod_cpg_send(ctx->cpg, MESSAGE_FAILED);
 
     if (event == EVENT_NONE) {
         log_error("Failed with EVENT_NONE");
@@ -1027,7 +1027,7 @@ failed:
 
 autoquit:
     ctx->failed = TRUE;
-    colod_cpg_send(ctx, MESSAGE_FAILED);
+    colod_cpg_send(ctx->cpg, MESSAGE_FAILED);
 
     while (TRUE) {
         ColodEvent event;

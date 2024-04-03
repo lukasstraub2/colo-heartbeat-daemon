@@ -3,6 +3,8 @@
 
 #include "daemon.h"
 
+typedef enum ColodEvent ColodEvent;
+
 enum ColodEvent {
     EVENT_NONE = 0,
     EVENT_FAILED,

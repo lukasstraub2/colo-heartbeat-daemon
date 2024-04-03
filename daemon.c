@@ -127,36 +127,34 @@ static void colod_mainloop(ColodContext *ctx) {
 
     ctx->qmp = qmp_new(ctx->qmp1_fd, ctx->qmp2_fd, ctx->qmp_timeout_low,
                        &local_errp);
-    if (local_errp) {
+    if (!ctx->qmp) {
         colod_syslog(LOG_ERR, "Failed to initialize qmp: %s",
                      local_errp->message);
         g_error_free(local_errp);
         exit(EXIT_FAILURE);
     }
 
+    colod_main_coroutine(ctx);
+
     ctx->listener = client_listener_new(ctx->mngmt_listen_fd, ctx);
     ctx->watchdog = colod_watchdog_new(ctx);
-    colod_main_coroutine(ctx);
+    ctx->cpg = cpg_new(ctx->cpg, &local_errp);
+    if (!ctx->cpg) {
+        colod_syslog(LOG_ERR, "Failed to initialize cpg: %s",
+                     local_errp->message);
+        g_error_free(local_errp);
+        exit(EXIT_FAILURE);
+    }
+
     qmp_add_notify_event(ctx->qmp, colod_qmp_event_cb, ctx);
     qmp_hup_source(ctx->qmp, colod_hup_cb, ctx);
-    if (!ctx->disable_cpg) {
-        ctx->cpg_source_id = cpg_new(ctx->cpg_handle, ctx, &local_errp);
-        if (local_errp) {
-            colod_syslog(LOG_ERR, "Failed to initialize cpg: %s",
-                         local_errp->message);
-            g_error_free(local_errp);
-            exit(EXIT_FAILURE);
-        }
-    }
 
     g_main_loop_run(ctx->mainloop);
     g_main_loop_unref(ctx->mainloop);
     ctx->mainloop = NULL;
 
-    if (ctx->cpg_source_id) {
-        g_source_remove(ctx->cpg_source_id);
-    }
     qmp_del_notify_event(ctx->qmp, colod_qmp_event_cb, ctx);
+    cpg_free(ctx->cpg);
     colod_raise_timeout_coroutine_free(ctx);
     colod_main_free(ctx);
     colo_watchdog_free(ctx->watchdog);
@@ -284,7 +282,6 @@ static int colod_parse_options(ColodContext *ctx, int *argc, char ***argv,
     {
         {"daemonize", 'd', 0, G_OPTION_ARG_NONE, &ctx->daemonize, "Daemonize", NULL},
         {"syslog", 's', 0, G_OPTION_ARG_NONE, &do_syslog, "Log to syslog", NULL},
-        {"disable_cpg", 0, 0, G_OPTION_ARG_NONE, &ctx->disable_cpg, "Disable corosync communication", NULL},
         {"instance_name", 'i', 0, G_OPTION_ARG_STRING, &ctx->instance_name, "The CPG group name for corosync communication", NULL},
         {"node_name", 'n', 0, G_OPTION_ARG_STRING, &ctx->node_name, "The node hostname", NULL},
         {"base_directory", 'b', 0, G_OPTION_ARG_FILENAME, &ctx->base_dir, "The base directory to store logs and sockets", NULL},
@@ -353,11 +350,9 @@ int main(int argc, char **argv) {
         goto err;
     }
 
-    if (!ctx->disable_cpg) {
-        ret = colod_open_cpg(ctx, &errp);
-        if (ret < 0) {
-            goto err;
-        }
+    ctx->cpg = colod_open_cpg(ctx, &errp);
+    if (!ctx->cpg) {
+        goto err;
     }
 
     if (ctx->daemonize) {

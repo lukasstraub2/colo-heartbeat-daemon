@@ -15,21 +15,15 @@
 
 #include <glib-2.0/glib.h>
 
-#include <corosync/cpg.h>
-#include <corosync/corotypes.h>
-
 #include "base_types.h"
 #include "util.h"
 #include "qmp.h"
-
-typedef enum ColodEvent ColodEvent;
 
 typedef struct ColodContext {
     /* Parameters */
     gchar *node_name, *instance_name, *base_dir;
     gchar *qmp_path, *qmp_yank_path;
     gboolean daemonize;
-    gboolean disable_cpg;
     guint qmp_timeout_low, qmp_timeout_high;
     guint checkpoint_interval;
     guint watchdog_interval;
@@ -39,7 +33,6 @@ typedef struct ColodContext {
     GMainLoop *mainloop;
 
     int qmp1_fd, qmp2_fd, mngmt_listen_fd;
-    guint cpg_source_id;
 
     ColodWatchdog *watchdog;
     Coroutine *raise_timeout_coroutine;
@@ -56,7 +49,7 @@ typedef struct ColodContext {
     gboolean primary;
     gboolean replication, peer_failover, peer_failed;
 
-    cpg_handle_t cpg_handle;
+    Cpg *cpg;
 } ColodContext;
 
 void colod_syslog(int pri, const char *fmt, ...)
