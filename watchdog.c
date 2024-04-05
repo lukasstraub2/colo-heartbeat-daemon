@@ -10,6 +10,15 @@
 #include <glib-2.0/glib.h>
 
 #include "watchdog.h"
+#include "main_coroutine.h"
+
+typedef struct ColodWatchdog {
+    Coroutine coroutine;
+    ColodContext *ctx;
+    guint interval;
+    guint timer_id;
+    gboolean quit;
+} ColodWatchdog;
 
 void colod_watchdog_refresh(ColodWatchdog *state) {
     if (state->timer_id) {
@@ -19,16 +28,6 @@ void colod_watchdog_refresh(ColodWatchdog *state) {
                                              state->coroutine.cb.plain,
                                              &state->coroutine, NULL);
     }
-}
-
-void colod_watchdog_inc_inhibit(ColodWatchdog *state) {
-    state->inhibit++;
-}
-
-void colod_watchdog_dec_inhibit(ColodWatchdog *state) {
-    assert(state->inhibit != 0);
-
-    state->inhibit--;
 }
 
 static void colod_watchdog_event_cb(gpointer data,
@@ -78,11 +77,8 @@ static gboolean _colod_watchdog_co(Coroutine *coroutine) {
         }
         state->timer_id = 0;
 
-        if (state->inhibit || state->ctx->failed) {
-            continue;
-        }
-
-        co_recurse(ret = colod_check_health_co(coroutine, state->ctx, &local_errp));
+        co_recurse(ret = colod_check_health_co(coroutine, state->ctx->main_coroutine,
+                                               &local_errp));
         if (ret < 0) {
             log_error_fmt("colod check health: %s", local_errp->message);
             g_error_free(local_errp);

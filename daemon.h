@@ -28,6 +28,7 @@ typedef struct ColodContext {
     guint checkpoint_interval;
     guint watchdog_interval;
     gboolean do_trace;
+    gboolean primary_startup;
 
     /* Variables */
     GMainLoop *mainloop;
@@ -38,16 +39,11 @@ typedef struct ColodContext {
     Coroutine *raise_timeout_coroutine;
     JsonNode *migration_commands;
     JsonNode *failover_primary_commands, *failover_secondary_commands;
-    Coroutine *main_coroutine;
-    ColodQueue events, critical_events;
-    gboolean pending_action, transitioning;
-    gboolean failed, yellow, qemu_quit;
+    ColodMainCoroutine *main_coroutine;
 
     ColodClientListener *listener;
 
     ColodQmpState *qmp;
-    gboolean primary;
-    gboolean replication, peer_failover, peer_failed;
 
     Cpg *cpg;
 } ColodContext;
@@ -60,37 +56,5 @@ void colod_syslog(int pri, const char *fmt, ...)
     colod_syslog(LOG_ERR, "%s: " fmt, __func__, ##__VA_ARGS__)
 
 void colod_trace(const char *fmt, ...);
-
-#define colod_check_health_co(...) \
-    co_wrap(_colod_check_health_co(__VA_ARGS__))
-int _colod_check_health_co(Coroutine *coroutine, ColodContext *ctx,
-                           GError **errp);
-
-void colod_set_migration_commands(ColodContext *ctx, JsonNode *commands);
-void colod_set_primary_commands(ColodContext *ctx, JsonNode *commands);
-void colod_set_secondary_commands(ColodContext *ctx, JsonNode *commands);
-
-int colod_start_migration(ColodContext *ctx);
-void colod_autoquit(ColodContext *ctx);
-void colod_quit(ColodContext *ctx);
-void colod_qemu_failed(ColodContext *ctx);
-
-#define colod_yank(...) \
-    co_wrap(_colod_yank_co(__VA_ARGS__))
-int _colod_yank_co(Coroutine *coroutine, ColodContext *ctx, GError **errp);
-
-#define colod_execute_nocheck_co(...) \
-    co_wrap(_colod_execute_nocheck_co(__VA_ARGS__))
-ColodQmpResult *_colod_execute_nocheck_co(Coroutine *coroutine,
-                                          ColodContext *ctx,
-                                          GError **errp,
-                                          const gchar *command);
-
-#define colod_execute_co(...) \
-    co_wrap(_colod_execute_co(__VA_ARGS__))
-ColodQmpResult *_colod_execute_co(Coroutine *coroutine,
-                                  ColodContext *ctx,
-                                  GError **errp,
-                                  const gchar *command);
 
 #endif // DAEMON_H

@@ -21,6 +21,7 @@
 #include "daemon.h"
 #include "json_util.h"
 #include "qmp.h"
+#include "main_coroutine.h"
 #include "coroutine_stack.h"
 
 
@@ -70,36 +71,37 @@ static ColodQmpResult *_handle_query_status_co(Coroutine *coroutine,
                                                ColodContext *ctx) {
     int ret;
     ColodQmpResult *result;
+    ColodState state;
     gboolean failed = FALSE;
     GError *local_errp = NULL;
 
     co_begin(ColodQmpResult*, NULL);
 
-    if (!ctx->failed) {
-        co_recurse(ret = colod_check_health_co(coroutine, ctx, &local_errp));
-        if (coroutine->yield) {
-            return NULL;
-        }
-        if (ret < 0) {
-            log_error(local_errp->message);
-            g_error_free(local_errp);
-            local_errp = NULL;
-            failed = TRUE;
-        }
+    co_recurse(ret = colod_check_health_co(coroutine, ctx->main_coroutine, &local_errp));
+    if (coroutine->yield) {
+        return NULL;
+    }
+    if (ret < 0) {
+        log_error(local_errp->message);
+        g_error_free(local_errp);
+        local_errp = NULL;
+        failed = TRUE;
     }
 
     co_end;
 
+
+    colod_query_status(ctx->main_coroutine, &state);
     gchar *reply;
     reply = g_strdup_printf("{\"return\": "
                             "{\"primary\": %s, \"replication\": %s,"
                             " \"failed\": %s, \"peer-failover\": %s,"
                             " \"peer-failed\": %s}}\n",
-                            bool_to_json(ctx->primary),
-                            bool_to_json(ctx->replication),
-                            bool_to_json(failed || ctx->failed),
-                            bool_to_json(ctx->peer_failover),
-                            bool_to_json(ctx->peer_failed));
+                            bool_to_json(state.primary),
+                            bool_to_json(state.replication),
+                            bool_to_json(failed || state.failed),
+                            bool_to_json(state.peer_failover),
+                            bool_to_json(state.peer_failed));
 
     result = qmp_parse_result(reply, strlen(reply), NULL);
     assert(result);
@@ -141,13 +143,13 @@ static ColodQmpResult *handle_set_store(ColodQmpResult *request,
 }
 
 static ColodQmpResult *handle_quit(ColodContext *ctx) {
-    colod_quit(ctx);
+    colod_quit(ctx->main_coroutine);
 
     return create_reply("{}");
 }
 
 static ColodQmpResult *handle_autoquit(ColodContext *ctx) {
-    colod_autoquit(ctx);
+    colod_autoquit(ctx->main_coroutine);
 
     return create_reply("{}");
 }
@@ -179,7 +181,7 @@ static ColodQmpResult *handle_set_migration(ColodQmpResult *request,
 static ColodQmpResult *handle_start_migration(ColodContext *ctx) {
     int ret;
 
-    ret = colod_start_migration(ctx);
+    ret = colod_start_migration(ctx->main_coroutine);
     if (ret < 0) {
         return create_error_reply("Pending actions");
     }
@@ -223,7 +225,7 @@ static ColodQmpResult *_handle_yank_co(Coroutine *coroutine,
     int ret;
     GError *local_errp = NULL;
 
-    ret = _colod_yank_co(coroutine, ctx, &local_errp);
+    ret = _colod_yank_co(coroutine, ctx->main_coroutine, &local_errp);
     if (coroutine->yield) {
         return NULL;
     }
@@ -243,7 +245,7 @@ static ColodQmpResult *_handle_stop_co(Coroutine *coroutine,
     ColodQmpResult *result;
     GError *local_errp = NULL;
 
-    result = _colod_execute_co(coroutine, client->ctx, &local_errp,
+    result = _colod_execute_co(coroutine, client->ctx->main_coroutine, &local_errp,
                                "{'execute': 'stop'}\n");
     if (coroutine->yield) {
         return NULL;
@@ -265,7 +267,7 @@ static ColodQmpResult *_handle_cont_co(Coroutine *coroutine,
     ColodQmpResult *result;
     GError *local_errp = NULL;
 
-    result = _colod_execute_co(coroutine, client->ctx, &local_errp,
+    result = _colod_execute_co(coroutine, client->ctx->main_coroutine, &local_errp,
                                "{'execute': 'cont'}\n");
     if (coroutine->yield) {
         return NULL;
@@ -377,13 +379,14 @@ static gboolean _colod_client_co(Coroutine *coroutine) {
             } else if (!strcmp(command, "cont")) {
                 co_recurse(CO result = handle_cont_co(coroutine, client));
             } else if (!strcmp(command, "clear-peer-status")) {
-                client->ctx->peer_failed = FALSE;
+                colod_clear_peer_status(client->ctx->main_coroutine);
                 CO result = create_reply("{}");
             } else {
                 CO result = create_error_reply("Unknown command");
             }
         } else {
-            co_recurse(CO result = colod_execute_nocheck_co(coroutine, client->ctx,
+            co_recurse(CO result = colod_execute_nocheck_co(coroutine,
+                                                            client->ctx->main_coroutine,
                                                             &local_errp,
                                                             CO request->line));
             if (!CO result) {
@@ -418,12 +421,13 @@ error_client:
     }
 
     if (client->stopped_qemu) {
-        co_recurse(CO result = colod_execute_co(coroutine, client->ctx, &local_errp,
+        co_recurse(CO result = colod_execute_co(coroutine, client->ctx->main_coroutine,
+                                                &local_errp,
                                                 "{'execute': 'cont'}\n"));
         if (!CO result) {
             log_error(local_errp->message);
             g_error_free(local_errp);
-            colod_qemu_failed(client->ctx);
+            colod_qemu_failed(client->ctx->main_coroutine);
         }
         qmp_result_free(CO result);
     }

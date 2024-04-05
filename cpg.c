@@ -45,17 +45,20 @@ static void colod_cpg_deliver(cpg_handle_t handle,
     switch (conv) {
         case MESSAGE_FAILOVER:
             if (nodeid == myid) {
-                colod_event_queue(cpg->ctx, EVENT_FAILOVER_WIN, "");
+                colod_event_queue(cpg->ctx->main_coroutine,
+                                  EVENT_FAILOVER_WIN, "");
             } else {
-                colod_event_queue(cpg->ctx, EVENT_PEER_FAILOVER, "");
+                colod_event_queue(cpg->ctx->main_coroutine,
+                                  EVENT_PEER_FAILOVER, "");
             }
         break;
 
         case MESSAGE_FAILED:
             if (nodeid != myid) {
                 log_error("Peer failed");
-                cpg->ctx->peer_failed = TRUE;
-                colod_event_queue(cpg->ctx, EVENT_PEER_FAILED, "got MESSAGE_FAILED");
+                colod_peer_failed(cpg->ctx->main_coroutine);
+                colod_event_queue(cpg->ctx->main_coroutine, EVENT_PEER_FAILED,
+                                  "got MESSAGE_FAILED");
             }
         break;
     }
@@ -75,8 +78,9 @@ static void colod_cpg_confchg(cpg_handle_t handle,
 
     if (left_list_entries) {
         log_error("Peer failed");
-        cpg->ctx->peer_failed = TRUE;
-        colod_event_queue(cpg->ctx, EVENT_PEER_FAILED, "peer left cpg group");
+        colod_peer_failed(cpg->ctx->main_coroutine);
+        colod_event_queue(cpg->ctx->main_coroutine, EVENT_PEER_FAILED,
+                          "peer left cpg group");
     }
 }
 

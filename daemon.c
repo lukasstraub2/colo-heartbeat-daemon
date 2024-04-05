@@ -71,53 +71,6 @@ void colod_syslog(int pri, const char *fmt, ...) {
     va_end(args);
 }
 
-
-
-static gboolean colod_hup_cb(G_GNUC_UNUSED GIOChannel *channel,
-                             G_GNUC_UNUSED GIOCondition revents,
-                             gpointer data) {
-    ColodContext *ctx = data;
-
-    log_error("qemu quit");
-    ctx->qemu_quit = TRUE;
-    colod_event_queue(ctx, EVENT_QEMU_QUIT, "qmp hup");
-    return G_SOURCE_REMOVE;
-}
-
-static void colod_qmp_event_cb(gpointer data, ColodQmpResult *result) {
-    ColodContext *ctx = data;
-    const gchar *event;
-
-    event = get_member_str(result->json_root, "event");
-
-    if (!strcmp(event, "QUORUM_REPORT_BAD")) {
-        const gchar *node, *type;
-        node = get_member_member_str(result->json_root, "data", "node-name");
-        type = get_member_member_str(result->json_root, "data", "type");
-
-        if (!strcmp(node, "nbd0")) {
-            if (!!strcmp(type, "read")) {
-                colod_event_queue(ctx, EVENT_FAILOVER_SYNC,
-                                  "nbd write/flush error");
-            }
-        } else {
-            if (!!strcmp(type, "read")) {
-                colod_event_queue(ctx, EVENT_YELLOW,
-                                  "local disk write/flush error");
-            }
-        }
-    } else if (!strcmp(event, "COLO_EXIT")) {
-        const gchar *reason;
-        reason = get_member_member_str(result->json_root, "data", "reason");
-
-        if (!strcmp(reason, "error")) {
-            colod_event_queue(ctx, EVENT_FAILOVER_SYNC, "COLO_EXIT");
-        }
-    } else if (!strcmp(event, "RESET")) {
-        colod_raise_timeout_coroutine(ctx);
-    }
-}
-
 static void colod_mainloop(ColodContext *ctx) {
     GError *local_errp = NULL;
 
@@ -146,17 +99,13 @@ static void colod_mainloop(ColodContext *ctx) {
         exit(EXIT_FAILURE);
     }
 
-    qmp_add_notify_event(ctx->qmp, colod_qmp_event_cb, ctx);
-    qmp_hup_source(ctx->qmp, colod_hup_cb, ctx);
-
     g_main_loop_run(ctx->mainloop);
     g_main_loop_unref(ctx->mainloop);
     ctx->mainloop = NULL;
 
-    qmp_del_notify_event(ctx->qmp, colod_qmp_event_cb, ctx);
     cpg_free(ctx->cpg);
     colod_raise_timeout_coroutine_free(ctx);
-    colod_main_free(ctx);
+    colod_main_free(ctx->main_coroutine);
     colo_watchdog_free(ctx->watchdog);
     client_listener_free(ctx->listener);
     qmp_free(ctx->qmp);
@@ -290,7 +239,7 @@ static int colod_parse_options(ColodContext *ctx, int *argc, char ***argv,
         {"timeout_low", 'l', 0, G_OPTION_ARG_INT, &ctx->qmp_timeout_low, "Low qmp timeout", NULL},
         {"timeout_high", 't', 0, G_OPTION_ARG_INT, &ctx->qmp_timeout_high, "High qmp timeout", NULL},
         {"watchdog_interval", 'a', 0, G_OPTION_ARG_INT, &ctx->watchdog_interval, "Watchdog interval (0 to disable)", NULL},
-        {"primary", 'p', 0, G_OPTION_ARG_NONE, &ctx->primary, "Startup in primary mode", NULL},
+        {"primary", 'p', 0, G_OPTION_ARG_NONE, &ctx->primary_startup, "Startup in primary mode", NULL},
         {"trace", 0, 0, G_OPTION_ARG_NONE, &ctx->do_trace, "Enable tracing", NULL},
         {0}
     };
