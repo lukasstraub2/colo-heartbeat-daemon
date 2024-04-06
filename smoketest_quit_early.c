@@ -11,9 +11,54 @@ struct SmokeTestcase {
     gboolean do_quit, quit;
 };
 
-static gboolean _testcase_co(Coroutine *coroutine, SmokeTestcase *this) {
-    GError *local_errp = NULL;
+#define ch_write_co(...) \
+    co_wrap(_ch_write_co(__VA_ARGS__))
+static void _ch_write_co(Coroutine *coroutine, GIOChannel *channel,
+                         const gchar *buf, guint timeout) {
     GIOStatus ret;
+    GError *local_errp = NULL;
+    ret = _colod_channel_write_timeout_co(coroutine, channel, buf, strlen(buf),
+                                          timeout, &local_errp);
+    if (coroutine->yield) {
+        return;
+    }
+
+    if (ret == G_IO_STATUS_ERROR) {
+        log_error(local_errp->message);
+        abort();
+    } else if (ret != G_IO_STATUS_NORMAL) {
+        colod_syslog(0, "channel write: EOF");
+        abort();
+    }
+
+    return;
+}
+
+#define ch_readln_co(...) \
+    co_wrap(_ch_readln_co(__VA_ARGS__))
+static void _ch_readln_co(Coroutine *coroutine, GIOChannel *channel,
+                          gchar **buf, gsize *len, guint timeout) {
+    GIOStatus ret;
+    GError *local_errp = NULL;
+
+    ret = _colod_channel_read_line_timeout_co(coroutine, channel, buf, len,
+                                              timeout, &local_errp);
+    if (coroutine->yield) {
+        return;
+    }
+
+    if (ret == G_IO_STATUS_ERROR) {
+        log_error(local_errp->message);
+        abort();
+    } else if (ret != G_IO_STATUS_NORMAL) {
+        colod_syslog(0, "channel read: EOF");
+        abort();
+    }
+
+    return;
+}
+
+static gboolean _testcase_co(Coroutine *coroutine, SmokeTestcase *this) {
     SmokeColodContext *sctx = &this->ctx->sctx;
     const gchar *command = "{'exec-colod': 'quit'}\n";
     gchar *line;
@@ -21,14 +66,9 @@ static gboolean _testcase_co(Coroutine *coroutine, SmokeTestcase *this) {
 
     co_begin(gboolean, G_SOURCE_CONTINUE);
 
-    co_recurse(ret = colod_channel_write_timeout_co(coroutine, sctx->client_ch,
-                                                    command, strlen(command),
-                                                    1000, &local_errp));
-    assert(ret == G_IO_STATUS_NORMAL);
+    co_recurse(ch_write_co(coroutine, sctx->client_ch, command, 1000));
 
-    co_recurse(ret = colod_channel_read_line_timeout_co(coroutine, sctx->client_ch,
-                                                        &line, &len, 1000, &local_errp));
-    assert(ret == G_IO_STATUS_NORMAL);
+    co_recurse(ch_readln_co(coroutine, sctx->client_ch, &line, &len, 1000));
     g_free(line);
 
     assert(!this->do_quit);
