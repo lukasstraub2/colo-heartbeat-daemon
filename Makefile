@@ -12,7 +12,7 @@ all: colod smoketest_quit_early io_watch_test
 colod: util.o qemu_util.o json_util.o coutil.o qmp.o client.o watchdog.o cpg.o main_coroutine.o daemon.o
 	$(CC) -o $@ $^ $(CFLAGS) $(CPG_LDFLAGS) $(LDFLAGS)
 
-smoketest_quit_early: util.o qemu_util.o json_util.o coutil.o qmp.o client.o watchdog.o stub_cpg.o main_coroutine.o smoketest_quit_early.o smoketest.o
+smoketest_quit_early: util.o qemu_util.o json_util.o coutil.o qmp.o client.o watchdog.o stub_cpg.o main_coroutine.o smoke_util.o smoketest_quit_early.o smoketest.o
 	$(CC) -o $@ $^ $(CFLAGS) $(LDFLAGS)
 
 io_watch_test: util.o io_watch_test.o
