@@ -24,6 +24,7 @@ struct ColodMainCoroutine {
     Coroutine coroutine;
     ColodContext *ctx;
     ColodQueue events, critical_events;
+    guint wake_source_id;
     ColodQmpState *qmp;
 
     gboolean pending_action, transitioning;
@@ -124,6 +125,12 @@ static gboolean colod_event_pending(ColodMainCoroutine *this) {
     return !queue_empty(&this->events) || !queue_empty(&this->critical_events);
 }
 
+static void event_wake_source_destroy_cb(gpointer data) {
+    ColodMainCoroutine *this = data;
+
+    this->wake_source_id = 0;
+}
+
 #define colod_event_queue(ctx, event, reason) \
     _colod_event_queue((ctx), (event), (reason), __func__, __LINE__)
 void _colod_event_queue(ColodMainCoroutine *this, ColodEvent event,
@@ -140,9 +147,11 @@ void _colod_event_queue(ColodMainCoroutine *this, ColodEvent event,
         queue = &this->events;
     }
 
-    if (queue_empty(queue)) {
+    if (queue_empty(queue) && !this->wake_source_id) {
         colod_trace("%s:%u: Waking main coroutine\n", __func__, __LINE__);
-        g_idle_add(this->coroutine.cb.plain, this);
+        this->wake_source_id = g_idle_add_full(G_PRIORITY_DEFAULT_IDLE,
+                                               this->coroutine.cb.plain, this,
+                                               event_wake_source_destroy_cb);
     }
 
     if (!queue_empty(queue)) {
@@ -164,7 +173,12 @@ static ColodEvent _colod_event_wait(Coroutine *coroutine,
                                     const gchar *func, int line) {
     ColodQueue *queue = &this->events;
 
-    if (!colod_event_pending(this)) {
+    guint source_id = g_source_get_id(g_main_current_source());
+    if (source_id == this->wake_source_id) {
+        this->wake_source_id = 0;
+    }
+
+    if (!colod_event_pending(this) || this->wake_source_id) {
         coroutine->yield = TRUE;
         coroutine->yield_value = GINT_TO_POINTER(G_SOURCE_REMOVE);
         return EVENT_FAILED;
@@ -899,10 +913,10 @@ static gboolean colod_main_co(gpointer data) {
         return GPOINTER_TO_INT(coroutine->yield_value);
     }
 
-    g_source_remove_by_user_data(coroutine);
-    assert(!g_source_remove_by_user_data(coroutine));
+    g_source_remove_by_user_data(this);
+    assert(!g_source_remove_by_user_data(this));
     this->ctx->main_coroutine = NULL;
-    g_free(coroutine);
+    g_free(this);
     return ret;
 }
 

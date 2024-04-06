@@ -1,2 +1,4 @@
 colod
+smoketest_quit_early
+io_watch_test
 *.o

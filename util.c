@@ -117,14 +117,17 @@ GSourceFuncs progress_source_funcs = {
     NULL, NULL
 };
 
-gint progress_source_add(GSourceFunc func, gpointer data) {
+guint progress_source_add(GSourceFunc func, gpointer data) {
     GMainContext *context = g_main_context_default();
     GSource *source;
+    guint source_id;
 
     source = g_source_new(&progress_source_funcs, sizeof(GSource));
     g_source_set_priority(source, G_PRIORITY_DEFAULT_IDLE);
     g_source_set_callback(source, func, data, NULL);
-    return g_source_attach(source, context);
+    source_id = g_source_attach(source, context);
+    g_source_unref(source);
+    return source_id;
 }
 
 GIOChannel *colod_create_channel(int fd, GError **errp) {

@@ -43,13 +43,15 @@ GIOStatus _colod_channel_read_line_timeout_co(Coroutine *coroutine,
                                              coroutine);
             co_yield_int(G_SOURCE_REMOVE);
 
-            if (timeout && g_source_get_id(g_main_current_source())
-                    == CO timeout_source_id) {
+            guint source_id = g_source_get_id(g_main_current_source());
+            if (timeout && source_id == CO timeout_source_id) {
                 g_source_remove(CO io_source_id);
                 g_set_error(errp, COLOD_ERROR, COLOD_ERROR_TIMEOUT,
                             "Channel read timed out");
                 ret = G_IO_STATUS_ERROR;
                 break;
+            } else if (source_id != CO io_source_id) {
+                g_source_remove(CO io_source_id);
             }
         } else {
             break;
@@ -106,13 +108,15 @@ GIOStatus _colod_channel_write_timeout_co(Coroutine *coroutine,
                                                  coroutine);
                 co_yield_int(G_SOURCE_REMOVE);
 
-                if (timeout && g_source_get_id(g_main_current_source())
-                        == CO timeout_source_id) {
+                guint source_id = g_source_get_id(g_main_current_source());
+                if (timeout && source_id == CO timeout_source_id) {
                     g_source_remove(CO io_source_id);
                     g_set_error(errp, COLOD_ERROR, COLOD_ERROR_TIMEOUT,
                                 "Channel write timed out");
                     ret = G_IO_STATUS_ERROR;
                     break;
+                } else if (source_id != CO io_source_id) {
+                    g_source_remove(CO io_source_id);
                 }
             }
         } else {
@@ -131,13 +135,15 @@ GIOStatus _colod_channel_write_timeout_co(Coroutine *coroutine,
                                          coroutine);
         co_yield_int(G_SOURCE_REMOVE);
 
-        if (timeout && g_source_get_id(g_main_current_source())
-                == CO timeout_source_id) {
+        guint source_id = g_source_get_id(g_main_current_source());
+        if (timeout && source_id == CO timeout_source_id) {
             g_source_remove(CO io_source_id);
             g_set_error(errp, COLOD_ERROR, COLOD_ERROR_TIMEOUT,
                         "Channel flush timed out");
             ret = G_IO_STATUS_ERROR;
             break;
+        } else if (source_id != CO io_source_id) {
+            g_source_remove(CO io_source_id);
         }
 
         ret = g_io_channel_flush(channel, errp);

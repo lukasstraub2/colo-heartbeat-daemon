@@ -25,7 +25,6 @@ typedef struct ColodContext {
     gchar *qmp_path, *qmp_yank_path;
     gboolean daemonize;
     guint qmp_timeout_low, qmp_timeout_high;
-    guint checkpoint_interval;
     guint watchdog_interval;
     gboolean do_trace;
     gboolean primary_startup;
