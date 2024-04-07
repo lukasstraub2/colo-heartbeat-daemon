@@ -74,7 +74,7 @@ static void colod_mainloop(ColodContext *mctx) {
     GMainContext *main_context = g_main_context_default();
     mctx->mainloop = g_main_loop_new(main_context, FALSE);
 
-    mctx->qmp = qmp_new(ctx->qmp1_fd, ctx->qmp2_fd, ctx->qmp_timeout_low,
+    mctx->qmp = qmp_new(ctx->qmp_fd, ctx->qmp_yank_fd, ctx->qmp_timeout_low,
                         &local_errp);
     if (!ctx->qmp) {
         colod_syslog(LOG_ERR, "Failed to initialize qmp: %s",
@@ -200,13 +200,13 @@ static int smoke_open_qmp(SmokeColodContext *sctx, GError **errp) {
     if (ret < 0) {
         return -1;
     }
-    sctx->cctx.qmp1_fd = ret;
+    sctx->cctx.qmp_fd = ret;
 
     ret = socketpair_channel(&sctx->qmp_yank_ch, errp);
     if (ret < 0) {
         return -1;
     }
-    sctx->cctx.qmp2_fd = ret;
+    sctx->cctx.qmp_yank_fd = ret;
 
     return 0;
 }

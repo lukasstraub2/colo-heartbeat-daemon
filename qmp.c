@@ -685,18 +685,18 @@ void qmp_free(ColodQmpState *state) {
     g_free(state);
 }
 
-ColodQmpState *qmp_new(int fd1, int fd2, guint timeout, GError **errp) {
+ColodQmpState *qmp_new(int fd, int yank_fd, guint timeout, GError **errp) {
     ColodQmpState *state;
 
     state = g_new0(ColodQmpState, 1);
     state->timeout = timeout;
-    state->channel.channel = colod_create_channel(fd1, errp);
+    state->channel.channel = colod_create_channel(fd, errp);
     if (!state->channel.channel) {
         g_free(state);
         return NULL;
     }
 
-    state->yank_channel.channel = colod_create_channel(fd2, errp);
+    state->yank_channel.channel = colod_create_channel(yank_fd, errp);
     state->yank_channel.discard_events = TRUE;
     if (!state->yank_channel.channel) {
         g_io_channel_unref(state->channel.channel);

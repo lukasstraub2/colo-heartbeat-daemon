@@ -33,7 +33,7 @@ typedef struct ColodContext {
     /* Variables */
     GMainLoop *mainloop;
 
-    int qmp1_fd, qmp2_fd, mngmt_listen_fd;
+    int qmp_fd, qmp_yank_fd, mngmt_listen_fd;
 
     ColodWatchdog *watchdog;
     QmpCommands *commands;

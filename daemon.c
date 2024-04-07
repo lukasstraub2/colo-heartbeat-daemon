@@ -79,7 +79,7 @@ static void colod_mainloop(ColodContext *mctx) {
     GMainContext *main_context = g_main_context_default();
     mctx->mainloop = g_main_loop_new(main_context, FALSE);
 
-    mctx->qmp = qmp_new(ctx->qmp1_fd, ctx->qmp2_fd, ctx->qmp_timeout_low,
+    mctx->qmp = qmp_new(ctx->qmp_fd, ctx->qmp_yank_fd, ctx->qmp_timeout_low,
                         &local_errp);
     if (!ctx->qmp) {
         colod_syslog(LOG_ERR, "Failed to initialize qmp: %s",
@@ -168,15 +168,15 @@ static int colod_open_qmp(ColodContext *ctx, GError **errp) {
     if (ret < 0) {
         return -1;
     }
-    ctx->qmp1_fd = ret;
+    ctx->qmp_fd = ret;
 
     ret = colod_unix_connect(ctx->qmp_yank_path, errp);
     if (ret < 0) {
-        close(ctx->qmp1_fd);
-        ctx->qmp1_fd = 0;
+        close(ctx->qmp_fd);
+        ctx->qmp_fd = 0;
         return -1;
     }
-    ctx->qmp2_fd = ret;
+    ctx->qmp_yank_fd = ret;
 
     return 0;
 }
