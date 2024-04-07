@@ -22,10 +22,12 @@
 
 struct ColodMainCoroutine {
     Coroutine coroutine;
-    ColodContext *ctx;
+    gboolean quit;
+    const ColodContext *ctx;
     ColodQueue events, critical_events;
     guint wake_source_id;
     ColodQmpState *qmp;
+    Coroutine *raise_timeout_coroutine;
 
     gboolean pending_action, transitioning;
     gboolean failed, yellow, qemu_quit;
@@ -230,27 +232,6 @@ static int _colod_qmp_event_wait_co(Coroutine *coroutine,
     }
 
     return ret;
-}
-
-void colod_set_migration_commands(ColodContext *ctx, JsonNode *commands) {
-    if (ctx->migration_commands) {
-        json_node_unref(ctx->migration_commands);
-    }
-    ctx->migration_commands = json_node_ref(commands);
-}
-
-void colod_set_primary_commands(ColodContext *ctx, JsonNode *commands) {
-    if (ctx->failover_primary_commands) {
-        json_node_unref(ctx->failover_primary_commands);
-    }
-    ctx->failover_primary_commands = json_node_ref(commands);
-}
-
-void colod_set_secondary_commands(ColodContext *ctx, JsonNode *commands) {
-    if (ctx->failover_secondary_commands) {
-        json_node_unref(ctx->failover_secondary_commands);
-    }
-    ctx->failover_secondary_commands = json_node_ref(commands);
 }
 
 int _colod_yank_co(Coroutine *coroutine, ColodMainCoroutine *this, GError **errp) {
@@ -514,28 +495,28 @@ void colod_qemu_failed(ColodMainCoroutine *this) {
 
 typedef struct ColodRaiseCoroutine {
     Coroutine coroutine;
-    ColodContext *ctx;
+    ColodMainCoroutine *mainco;
 } ColodRaiseCoroutine;
 
 static gboolean _colod_raise_timeout_co(Coroutine *coroutine,
-                                        ColodContext *ctx);
+                                        ColodMainCoroutine *mainco);
 static gboolean colod_raise_timeout_co(gpointer data) {
     ColodRaiseCoroutine *raiseco = data;
     Coroutine *coroutine = &raiseco->coroutine;
-    ColodContext *ctx = raiseco->ctx;
+    ColodMainCoroutine *mainco = raiseco->mainco;
     gboolean ret;
 
-    co_enter(coroutine, ret = _colod_raise_timeout_co(coroutine, ctx));
+    co_enter(coroutine, ret = _colod_raise_timeout_co(coroutine, mainco));
     if (coroutine->yield) {
         return GPOINTER_TO_INT(coroutine->yield_value);
     }
 
-    qmp_set_timeout(ctx->qmp, ctx->qmp_timeout_low);
+    qmp_set_timeout(mainco->qmp, mainco->ctx->qmp_timeout_low);
 
     g_source_remove_by_user_data(coroutine);
     assert(!g_source_remove_by_user_data(coroutine));
-    g_free(ctx->raise_timeout_coroutine);
-    ctx->raise_timeout_coroutine = NULL;
+    g_free(mainco->raise_timeout_coroutine);
+    mainco->raise_timeout_coroutine = NULL;
     return ret;
 }
 
@@ -547,18 +528,18 @@ static gboolean colod_raise_timeout_co_wrap(
 }
 
 static gboolean _colod_raise_timeout_co(Coroutine *coroutine,
-                                        ColodContext *ctx) {
+                                        ColodMainCoroutine *mainco) {
     int ret;
 
     co_begin(gboolean, G_SOURCE_CONTINUE);
 
-    co_recurse(ret = qmp_wait_event_co(coroutine, ctx->qmp, 0,
+    co_recurse(ret = qmp_wait_event_co(coroutine, mainco->qmp, 0,
                                        "{'event': 'STOP'}", NULL));
     if (ret < 0) {
         return G_SOURCE_REMOVE;
     }
 
-    co_recurse(ret = qmp_wait_event_co(coroutine, ctx->qmp, 0,
+    co_recurse(ret = qmp_wait_event_co(coroutine, mainco->qmp, 0,
                                        "{'event': 'RESUME'}", NULL));
     if (ret < 0) {
         return G_SOURCE_REMOVE;
@@ -569,37 +550,37 @@ static gboolean _colod_raise_timeout_co(Coroutine *coroutine,
     return G_SOURCE_REMOVE;
 }
 
-void colod_raise_timeout_coroutine_free(ColodContext *ctx) {
-    if (!ctx->raise_timeout_coroutine) {
+static void colod_raise_timeout_coroutine_free(ColodMainCoroutine *mainco) {
+    if (!mainco->raise_timeout_coroutine) {
         return;
     }
 
-    g_idle_add(colod_raise_timeout_co, ctx->raise_timeout_coroutine);
+    g_idle_add(colod_raise_timeout_co, mainco->raise_timeout_coroutine);
 
-    while (ctx->raise_timeout_coroutine) {
+    while (mainco->raise_timeout_coroutine) {
         g_main_context_iteration(g_main_context_default(), TRUE);
     }
 }
 
-Coroutine *colod_raise_timeout_coroutine(ColodContext *ctx) {
+static void colod_raise_timeout_coroutine(ColodMainCoroutine *mainco) {
     ColodRaiseCoroutine *raiseco;
     Coroutine *coroutine;
 
-    if (ctx->raise_timeout_coroutine) {
-        return NULL;
+    if (mainco->raise_timeout_coroutine) {
+        return;
     }
 
-    qmp_set_timeout(ctx->qmp, ctx->qmp_timeout_high);
+    qmp_set_timeout(mainco->qmp, mainco->ctx->qmp_timeout_high);
 
     raiseco = g_new0(ColodRaiseCoroutine, 1);
     coroutine = &raiseco->coroutine;
     coroutine->cb.plain = colod_raise_timeout_co;
     coroutine->cb.iofunc = colod_raise_timeout_co_wrap;
-    raiseco->ctx = ctx;
-    ctx->raise_timeout_coroutine = coroutine;
+    raiseco->mainco = mainco;
+    mainco->raise_timeout_coroutine = coroutine;
 
     g_idle_add(colod_raise_timeout_co, raiseco);
-    return coroutine;
+    return;
 }
 
 #define colod_stop_co(...) \
@@ -640,9 +621,9 @@ static ColodEvent _colod_failover_co(Coroutine *coroutine, ColodMainCoroutine *t
     }
 
     if (this->primary) {
-        CO commands = this->ctx->failover_primary_commands;
+        CO commands = this->ctx->commands->failover_primary;
     } else {
-        CO commands = this->ctx->failover_secondary_commands;
+        CO commands = this->ctx->commands->failover_secondary;
     }
     this->transitioning = TRUE;
     co_recurse(ret = colod_execute_array_co(coroutine, this, CO commands,
@@ -728,7 +709,7 @@ static ColodEvent _colod_start_migration_co(Coroutine *coroutine,
     }
 
     co_recurse(ret = colod_execute_array_co(coroutine, this,
-                                            this->ctx->migration_commands,
+                                            this->ctx->commands->migration,
                                             FALSE, &local_errp));
     if (g_error_matches(local_errp, COLOD_ERROR, COLOD_ERROR_QMP)) {
         goto qmp_error;
@@ -739,7 +720,7 @@ static ColodEvent _colod_start_migration_co(Coroutine *coroutine,
         goto handle_event;
     }
 
-    colod_raise_timeout_coroutine(this->ctx);
+    colod_raise_timeout_coroutine(this);
 
     co_recurse(qmp_result = colod_execute_co(coroutine, this, &local_errp,
                     "{'execute': 'migrate-continue',"
@@ -861,7 +842,7 @@ static ColodEvent _colod_replication_wait_co(Coroutine *coroutine,
         break;
     }
 
-    colod_raise_timeout_coroutine(this->ctx);
+    colod_raise_timeout_coroutine(this);
 
     co_end;
 
@@ -915,8 +896,7 @@ static gboolean colod_main_co(gpointer data) {
 
     g_source_remove_by_user_data(this);
     assert(!g_source_remove_by_user_data(this));
-    this->ctx->main_coroutine = NULL;
-    g_free(this);
+    this->quit = TRUE;
     return ret;
 }
 
@@ -1125,11 +1105,11 @@ static void colod_qmp_event_cb(gpointer data, ColodQmpResult *result) {
             colod_event_queue(this, EVENT_FAILOVER_SYNC, "COLO_EXIT");
         }
     } else if (!strcmp(event, "RESET")) {
-        colod_raise_timeout_coroutine(this->ctx);
+        colod_raise_timeout_coroutine(this);
     }
 }
 
-ColodMainCoroutine *colod_main_coroutine(ColodContext *ctx) {
+ColodMainCoroutine *colod_main_new(const ColodContext *ctx) {
     ColodMainCoroutine *this;
     Coroutine *coroutine;
 
@@ -1141,7 +1121,6 @@ ColodMainCoroutine *colod_main_coroutine(ColodContext *ctx) {
     coroutine->cb.iofunc = colod_main_co_wrap;
     this->ctx = ctx;
     this->qmp = ctx->qmp;
-    ctx->main_coroutine = this;
 
     this->primary = ctx->primary_startup;
     qmp_add_notify_event(this->qmp, colod_qmp_event_cb, this);
@@ -1152,11 +1131,13 @@ ColodMainCoroutine *colod_main_coroutine(ColodContext *ctx) {
 }
 
 void colod_main_free(ColodMainCoroutine *this) {
-    ColodContext *ctx = this->ctx;
     colod_event_queue(this, EVENT_QUIT, "teardown");
     qmp_del_notify_event(this->qmp, colod_qmp_event_cb, this);
+    colod_raise_timeout_coroutine_free(this);
 
-    while (ctx->main_coroutine) {
+    while (!this->quit) {
         g_main_context_iteration(g_main_context_default(), TRUE);
     }
+
+    g_free(this);
 }

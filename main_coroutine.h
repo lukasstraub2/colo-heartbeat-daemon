@@ -40,10 +40,6 @@ void colod_query_status(ColodMainCoroutine *this, ColodState *ret);
 void colod_peer_failed(ColodMainCoroutine *this);
 void colod_clear_peer_status(ColodMainCoroutine *this);
 
-void colod_set_migration_commands(ColodContext *ctx, JsonNode *commands);
-void colod_set_primary_commands(ColodContext *ctx, JsonNode *commands);
-void colod_set_secondary_commands(ColodContext *ctx, JsonNode *commands);
-
 int colod_start_migration(ColodMainCoroutine *this);
 void colod_autoquit(ColodMainCoroutine *this);
 void colod_quit(ColodMainCoroutine *this);
@@ -67,11 +63,7 @@ ColodQmpResult *_colod_execute_co(Coroutine *coroutine,
                                   GError **errp,
                                   const gchar *command);
 
-
-void colod_raise_timeout_coroutine_free(ColodContext *ctx);
-Coroutine *colod_raise_timeout_coroutine(ColodContext *ctx);
-
-ColodMainCoroutine *colod_main_coroutine(ColodContext *ctx);
+ColodMainCoroutine *colod_main_new(const ColodContext *ctx);
 void colod_main_free(ColodMainCoroutine *this);
 
 #endif // MAIN_COROUTINE_H

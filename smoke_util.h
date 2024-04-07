@@ -1,3 +1,12 @@
+/*
+ * COLO background daemon
+ *
+ * Copyright (c) Lukas Straub <lukasstraub2@web.de>
+ *
+ * This work is licensed under the terms of the GNU GPL, version 2 or later.
+ * See the COPYING file in the top-level directory.
+ */
+
 #ifndef SMOKE_UTIL_H
 #define SMOKE_UTIL_H
 

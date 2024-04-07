@@ -71,15 +71,16 @@ void colod_syslog(int pri, const char *fmt, ...) {
     va_end(args);
 }
 
-static void colod_mainloop(ColodContext *ctx) {
+static void colod_mainloop(ColodContext *mctx) {
+    const ColodContext *ctx = mctx;
     GError *local_errp = NULL;
 
     // g_main_context_default creates the global context on demand
     GMainContext *main_context = g_main_context_default();
-    ctx->mainloop = g_main_loop_new(main_context, FALSE);
+    mctx->mainloop = g_main_loop_new(main_context, FALSE);
 
-    ctx->qmp = qmp_new(ctx->qmp1_fd, ctx->qmp2_fd, ctx->qmp_timeout_low,
-                       &local_errp);
+    mctx->qmp = qmp_new(ctx->qmp1_fd, ctx->qmp2_fd, ctx->qmp_timeout_low,
+                        &local_errp);
     if (!ctx->qmp) {
         colod_syslog(LOG_ERR, "Failed to initialize qmp: %s",
                      local_errp->message);
@@ -87,11 +88,11 @@ static void colod_mainloop(ColodContext *ctx) {
         exit(EXIT_FAILURE);
     }
 
-    colod_main_coroutine(ctx);
-
-    ctx->listener = client_listener_new(ctx->mngmt_listen_fd, ctx);
-    ctx->watchdog = colod_watchdog_new(ctx);
-    ctx->cpg = cpg_new(ctx->cpg, &local_errp);
+    mctx->commands = qmp_commands_new();
+    mctx->main_coroutine = colod_main_new(ctx);
+    mctx->listener = client_listener_new(ctx->mngmt_listen_fd, ctx);
+    mctx->watchdog = colod_watchdog_new(ctx);
+    mctx->cpg = cpg_new(ctx->cpg, &local_errp);
     if (!ctx->cpg) {
         colod_syslog(LOG_ERR, "Failed to initialize cpg: %s",
                      local_errp->message);
@@ -101,16 +102,14 @@ static void colod_mainloop(ColodContext *ctx) {
 
     g_main_loop_run(ctx->mainloop);
     g_main_loop_unref(ctx->mainloop);
-    ctx->mainloop = NULL;
+    mctx->mainloop = NULL;
 
     cpg_free(ctx->cpg);
-    colod_raise_timeout_coroutine_free(ctx);
     colod_main_free(ctx->main_coroutine);
     colo_watchdog_free(ctx->watchdog);
     client_listener_free(ctx->listener);
+    qmp_commands_free(ctx->commands);
     qmp_free(ctx->qmp);
-
-    g_main_context_unref(main_context);
 }
 
 static int colod_open_mngmt(ColodContext *ctx, GError **errp) {
@@ -312,6 +311,7 @@ int main(int argc, char **argv) {
     }
 
     colod_mainloop(ctx);
+    g_main_context_unref(g_main_context_default());
 
     // cleanup pidfile, cpg, qmp and mgmt connection
 

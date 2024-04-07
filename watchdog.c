@@ -14,7 +14,7 @@
 
 typedef struct ColodWatchdog {
     Coroutine coroutine;
-    ColodContext *ctx;
+    const ColodContext *ctx;
     guint interval;
     guint timer_id;
     gboolean quit;
@@ -116,7 +116,7 @@ void colo_watchdog_free(ColodWatchdog *state) {
     g_free(state);
 }
 
-ColodWatchdog *colod_watchdog_new(ColodContext *ctx) {
+ColodWatchdog *colod_watchdog_new(const ColodContext *ctx) {
     ColodWatchdog *state;
     Coroutine *coroutine;
 

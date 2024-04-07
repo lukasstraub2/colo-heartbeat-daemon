@@ -28,7 +28,7 @@
 typedef struct ColodClient {
     struct Coroutine coroutine;
     QLIST_ENTRY(ColodClient) next;
-    ColodContext *ctx;
+    const ColodContext *ctx;
     GIOChannel *channel;
     JsonNode **store;
     gboolean stopped_qemu;
@@ -39,7 +39,7 @@ typedef struct ColodClient {
 QLIST_HEAD(ColodClientHead, ColodClient);
 struct ColodClientListener {
     int socket;
-    ColodContext *ctx;
+    const ColodContext *ctx;
     guint listen_source_id;
     struct ColodClientHead head;
     JsonNode *store;
@@ -68,7 +68,7 @@ static ColodQmpResult *create_error_reply(const gchar *message) {
 #define handle_query_status_co(...) \
     co_wrap(_handle_query_status_co(__VA_ARGS__))
 static ColodQmpResult *_handle_query_status_co(Coroutine *coroutine,
-                                               ColodContext *ctx) {
+                                               const ColodContext *ctx) {
     int ret;
     ColodQmpResult *result;
     ColodState state;
@@ -142,43 +142,19 @@ static ColodQmpResult *handle_set_store(ColodQmpResult *request,
     return create_reply("{}");
 }
 
-static ColodQmpResult *handle_quit(ColodContext *ctx) {
+static ColodQmpResult *handle_quit(const ColodContext *ctx) {
     colod_quit(ctx->main_coroutine);
 
     return create_reply("{}");
 }
 
-static ColodQmpResult *handle_autoquit(ColodContext *ctx) {
+static ColodQmpResult *handle_autoquit(const ColodContext *ctx) {
     colod_autoquit(ctx->main_coroutine);
 
     return create_reply("{}");
 }
 
-static ColodQmpResult *_set_commands(
-        ColodQmpResult *request, ColodContext *ctx,
-        void (*set)(ColodContext *, JsonNode *)) {
-    JsonNode *commands;
-
-    if (!has_member(request->json_root, "commands")) {
-        return create_error_reply("Member 'commands' missing");
-    }
-
-    commands = get_member_node(request->json_root, "commands");
-    if (!JSON_NODE_HOLDS_ARRAY(commands)) {
-        return create_error_reply("Member 'commands' must be an array");
-    }
-
-    set(ctx, commands);
-
-    return create_reply("{}");
-}
-
-static ColodQmpResult *handle_set_migration(ColodQmpResult *request,
-                                            ColodContext *ctx) {
-    return _set_commands(request, ctx, colod_set_migration_commands);
-}
-
-static ColodQmpResult *handle_start_migration(ColodContext *ctx) {
+static ColodQmpResult *handle_start_migration(const ColodContext *ctx) {
     int ret;
 
     ret = colod_start_migration(ctx->main_coroutine);
@@ -189,18 +165,77 @@ static ColodQmpResult *handle_start_migration(ColodContext *ctx) {
     return create_reply("{}");
 }
 
+static JsonNode *get_commands(ColodQmpResult *request, GError **errp) {
+    JsonNode *commands;
+
+    if (!has_member(request->json_root, "commands")) {
+        colod_error_set(errp, "Member 'commands' missing");
+        return NULL;
+    }
+
+    commands = get_member_node(request->json_root, "commands");
+    if (!JSON_NODE_HOLDS_ARRAY(commands)) {
+        colod_error_set(errp, "Member 'commands' must be an array");
+        return NULL;
+    }
+
+    assert(commands);
+    return commands;
+}
+
+static ColodQmpResult *handle_set_migration(ColodQmpResult *request,
+                                            const ColodContext *ctx) {
+    GError *local_errp = NULL;
+    ColodQmpResult *reply;
+
+    JsonNode *commands = get_commands(request, &local_errp);
+    if (!commands) {
+        reply = create_error_reply(local_errp->message);
+        g_error_free(local_errp);
+        return reply;
+    }
+
+    qmp_commands_set_migration(ctx->commands, commands);
+
+    return create_reply("{}");
+}
+
 static ColodQmpResult *handle_set_primary_failover(ColodQmpResult *request,
-                                                   ColodContext *ctx) {
-    return _set_commands(request, ctx, colod_set_primary_commands);
+                                                   const ColodContext *ctx) {
+    GError *local_errp = NULL;
+    ColodQmpResult *reply;
+
+    JsonNode *commands = get_commands(request, &local_errp);
+    if (!commands) {
+        reply = create_error_reply(local_errp->message);
+        g_error_free(local_errp);
+        return reply;
+    }
+
+    qmp_commands_set_failover_primary(ctx->commands, commands);
+
+    return create_reply("{}");
 }
 
 static ColodQmpResult *handle_set_secondary_failover(ColodQmpResult *request,
-                                                     ColodContext *ctx) {
-    return _set_commands(request, ctx, colod_set_secondary_commands);
+                                                     const ColodContext *ctx) {
+    GError *local_errp = NULL;
+    ColodQmpResult *reply;
+
+    JsonNode *commands = get_commands(request, &local_errp);
+    if (!commands) {
+        reply = create_error_reply(local_errp->message);
+        g_error_free(local_errp);
+        return reply;
+    }
+
+    qmp_commands_set_failover_secondary(ctx->commands, commands);
+
+    return create_reply("{}");
 }
 
 static ColodQmpResult *handle_set_yank(ColodQmpResult *request,
-                                       ColodContext *ctx) {
+                                       const ColodContext *ctx) {
     JsonNode *instances;
 
     if (!has_member(request->json_root, "instances")) {
@@ -220,7 +255,7 @@ static ColodQmpResult *handle_set_yank(ColodQmpResult *request,
 #define handle_yank_co(...) \
     co_wrap(_handle_yank_co(__VA_ARGS__))
 static ColodQmpResult *_handle_yank_co(Coroutine *coroutine,
-                                       ColodContext *ctx) {
+                                       const ColodContext *ctx) {
     ColodQmpResult *result;
     int ret;
     GError *local_errp = NULL;
@@ -514,7 +549,7 @@ void client_listener_free(ColodClientListener *listener) {
     g_free(listener);
 }
 
-ColodClientListener *client_listener_new(int socket, ColodContext *ctx) {
+ColodClientListener *client_listener_new(int socket, const ColodContext *ctx) {
     ColodClientListener *listener;
 
     listener = g_new0(ColodClientListener, 1);

@@ -6,6 +6,6 @@
 
 void colod_watchdog_refresh(ColodWatchdog *state);
 void colo_watchdog_free(ColodWatchdog *state);
-ColodWatchdog *colod_watchdog_new(ColodContext *ctx);
+ColodWatchdog *colod_watchdog_new(const ColodContext *ctx);
 
 #endif // WATCHDOG_H

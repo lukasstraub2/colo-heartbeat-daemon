@@ -18,6 +18,7 @@
 #include "base_types.h"
 #include "util.h"
 #include "qmp.h"
+#include "qmpcommands.h"
 
 typedef struct ColodContext {
     /* Parameters */
@@ -35,9 +36,7 @@ typedef struct ColodContext {
     int qmp1_fd, qmp2_fd, mngmt_listen_fd;
 
     ColodWatchdog *watchdog;
-    Coroutine *raise_timeout_coroutine;
-    JsonNode *migration_commands;
-    JsonNode *failover_primary_commands, *failover_secondary_commands;
+    QmpCommands *commands;
     ColodMainCoroutine *main_coroutine;
 
     ColodClientListener *listener;

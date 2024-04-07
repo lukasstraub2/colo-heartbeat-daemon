@@ -16,6 +16,6 @@
 #include "daemon.h"
 
 void client_listener_free(ColodClientListener *listener);
-ColodClientListener *client_listener_new(int socket, ColodContext *ctx);
+ColodClientListener *client_listener_new(int socket, const ColodContext *ctx);
 
 #endif // CLIENT_H
