@@ -67,6 +67,45 @@ void colod_syslog(G_GNUC_UNUSED int pri, const char *fmt, ...) {
     va_end(args);
 }
 
+static int socketpair_channel(GIOChannel **channel, GError **errp) {
+    int ret;
+    int fd[2];
+
+    ret = socketpair(AF_UNIX, SOCK_STREAM, 0, fd);
+    if (ret < 0) {
+        colod_error_set(errp, "Failed to open qmp socketpair: %s",
+                        g_strerror(errno));
+        return -1;
+    }
+
+    *channel = colod_create_channel(fd[0], errp);
+    if (!*channel) {
+        close(fd[0]);
+        close(fd[1]);
+        return -1;
+    }
+
+    return fd[1];
+}
+
+static int smoke_open_qmp(SmokeColodContext *sctx, GError **errp) {
+    int ret;
+
+    ret = socketpair_channel(&sctx->qmp_ch, errp);
+    if (ret < 0) {
+        return -1;
+    }
+    sctx->cctx.qmp_fd = ret;
+
+    ret = socketpair_channel(&sctx->qmp_yank_ch, errp);
+    if (ret < 0) {
+        return -1;
+    }
+    sctx->cctx.qmp_yank_fd = ret;
+
+    return 0;
+}
+
 static int smoke_open_mngmt(SmokeColodContext *sctx, SmokeContext *ctx,
                             GError **errp) {
     int sockfd, clientfd, ret;
@@ -132,43 +171,53 @@ err:
     return -1;
 }
 
-static int socketpair_channel(GIOChannel **channel, GError **errp) {
-    int ret;
-    int fd[2];
-
-    ret = socketpair(AF_UNIX, SOCK_STREAM, 0, fd);
-    if (ret < 0) {
-        colod_error_set(errp, "Failed to open qmp socketpair: %s",
-                        g_strerror(errno));
-        return -1;
-    }
-
-    *channel = colod_create_channel(fd[0], errp);
-    if (!*channel) {
-        close(fd[0]);
-        close(fd[1]);
-        return -1;
-    }
-
-    return fd[1];
+static void smoke_fill_cctx(ColodContext *cctx, SmokeContext *ctx) {
+    cctx->node_name = "tele-clu-01";
+    cctx->instance_name = "colo_test";
+    cctx->base_dir = "";
+    cctx->qmp_path = "";
+    cctx->qmp_yank_path = "";
+    cctx->daemonize = FALSE;
+    cctx->qmp_timeout_low = 600;
+    cctx->qmp_timeout_high = 10000;
+    cctx->watchdog_interval = 0;
+    cctx->do_trace = ctx->do_trace;
+    cctx->primary_startup = FALSE;
 }
 
-static int smoke_open_qmp(SmokeColodContext *sctx, GError **errp) {
+SmokeColodContext *smoke_context_new(SmokeContext *ctx, GError **errp) {
+    SmokeColodContext *sctx;
     int ret;
 
-    ret = socketpair_channel(&sctx->qmp_ch, errp);
+    sctx = g_new0(SmokeColodContext, 1);
+    smoke_fill_cctx(&sctx->cctx, ctx);
+    ret = smoke_open_qmp(sctx, errp);
     if (ret < 0) {
-        return -1;
+        goto err;
     }
-    sctx->cctx.qmp_fd = ret;
 
-    ret = socketpair_channel(&sctx->qmp_yank_ch, errp);
+    ret = smoke_open_mngmt(sctx, ctx, errp);
     if (ret < 0) {
-        return -1;
+        goto err;
     }
-    sctx->cctx.qmp_yank_fd = ret;
 
-    return 0;
+    sctx->cctx.cpg = colod_open_cpg(&sctx->cctx, errp);
+    if (!sctx->cctx.cpg) {
+        goto err;
+    }
+
+    return sctx;
+
+err:
+    g_free(sctx);
+    return NULL;
+}
+
+void smoke_context_free(SmokeColodContext *sctx) {
+    g_io_channel_unref(sctx->client_ch);
+    g_io_channel_unref(sctx->qmp_ch);
+    g_io_channel_unref(sctx->qmp_yank_ch);
+    g_free(sctx);
 }
 
 static int smoke_parse_options(SmokeContext *ctx, int *argc, char ***argv,
@@ -201,20 +250,6 @@ static int smoke_parse_options(SmokeContext *ctx, int *argc, char ***argv,
     return 0;
 }
 
-void smoke_fill_ctx(ColodContext *cctx, SmokeContext *ctx) {
-    cctx->node_name = "teleclu-01";
-    cctx->instance_name = "colo_test";
-    cctx->base_dir = "";
-    cctx->qmp_path = "";
-    cctx->qmp_yank_path = "";
-    cctx->daemonize = FALSE;
-    cctx->qmp_timeout_low = 600;
-    cctx->qmp_timeout_high = 10000;
-    cctx->watchdog_interval = 0;
-    cctx->do_trace = ctx->do_trace;
-    cctx->primary_startup = FALSE;
-}
-
 int main(int argc, char **argv) {
     GError *errp = NULL;
     SmokeContext ctx_struct = { 0 };
@@ -239,34 +274,19 @@ int main(int argc, char **argv) {
         g_free(path);
     }
 
-    smoke_fill_ctx(&ctx->sctx.cctx, ctx);
-    ret = smoke_open_qmp(&ctx->sctx, &errp);
-    if (ret < 0) {
+    ctx->sctx = smoke_context_new(ctx, &errp);
+    if (!ctx->sctx) {
         goto err;
     }
-
-    ret = smoke_open_mngmt(&ctx->sctx, ctx, &errp);
-    if (ret < 0) {
-        goto err;
-    }
-
-    ctx->sctx.cctx.cpg = colod_open_cpg(&ctx->sctx.cctx, &errp);
-    if (!ctx->sctx.cctx.cpg) {
-        goto err;
-    }
-
     ctx->testcase = testcase_new(ctx);
-    daemon_mainloop(&ctx->sctx.cctx);
-    testcase_free(ctx->testcase);
-    g_main_context_unref(g_main_context_default());
-    g_io_channel_unref(ctx->sctx.client_ch);
-    g_io_channel_unref(ctx->sctx.qmp_ch);
-    g_io_channel_unref(ctx->sctx.qmp_yank_ch);
 
+    daemon_mainloop(&ctx->sctx->cctx);
+
+    testcase_free(ctx->testcase);
+    smoke_context_free(ctx->sctx);
     g_free(ctx->base_dir);
 
-    // cleanup pidfile, cpg, qmp and mgmt connection
-
+    g_main_context_unref(g_main_context_default());
     return EXIT_SUCCESS;
 
 err:

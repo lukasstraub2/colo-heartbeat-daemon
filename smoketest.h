@@ -24,9 +24,12 @@ typedef struct SmokeContext {
     gchar *base_dir;
     gboolean do_trace;
 
-    SmokeColodContext sctx;
+    SmokeColodContext *sctx;
     SmokeTestcase *testcase;
 } SmokeContext;
+
+SmokeColodContext *smoke_context_new(SmokeContext *ctx, GError **errp);
+void smoke_context_free(SmokeColodContext *sctx);
 
 SmokeTestcase *testcase_new(SmokeContext *ctx);
 void testcase_free(SmokeTestcase *this);

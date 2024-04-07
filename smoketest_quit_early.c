@@ -21,7 +21,7 @@ struct SmokeTestcase {
 };
 
 static gboolean _testcase_co(Coroutine *coroutine, SmokeTestcase *this) {
-    SmokeColodContext *sctx = &this->ctx->sctx;
+    SmokeColodContext *sctx = this->ctx->sctx;
     const gchar *command = "{'exec-colod': 'quit'}\n";
     gchar *line;
     gsize len;
@@ -76,7 +76,7 @@ SmokeTestcase *testcase_new(SmokeContext *ctx) {
     coroutine->cb.iofunc = testcase_co_wrap;
     this->ctx = ctx;
 
-    ctx->sctx.cctx.qmp_timeout_low = 20;
+    ctx->sctx->cctx.qmp_timeout_low = 20;
 
     g_idle_add(testcase_co, this);
     return this;
