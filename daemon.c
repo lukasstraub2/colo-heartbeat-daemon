@@ -35,43 +35,10 @@
 #include "cpg.h"
 #include "watchdog.h"
 
-static FILE *trace = NULL;
-static gboolean do_syslog = FALSE;
+FILE *trace = NULL;
+gboolean do_syslog = FALSE;
 
-void colod_trace(const char *fmt, ...) {
-    va_list args;
-    va_start(args, fmt);
-
-    if (trace) {
-        vfprintf(trace, fmt, args);
-        fflush(trace);
-    }
-
-    va_end(args);
-}
-
-void colod_syslog(int pri, const char *fmt, ...) {
-    va_list args;
-
-    if (trace) {
-        va_start(args, fmt);
-        vfprintf(trace, fmt, args);
-        fwrite("\n", 1, 1, trace);
-        fflush(trace);
-        va_end(args);
-    }
-
-    va_start(args, fmt);
-    if (do_syslog) {
-        vsyslog(pri, fmt, args);
-    } else {
-        vfprintf(stderr, fmt, args);
-        fwrite("\n", 1, 1, stderr);
-    }
-    va_end(args);
-}
-
-static void colod_mainloop(ColodContext *mctx) {
+void daemon_mainloop(ColodContext *mctx) {
     const ColodContext *ctx = mctx;
     GError *local_errp = NULL;
 
@@ -112,7 +79,7 @@ static void colod_mainloop(ColodContext *mctx) {
     qmp_free(ctx->qmp);
 }
 
-static int colod_open_mngmt(ColodContext *ctx, GError **errp) {
+static int daemon_open_mngmt(ColodContext *ctx, GError **errp) {
     int sockfd, ret;
     struct sockaddr_un address = { 0 };
     g_autofree char *path = NULL;
@@ -161,7 +128,7 @@ err:
     return -1;
 }
 
-static int colod_open_qmp(ColodContext *ctx, GError **errp) {
+static int daemon_open_qmp(ColodContext *ctx, GError **errp) {
     int ret;
 
     ret = colod_unix_connect(ctx->qmp_path, errp);
@@ -181,7 +148,7 @@ static int colod_open_qmp(ColodContext *ctx, GError **errp) {
     return 0;
 }
 
-static int colod_daemonize(ColodContext *ctx) {
+static int daemonize(ColodContext *ctx) {
     GError *local_errp = NULL;
     gchar *path;
     int logfd, pipefd, ret;
@@ -222,7 +189,7 @@ static int colod_daemonize(ColodContext *ctx) {
     return pipefd;
 }
 
-static int colod_parse_options(ColodContext *ctx, int *argc, char ***argv,
+static int daemon_parse_options(ColodContext *ctx, int *argc, char ***argv,
                                GError **errp) {
     gboolean ret;
     GOptionContext *context;
@@ -266,14 +233,14 @@ static int colod_parse_options(ColodContext *ctx, int *argc, char ***argv,
     return 0;
 }
 
-int main(int argc, char **argv) {
+int daemon_main(int argc, char **argv) {
     GError *errp = NULL;
     ColodContext ctx_struct = { 0 };
     ColodContext *ctx = &ctx_struct;
     int ret;
     int pipefd = 0;
 
-    ret = colod_parse_options(ctx, &argc, &argv, &errp);
+    ret = daemon_parse_options(ctx, &argc, &argv, &errp);
     if (ret < 0) {
         fprintf(stderr, "%s\n", errp->message);
         g_error_free(errp);
@@ -281,19 +248,19 @@ int main(int argc, char **argv) {
     }
 
     if (ctx->daemonize) {
-        pipefd = colod_daemonize(ctx);
+        pipefd = daemonize(ctx);
     }
     prctl(PR_SET_PTRACER, PR_SET_PTRACER_ANY, 0, 0, 0);
     prctl(PR_SET_DUMPABLE, 1);
 
     signal(SIGPIPE, SIG_IGN); // TODO: Handle this properly
 
-    ret = colod_open_qmp(ctx, &errp);
+    ret = daemon_open_qmp(ctx, &errp);
     if (ret < 0) {
         goto err;
     }
 
-    ret = colod_open_mngmt(ctx, &errp);
+    ret = daemon_open_mngmt(ctx, &errp);
     if (ret < 0) {
         goto err;
     }
@@ -310,7 +277,7 @@ int main(int argc, char **argv) {
         }
     }
 
-    colod_mainloop(ctx);
+    daemon_mainloop(ctx);
     g_main_context_unref(g_main_context_default());
 
     // cleanup pidfile, cpg, qmp and mgmt connection

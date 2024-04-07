@@ -55,4 +55,7 @@ void colod_syslog(int pri, const char *fmt, ...)
 
 void colod_trace(const char *fmt, ...);
 
+void daemon_mainloop(ColodContext *mctx);
+int daemon_main(int argc, char **argv);
+
 #endif // DAEMON_H

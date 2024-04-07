@@ -35,7 +35,8 @@
 #include "cpg.h"
 #include "watchdog.h"
 
-static FILE *trace = NULL;
+extern FILE *trace;
+extern gboolean do_syslog;
 
 void colod_trace(const char *fmt, ...) {
     va_list args;
@@ -64,47 +65,6 @@ void colod_syslog(G_GNUC_UNUSED int pri, const char *fmt, ...) {
     vfprintf(stderr, fmt, args);
     fwrite("\n", 1, 1, stderr);
     va_end(args);
-}
-
-static void colod_mainloop(ColodContext *mctx) {
-    const ColodContext *ctx = mctx;
-    GError *local_errp = NULL;
-
-    // g_main_context_default creates the global context on demand
-    GMainContext *main_context = g_main_context_default();
-    mctx->mainloop = g_main_loop_new(main_context, FALSE);
-
-    mctx->qmp = qmp_new(ctx->qmp_fd, ctx->qmp_yank_fd, ctx->qmp_timeout_low,
-                        &local_errp);
-    if (!ctx->qmp) {
-        colod_syslog(LOG_ERR, "Failed to initialize qmp: %s",
-                     local_errp->message);
-        g_error_free(local_errp);
-        exit(EXIT_FAILURE);
-    }
-
-    mctx->commands = qmp_commands_new();
-    mctx->main_coroutine = colod_main_new(ctx);
-    mctx->listener = client_listener_new(ctx->mngmt_listen_fd, ctx);
-    mctx->watchdog = colod_watchdog_new(ctx);
-    mctx->cpg = cpg_new(ctx->cpg, &local_errp);
-    if (!ctx->cpg) {
-        colod_syslog(LOG_ERR, "Failed to initialize cpg: %s",
-                     local_errp->message);
-        g_error_free(local_errp);
-        exit(EXIT_FAILURE);
-    }
-
-    g_main_loop_run(ctx->mainloop);
-    g_main_loop_unref(ctx->mainloop);
-    mctx->mainloop = NULL;
-
-    cpg_free(ctx->cpg);
-    colod_main_free(ctx->main_coroutine);
-    colo_watchdog_free(ctx->watchdog);
-    client_listener_free(ctx->listener);
-    qmp_commands_free(ctx->commands);
-    qmp_free(ctx->qmp);
 }
 
 static int smoke_open_mngmt(SmokeColodContext *sctx, SmokeContext *ctx,
@@ -296,7 +256,7 @@ int main(int argc, char **argv) {
     }
 
     ctx->testcase = testcase_new(ctx);
-    colod_mainloop(&ctx->sctx.cctx);
+    daemon_mainloop(&ctx->sctx.cctx);
     testcase_free(ctx->testcase);
     g_main_context_unref(g_main_context_default());
     g_io_channel_unref(ctx->sctx.client_ch);
