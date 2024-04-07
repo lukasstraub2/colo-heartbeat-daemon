@@ -16,22 +16,41 @@
 
 struct SmokeTestcase {
     Coroutine coroutine;
-    SmokeContext *ctx;
+    SmokeColodContext *sctx;
+    gboolean autoquit, qemu_quit;
     gboolean do_quit, quit;
 };
 
 static gboolean _testcase_co(Coroutine *coroutine, SmokeTestcase *this) {
-    SmokeColodContext *sctx = this->ctx->sctx;
-    const gchar *command = "{'exec-colod': 'quit'}\n";
+    SmokeColodContext *sctx = this->sctx;
     gchar *line;
     gsize len;
 
     co_begin(gboolean, G_SOURCE_CONTINUE);
 
-    co_recurse(ch_write_co(coroutine, sctx->client_ch, command, 1000));
+    if (this->qemu_quit) {
+        colod_shutdown_channel(sctx->qmp_ch);
+        colod_shutdown_channel(sctx->qmp_yank_ch);
+    }
+
+    if (this->autoquit) {
+        co_recurse(ch_write_co(coroutine, sctx->client_ch,
+                               "{'exec-colod': 'autoquit'}\n", 1000));
+    } else {
+        co_recurse(ch_write_co(coroutine, sctx->client_ch,
+                               "{'exec-colod': 'quit'}\n", 1000));
+    }
 
     co_recurse(ch_readln_co(coroutine, sctx->client_ch, &line, &len, 1000));
     g_free(line);
+
+    if (this->autoquit && !this->qemu_quit) {
+        g_timeout_add(500, coroutine->cb.plain, this);
+        co_yield_int(G_SOURCE_REMOVE);
+
+        colod_shutdown_channel(sctx->qmp_ch);
+        colod_shutdown_channel(sctx->qmp_yank_ch);
+    }
 
     assert(!this->do_quit);
     while (!this->do_quit) {
@@ -66,7 +85,9 @@ static gboolean testcase_co_wrap(
     return testcase_co(data);
 }
 
-SmokeTestcase *testcase_new(SmokeContext *ctx) {
+static SmokeTestcase *testcase_new(SmokeColodContext *sctx,
+                                   gboolean autoquit,
+                                   gboolean qemu_quit) {
     SmokeTestcase *this;
     Coroutine *coroutine;
 
@@ -74,15 +95,17 @@ SmokeTestcase *testcase_new(SmokeContext *ctx) {
     coroutine = &this->coroutine;
     coroutine->cb.plain = testcase_co;
     coroutine->cb.iofunc = testcase_co_wrap;
-    this->ctx = ctx;
+    this->sctx = sctx;
+    this->autoquit = autoquit;
+    this->qemu_quit = qemu_quit;
 
-    ctx->sctx->cctx.qmp_timeout_low = 20;
+    sctx->cctx.qmp_timeout_low = 10;
 
     g_idle_add(testcase_co, this);
     return this;
 }
 
-void testcase_free(SmokeTestcase *this) {
+static void testcase_free(SmokeTestcase *this) {
     this->do_quit = TRUE;
 
     while (!this->quit) {
@@ -90,4 +113,49 @@ void testcase_free(SmokeTestcase *this) {
     }
 
     g_free(this);
+}
+
+static int _test_run(SmokeContext *ctx, gboolean autoquit,
+                     gboolean qemu_quit, GError **errp) {
+    SmokeColodContext *sctx;
+    SmokeTestcase *testcase;
+
+    sctx = smoke_context_new(ctx, errp);
+    if (!sctx) {
+        return -1;
+    }
+    testcase = testcase_new(sctx, autoquit, qemu_quit);
+
+    daemon_mainloop(&sctx->cctx);
+
+    testcase_free(testcase);
+    smoke_context_free(sctx);
+
+    return 0;
+}
+
+int test_run(SmokeContext *ctx, GError **errp) {
+    int ret;
+
+    ret = _test_run(ctx, FALSE, FALSE, errp);
+    if (ret < 0) {
+        return -1;
+    }
+
+    ret = _test_run(ctx, TRUE, FALSE, errp);
+    if (ret < 0) {
+        return -1;
+    }
+
+    ret = _test_run(ctx, FALSE, TRUE, errp);
+    if (ret < 0) {
+        return -1;
+    }
+
+    ret = _test_run(ctx, TRUE, TRUE, errp);
+    if (ret < 0) {
+        return -1;
+    }
+
+    return 0;
 }

@@ -274,25 +274,14 @@ int main(int argc, char **argv) {
         g_free(path);
     }
 
-    ctx->sctx = smoke_context_new(ctx, &errp);
-    if (!ctx->sctx) {
-        goto err;
+    ret = test_run(ctx, &errp);
+    if (ret < 0) {
+        colod_syslog(LOG_ERR, "Fatal: %s", errp->message);
+        g_error_free(errp);
+        exit(EXIT_FAILURE);
     }
-    ctx->testcase = testcase_new(ctx);
-
-    daemon_mainloop(&ctx->sctx->cctx);
-
-    testcase_free(ctx->testcase);
-    smoke_context_free(ctx->sctx);
     g_free(ctx->base_dir);
 
     g_main_context_unref(g_main_context_default());
     return EXIT_SUCCESS;
-
-err:
-    if (errp) {
-        colod_syslog(LOG_ERR, "Fatal: %s", errp->message);
-        g_error_free(errp);
-    }
-    exit(EXIT_FAILURE);
 }

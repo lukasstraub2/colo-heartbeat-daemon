@@ -879,8 +879,7 @@ void colod_quit(ColodMainCoroutine *this) {
 }
 
 static void do_autoquit(ColodMainCoroutine *this) {
-    client_listener_free(this->ctx->listener);
-    exit(EXIT_SUCCESS);
+    g_main_loop_quit(this->ctx->mainloop);
 }
 
 static gboolean _colod_main_co(Coroutine *coroutine, ColodMainCoroutine *this);
