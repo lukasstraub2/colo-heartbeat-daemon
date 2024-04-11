@@ -43,8 +43,8 @@ void colod_trace(const char *fmt, ...) {
     va_start(args, fmt);
 
     if (trace) {
-        vfprintf(trace, fmt, args);
-        fflush(trace);
+        vfprintf(stderr, fmt, args);
+        fflush(stderr);
     }
 
     va_end(args);
@@ -53,18 +53,38 @@ void colod_trace(const char *fmt, ...) {
 void colod_syslog(G_GNUC_UNUSED int pri, const char *fmt, ...) {
     va_list args;
 
-    if (trace) {
-        va_start(args, fmt);
-        vfprintf(trace, fmt, args);
-        fwrite("\n", 1, 1, trace);
-        fflush(trace);
-        va_end(args);
-    }
-
     va_start(args, fmt);
     vfprintf(stderr, fmt, args);
     fwrite("\n", 1, 1, stderr);
     va_end(args);
+}
+
+const gchar *smoke_basedir() {
+    const gchar *base_dir = g_getenv("COLOD_BASE_DIR");
+
+    if (base_dir) {
+        return base_dir;
+    } else {
+        mkdir("/tmp/.colod_smoke", 0700);
+        return "/tmp/.colod_smoke";
+    }
+}
+
+gboolean smoke_do_trace() {
+    const gchar *do_trace = g_getenv("COLOD_TRACE");
+
+    return (do_trace ? TRUE : FALSE);
+}
+
+void smoke_init() {
+    prctl(PR_SET_PTRACER, PR_SET_PTRACER_ANY, 0, 0, 0);
+    prctl(PR_SET_DUMPABLE, 1);
+
+    signal(SIGPIPE, SIG_IGN);
+
+    if (smoke_do_trace()) {
+        trace = (FILE*) 1;
+    }
 }
 
 static int socketpair_channel(GIOChannel **channel, GError **errp) {
@@ -106,13 +126,12 @@ static int smoke_open_qmp(SmokeColodContext *sctx, GError **errp) {
     return 0;
 }
 
-static int smoke_open_mngmt(SmokeColodContext *sctx, SmokeContext *ctx,
-                            GError **errp) {
+static int smoke_open_mngmt(SmokeColodContext *sctx, GError **errp) {
     int sockfd, clientfd, ret;
     struct sockaddr_un address = { 0 };
     g_autofree char *path = NULL;
 
-    path = g_strconcat(ctx->base_dir, "/colod.sock", NULL);
+    path = g_strconcat(smoke_basedir(), "/colod.sock", NULL);
     if (strlen(path) >= sizeof(address.sun_path)) {
         colod_error_set(errp, "Management unix path too long");
         return -1;
@@ -171,7 +190,7 @@ err:
     return -1;
 }
 
-static void smoke_fill_cctx(ColodContext *cctx, SmokeContext *ctx) {
+static void smoke_fill_cctx(ColodContext *cctx) {
     cctx->node_name = "tele-clu-01";
     cctx->instance_name = "colo_test";
     cctx->base_dir = "";
@@ -181,22 +200,22 @@ static void smoke_fill_cctx(ColodContext *cctx, SmokeContext *ctx) {
     cctx->qmp_timeout_low = 600;
     cctx->qmp_timeout_high = 10000;
     cctx->watchdog_interval = 0;
-    cctx->do_trace = ctx->do_trace;
+    cctx->do_trace = smoke_do_trace();
     cctx->primary_startup = FALSE;
 }
 
-SmokeColodContext *smoke_context_new(SmokeContext *ctx, GError **errp) {
+SmokeColodContext *smoke_context_new(GError **errp) {
     SmokeColodContext *sctx;
     int ret;
 
     sctx = g_new0(SmokeColodContext, 1);
-    smoke_fill_cctx(&sctx->cctx, ctx);
+    smoke_fill_cctx(&sctx->cctx);
     ret = smoke_open_qmp(sctx, errp);
     if (ret < 0) {
         goto err;
     }
 
-    ret = smoke_open_mngmt(sctx, ctx, errp);
+    ret = smoke_open_mngmt(sctx, errp);
     if (ret < 0) {
         goto err;
     }
@@ -218,70 +237,4 @@ void smoke_context_free(SmokeColodContext *sctx) {
     g_io_channel_unref(sctx->qmp_ch);
     g_io_channel_unref(sctx->qmp_yank_ch);
     g_free(sctx);
-}
-
-static int smoke_parse_options(SmokeContext *ctx, int *argc, char ***argv,
-                               GError **errp) {
-    gboolean ret;
-    GOptionContext *context;
-    GOptionEntry entries[] =
-    {
-        {"base_directory", 'b', 0, G_OPTION_ARG_FILENAME, &ctx->base_dir, "The base directory to store logs and sockets", NULL},
-        {"trace", 0, 0, G_OPTION_ARG_NONE, &ctx->do_trace, "Enable tracing", NULL},
-        {0}
-    };
-
-    context = g_option_context_new("- qemu colo daemon smoketest");
-    g_option_context_set_help_enabled(context, TRUE);
-    g_option_context_add_main_entries(context, entries, 0);
-
-    ret = g_option_context_parse(context, argc, argv, errp);
-    g_option_context_free(context);
-    if (!ret) {
-        return -1;
-    }
-
-    if (!ctx->base_dir) {
-        g_set_error(errp, COLOD_ERROR, COLOD_ERROR_FATAL,
-                    "--base_directory needs to be given.");
-        return -1;
-    }
-
-    return 0;
-}
-
-int main(int argc, char **argv) {
-    GError *errp = NULL;
-    SmokeContext ctx_struct = { 0 };
-    SmokeContext *ctx = &ctx_struct;
-    int ret;
-
-    ret = smoke_parse_options(ctx, &argc, &argv, &errp);
-    if (ret < 0) {
-        fprintf(stderr, "%s\n", errp->message);
-        g_error_free(errp);
-        exit(EXIT_FAILURE);
-    }
-
-    prctl(PR_SET_PTRACER, PR_SET_PTRACER_ANY, 0, 0, 0);
-    prctl(PR_SET_DUMPABLE, 1);
-
-    signal(SIGPIPE, SIG_IGN); // TODO: Handle this properly
-
-    if (ctx->do_trace) {
-        gchar *path = g_strconcat(ctx->base_dir, "/trace.log", NULL);
-        trace = fopen(path, "a");
-        g_free(path);
-    }
-
-    ret = test_run(ctx, &errp);
-    if (ret < 0) {
-        colod_syslog(LOG_ERR, "Fatal: %s", errp->message);
-        g_error_free(errp);
-        exit(EXIT_FAILURE);
-    }
-    g_free(ctx->base_dir);
-
-    g_main_context_unref(g_main_context_default());
-    return EXIT_SUCCESS;
 }

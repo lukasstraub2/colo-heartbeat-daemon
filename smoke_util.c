@@ -24,10 +24,10 @@ void _ch_write_co(Coroutine *coroutine, GIOChannel *channel,
 
     if (ret == G_IO_STATUS_ERROR) {
         log_error(local_errp->message);
-        abort();
+        g_assert_not_reached();
     } else if (ret != G_IO_STATUS_NORMAL) {
         colod_syslog(0, "channel write: EOF");
-        abort();
+        g_assert_not_reached();
     }
 
     return;
@@ -46,10 +46,10 @@ void _ch_readln_co(Coroutine *coroutine, GIOChannel *channel,
 
     if (ret == G_IO_STATUS_ERROR) {
         log_error(local_errp->message);
-        abort();
+        g_assert_not_reached();
     } else if (ret != G_IO_STATUS_NORMAL) {
         colod_syslog(0, "channel read: EOF");
-        abort();
+        g_assert_not_reached();
     }
 
     return;

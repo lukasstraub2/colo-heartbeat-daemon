@@ -14,10 +14,14 @@
 #include "coroutine_stack.h"
 #include "smoke_util.h"
 
+typedef struct QuitEarlyConfig {
+    gboolean autoquit, qemu_quit;
+} QuitEarlyConfig;
+
 struct SmokeTestcase {
     Coroutine coroutine;
     SmokeColodContext *sctx;
-    gboolean autoquit, qemu_quit;
+    const QuitEarlyConfig *config;
     gboolean do_quit, quit;
 };
 
@@ -28,12 +32,12 @@ static gboolean _testcase_co(Coroutine *coroutine, SmokeTestcase *this) {
 
     co_begin(gboolean, G_SOURCE_CONTINUE);
 
-    if (this->qemu_quit) {
+    if (this->config->qemu_quit) {
         colod_shutdown_channel(sctx->qmp_ch);
         colod_shutdown_channel(sctx->qmp_yank_ch);
     }
 
-    if (this->autoquit) {
+    if (this->config->autoquit) {
         co_recurse(ch_write_co(coroutine, sctx->client_ch,
                                "{'exec-colod': 'autoquit'}\n", 1000));
     } else {
@@ -44,7 +48,7 @@ static gboolean _testcase_co(Coroutine *coroutine, SmokeTestcase *this) {
     co_recurse(ch_readln_co(coroutine, sctx->client_ch, &line, &len, 1000));
     g_free(line);
 
-    if (this->autoquit && !this->qemu_quit) {
+    if (this->config->autoquit && !this->config->qemu_quit) {
         g_timeout_add(500, coroutine->cb.plain, this);
         co_yield_int(G_SOURCE_REMOVE);
 
@@ -86,8 +90,7 @@ static gboolean testcase_co_wrap(
 }
 
 static SmokeTestcase *testcase_new(SmokeColodContext *sctx,
-                                   gboolean autoquit,
-                                   gboolean qemu_quit) {
+                                   const QuitEarlyConfig *config) {
     SmokeTestcase *this;
     Coroutine *coroutine;
 
@@ -96,8 +99,7 @@ static SmokeTestcase *testcase_new(SmokeColodContext *sctx,
     coroutine->cb.plain = testcase_co;
     coroutine->cb.iofunc = testcase_co_wrap;
     this->sctx = sctx;
-    this->autoquit = autoquit;
-    this->qemu_quit = qemu_quit;
+    this->config = config;
 
     sctx->cctx.qmp_timeout_low = 10;
 
@@ -115,47 +117,48 @@ static void testcase_free(SmokeTestcase *this) {
     g_free(this);
 }
 
-static int _test_run(SmokeContext *ctx, gboolean autoquit,
-                     gboolean qemu_quit, GError **errp) {
+static void test_run(gconstpointer opaque) {
+    GError *errp = NULL;
+    const QuitEarlyConfig *config = opaque;
     SmokeColodContext *sctx;
     SmokeTestcase *testcase;
 
-    sctx = smoke_context_new(ctx, errp);
-    if (!sctx) {
-        return -1;
-    }
-    testcase = testcase_new(sctx, autoquit, qemu_quit);
+    sctx = smoke_context_new(&errp);
+    g_assert_true(sctx);
+
+    testcase = testcase_new(sctx, config);
 
     daemon_mainloop(&sctx->cctx);
 
     testcase_free(testcase);
     smoke_context_free(sctx);
-
-    return 0;
 }
 
-int test_run(SmokeContext *ctx, GError **errp) {
-    int ret;
+int main(int argc, char **argv) {
+    smoke_init();
 
-    ret = _test_run(ctx, FALSE, FALSE, errp);
-    if (ret < 0) {
-        return -1;
-    }
+    g_test_init(&argc, &argv, NULL);
 
-    ret = _test_run(ctx, TRUE, FALSE, errp);
-    if (ret < 0) {
-        return -1;
-    }
+    g_test_add_data_func("/quit_early",
+                         &(QuitEarlyConfig) {
+                             .autoquit = FALSE,
+                             .qemu_quit = FALSE
+                         }, test_run);
+    g_test_add_data_func("/quit_early/autoquit",
+                         &(QuitEarlyConfig) {
+                             .autoquit = TRUE,
+                             .qemu_quit = FALSE
+                         }, test_run);
+    g_test_add_data_func("/quit_early/qemu_quit",
+                         &(QuitEarlyConfig) {
+                             .autoquit = FALSE,
+                             .qemu_quit = TRUE
+                         }, test_run);
+    g_test_add_data_func("/quit_early/autoquit/qemu_quit",
+                         &(QuitEarlyConfig) {
+                             .autoquit = TRUE,
+                             .qemu_quit = TRUE
+                         }, test_run);
 
-    ret = _test_run(ctx, FALSE, TRUE, errp);
-    if (ret < 0) {
-        return -1;
-    }
-
-    ret = _test_run(ctx, TRUE, TRUE, errp);
-    if (ret < 0) {
-        return -1;
-    }
-
-    return 0;
+    return g_test_run();
 }

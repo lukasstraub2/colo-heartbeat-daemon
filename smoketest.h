@@ -20,14 +20,11 @@ typedef struct SmokeColodContext {
     GIOChannel *client_ch;
 } SmokeColodContext;
 
-typedef struct SmokeContext {
-    gchar *base_dir;
-    gboolean do_trace;
-} SmokeContext;
+void smoke_init();
+const gchar *smoke_basedir();
+gboolean smoke_do_trace();
 
-SmokeColodContext *smoke_context_new(SmokeContext *ctx, GError **errp);
+SmokeColodContext *smoke_context_new(GError **errp);
 void smoke_context_free(SmokeColodContext *sctx);
-
-int test_run(SmokeContext *ctx, GError **errp);
 
 #endif // SOMOKETEST_H
