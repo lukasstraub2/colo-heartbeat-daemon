@@ -15,5 +15,6 @@ typedef struct ColodClientListener ColodClientListener;
 typedef struct ColodQmpState ColodQmpState;
 typedef struct ColodWatchdog ColodWatchdog;
 typedef struct Cpg Cpg;
+typedef struct ColodNetlink ColodNetlink;
 
 #endif // BASE_TYPES_H

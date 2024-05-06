@@ -1,4 +1,5 @@
 colod
 smoketest_quit_early
 io_watch_test
+netlink_test
 *.o
