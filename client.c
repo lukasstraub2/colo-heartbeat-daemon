@@ -352,7 +352,7 @@ static gboolean _colod_client_co(Coroutine *coroutine) {
         gsize len;
         ColodQmpResult *request, *result;
     } *co;
-    GIOStatus ret;
+    int ret;
     GError *local_errp = NULL;
 
     co_frame(co, sizeof(*co));
@@ -367,7 +367,7 @@ static gboolean _colod_client_co(Coroutine *coroutine) {
             g_free(CO line);
             break;
         }
-        if (ret != G_IO_STATUS_NORMAL) {
+        if (ret < 0) {
             goto error_client;
         }
 
@@ -438,7 +438,7 @@ static gboolean _colod_client_co(Coroutine *coroutine) {
                                                         CO result->line,
                                                         CO result->len, 1000,
                                                         &local_errp));
-        if (ret != G_IO_STATUS_NORMAL) {
+        if (ret < 0) {
             qmp_result_free(CO result);
             goto error_client;
         }
@@ -449,7 +449,7 @@ static gboolean _colod_client_co(Coroutine *coroutine) {
     return G_SOURCE_REMOVE;
 
 error_client:
-    if (ret == G_IO_STATUS_ERROR) {
+    if (!g_error_matches(local_errp, COLOD_ERROR, COLOD_ERROR_EOF)) {
         colod_syslog(LOG_WARNING, "Client connection broke: %s",
                      local_errp->message);
         g_error_free(local_errp);

@@ -49,7 +49,7 @@ typedef struct ColodContext {
 void colod_syslog(int pri, const char *fmt, ...)
      __attribute__ ((__format__ (__printf__, 2, 3)));
 #define log_error(message) \
-    colod_syslog(LOG_ERR, "%s: %s", __func__, message)
+    colod_syslog(LOG_ERR, "%s:%u: %s", __func__, __LINE__, message)
 #define log_error_fmt(fmt, ...) \
     colod_syslog(LOG_ERR, "%s: " fmt, __func__, ##__VA_ARGS__)
 

@@ -14,7 +14,7 @@
 
 void _ch_write_co(Coroutine *coroutine, GIOChannel *channel,
                   const gchar *buf, guint timeout) {
-    GIOStatus ret;
+    int ret;
     GError *local_errp = NULL;
     ret = _colod_channel_write_timeout_co(coroutine, channel, buf, strlen(buf),
                                           timeout, &local_errp);
@@ -22,11 +22,8 @@ void _ch_write_co(Coroutine *coroutine, GIOChannel *channel,
         return;
     }
 
-    if (ret == G_IO_STATUS_ERROR) {
+    if (ret < 0) {
         log_error(local_errp->message);
-        g_assert_not_reached();
-    } else if (ret != G_IO_STATUS_NORMAL) {
-        colod_syslog(0, "channel write: EOF");
         g_assert_not_reached();
     }
 
@@ -35,7 +32,7 @@ void _ch_write_co(Coroutine *coroutine, GIOChannel *channel,
 
 void _ch_readln_co(Coroutine *coroutine, GIOChannel *channel,
                    gchar **buf, gsize *len, guint timeout) {
-    GIOStatus ret;
+    int ret;
     GError *local_errp = NULL;
 
     ret = _colod_channel_read_line_timeout_co(coroutine, channel, buf, len,
@@ -44,11 +41,8 @@ void _ch_readln_co(Coroutine *coroutine, GIOChannel *channel,
         return;
     }
 
-    if (ret == G_IO_STATUS_ERROR) {
+    if (ret < 0) {
         log_error(local_errp->message);
-        g_assert_not_reached();
-    } else if (ret != G_IO_STATUS_NORMAL) {
-        colod_syslog(0, "channel read: EOF");
         g_assert_not_reached();
     }
 

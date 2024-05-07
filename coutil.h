@@ -56,26 +56,26 @@ typedef struct CoroutineLock {
 #define colod_channel_write_co(...) \
     co_wrap(_colod_channel_write_co(__VA_ARGS__))
 
-GIOStatus _colod_channel_read_line_timeout_co(Coroutine *coroutine,
-                                              GIOChannel *channel,
-                                              gchar **line,
-                                              gsize *len,
-                                              guint timeout,
-                                              GError **errp);
+int _colod_channel_read_line_timeout_co(Coroutine *coroutine,
+                                        GIOChannel *channel,
+                                        gchar **line,
+                                        gsize *len,
+                                        guint timeout,
+                                        GError **errp);
 
-GIOStatus _colod_channel_read_line_co(Coroutine *coroutine,
-                                      GIOChannel *channel, gchar **line,
-                                      gsize *len, GError **errp);
+int _colod_channel_read_line_co(Coroutine *coroutine,
+                                GIOChannel *channel, gchar **line,
+                                gsize *len, GError **errp);
 
-GIOStatus _colod_channel_write_timeout_co(Coroutine *coroutine,
-                                          GIOChannel *channel,
-                                          const gchar *buf,
-                                          gsize len,
-                                          guint timeout,
-                                          GError **errp);
+int _colod_channel_write_timeout_co(Coroutine *coroutine,
+                                    GIOChannel *channel,
+                                    const gchar *buf,
+                                    gsize len,
+                                    guint timeout,
+                                    GError **errp);
 
-GIOStatus _colod_channel_write_co(Coroutine *coroutine,
-                                  GIOChannel *channel, const gchar *buf,
-                                  gsize len, GError **errp);
+int _colod_channel_write_co(Coroutine *coroutine,
+                            GIOChannel *channel, const gchar *buf,
+                            gsize len, GError **errp);
 
 #endif // COUTIL_H

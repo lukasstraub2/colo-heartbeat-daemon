@@ -163,7 +163,7 @@ static ColodQmpResult *_qmp_read_line_co(Coroutine *coroutine,
         co_recurse(ret = colod_channel_read_line_timeout_co(coroutine,
                             channel->channel, &CO line, &CO len,
                             state->timeout, &local_errp));
-        if (ret == G_IO_STATUS_ERROR) {
+        if (ret < 0) {
             log_error(local_errp->message);
             if (g_error_matches(local_errp, COLOD_ERROR, COLOD_ERROR_TIMEOUT)) {
                 if (yank) {
@@ -183,12 +183,6 @@ static ColodQmpResult *_qmp_read_line_co(Coroutine *coroutine,
                 }
             }
             g_propagate_error(errp, local_errp);
-            return NULL;
-        }
-        if (ret != G_IO_STATUS_NORMAL) {
-            colod_trace("%s:%u: Qmp signaled EOF\n", __func__, __LINE__);
-            g_set_error(errp, COLOD_ERROR, COLOD_ERROR_FATAL,
-                        "Qmp signaled EOF");
             return NULL;
         }
 
@@ -228,7 +222,7 @@ static ColodQmpResult *__qmp_execute_co(Coroutine *coroutine,
                                         GError **errp,
                                         const gchar *command) {
     ColodQmpResult *result;
-    GIOStatus ret;
+    int ret;
     GError *local_errp = NULL;
 
     co_begin(ColodQmpResult *, NULL);
@@ -239,17 +233,7 @@ static ColodQmpResult *__qmp_execute_co(Coroutine *coroutine,
     co_recurse(ret = colod_channel_write_timeout_co(coroutine, channel->channel,
                                    command, strlen(command), state->timeout,
                                    &local_errp));
-    if (ret == G_IO_STATUS_ERROR) {
-        colod_trace("%s:%u: %s\n", __func__, __LINE__, local_errp->message);
-        qmp_set_error(state, local_errp);
-        g_propagate_prefixed_error(errp, local_errp, "qmp: ");
-        colod_unlock_co(channel->lock);
-        state->inflight--;
-        return NULL;
-    }
-    if (ret != G_IO_STATUS_NORMAL) {
-        local_errp = g_error_new(COLOD_ERROR, COLOD_ERROR_FATAL,
-                                 "Qmp signaled EOF");
+    if (ret < 0) {
         colod_trace("%s:%u: %s\n", __func__, __LINE__, local_errp->message);
         qmp_set_error(state, local_errp);
         g_propagate_prefixed_error(errp, local_errp, "qmp: ");
