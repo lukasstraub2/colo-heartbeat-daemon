@@ -334,8 +334,7 @@ static gboolean colod_client_co(gpointer data) {
         return GPOINTER_TO_INT(coroutine->yield_value);
     }
 
-    g_source_remove_by_user_data(coroutine);
-    assert(!g_source_remove_by_user_data(coroutine));
+    colod_assert_remove_one_source(coroutine);
     client_free(client);
     return ret;
 }

@@ -8,12 +8,15 @@ common_objects=util.o qemu_util.o json_util.o coutil.o qmp.o client.o watchdog.o
 %.o: %.c *.h
 	$(CC) -c -o $@ $< $(CFLAGS)
 
-all: colod smoketest_quit_early io_watch_test netlink_test
+all: colod smoketest_quit_early smoketest_client_quit io_watch_test netlink_test
 
 colod: $(common_objects) cpg.o colod.o
 	$(CC) -o $@ $^ $(CFLAGS) $(CPG_LDFLAGS) $(LDFLAGS)
 
 smoketest_quit_early: $(common_objects) stub_cpg.o smoke_util.o smoketest_quit_early.o smoketest.o
+	$(CC) -o $@ $^ $(CFLAGS) $(LDFLAGS)
+
+smoketest_client_quit: $(common_objects) stub_cpg.o smoke_util.o smoketest_client_quit.o smoketest.o
 	$(CC) -o $@ $^ $(CFLAGS) $(LDFLAGS)
 
 io_watch_test: util.o io_watch_test.o
@@ -25,4 +28,4 @@ netlink_test: util.o netlink.o netlink_test.o
 .PHONY: clean
 
 clean:
-	rm -f *.o colod smoketest_quit_early io_watch_test netlink_test
+	rm -f *.o colod smoketest_quit_early smoketest_client_quit io_watch_test netlink_test

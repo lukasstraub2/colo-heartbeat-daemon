@@ -38,6 +38,7 @@
 extern FILE *trace;
 extern gboolean do_syslog;
 
+__attribute__((weak))
 void colod_trace(const char *fmt, ...) {
     va_list args;
     va_start(args, fmt);
@@ -50,6 +51,7 @@ void colod_trace(const char *fmt, ...) {
     va_end(args);
 }
 
+__attribute__((weak))
 void colod_syslog(G_GNUC_UNUSED int pri, const char *fmt, ...) {
     va_list args;
 

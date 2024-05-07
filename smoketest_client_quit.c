@@ -13,9 +13,10 @@
 #include "smoketest.h"
 #include "coroutine_stack.h"
 #include "smoke_util.h"
+#include "main_coroutine.h"
 
-typedef struct QuitEarlyConfig {
-    gboolean autoquit, qemu_quit;
+typedef struct ClientQuitConfig {
+    gboolean client_crash;
 } QuitEarlyConfig;
 
 struct SmokeTestcase {
@@ -25,36 +26,40 @@ struct SmokeTestcase {
     gboolean do_quit, quit;
 };
 
+static gboolean logged = FALSE;
+
+void colod_syslog(G_GNUC_UNUSED int pri, const char *fmt, ...) {
+    va_list args;
+
+    va_start(args, fmt);
+    vfprintf(stderr, fmt, args);
+    fwrite("\n", 1, 1, stderr);
+    va_end(args);
+
+    logged = TRUE;
+}
+
 static gboolean _testcase_co(Coroutine *coroutine, SmokeTestcase *this) {
     SmokeColodContext *sctx = this->sctx;
-    gchar *line;
-    gsize len;
 
     co_begin(gboolean, G_SOURCE_CONTINUE);
 
-    if (this->config->qemu_quit) {
-        colod_shutdown_channel(sctx->qmp_ch);
-        colod_shutdown_channel(sctx->qmp_yank_ch);
-    }
+    g_timeout_add(200, coroutine->cb.plain, this);
+    co_yield_int(G_SOURCE_REMOVE);
 
-    if (this->config->autoquit) {
-        co_recurse(ch_write_co(coroutine, sctx->client_ch,
-                               "{'exec-colod': 'autoquit'}\n", 1000));
+    logged = FALSE;
+    if (this->config->client_crash) {
+        colod_shutdown_channel(sctx->client_ch);
     } else {
-        co_recurse(ch_write_co(coroutine, sctx->client_ch,
-                               "{'exec-colod': 'quit'}\n", 1000));
+        g_io_channel_shutdown(sctx->client_ch, FALSE, NULL);
     }
 
-    co_recurse(ch_readln_co(coroutine, sctx->client_ch, &line, &len, 1000));
-    g_free(line);
+    g_timeout_add(10, coroutine->cb.plain, this);
+    co_yield_int(G_SOURCE_REMOVE);
 
-    if (this->config->autoquit && !this->config->qemu_quit) {
-        g_timeout_add(500, coroutine->cb.plain, this);
-        co_yield_int(G_SOURCE_REMOVE);
+    g_assert_false(logged);
 
-        colod_shutdown_channel(sctx->qmp_ch);
-        colod_shutdown_channel(sctx->qmp_yank_ch);
-    }
+    colod_quit(this->sctx->cctx.main_coroutine);
 
     assert(!this->do_quit);
     while (!this->do_quit) {
@@ -138,25 +143,13 @@ int main(int argc, char **argv) {
 
     g_test_init(&argc, &argv, NULL);
 
-    g_test_add_data_func("/quit_early/normal",
+    g_test_add_data_func("/client_quit/normal",
                          &(QuitEarlyConfig) {
-                             .autoquit = FALSE,
-                             .qemu_quit = FALSE
+                             .client_crash = FALSE
                          }, test_run);
-    g_test_add_data_func("/quit_early/autoquit",
+    g_test_add_data_func("/client_quit/crash",
                          &(QuitEarlyConfig) {
-                             .autoquit = TRUE,
-                             .qemu_quit = FALSE
-                         }, test_run);
-    g_test_add_data_func("/quit_early/qemu_quit",
-                         &(QuitEarlyConfig) {
-                             .autoquit = FALSE,
-                             .qemu_quit = TRUE
-                         }, test_run);
-    g_test_add_data_func("/quit_early/autoquit/qemu_quit",
-                         &(QuitEarlyConfig) {
-                             .autoquit = TRUE,
-                             .qemu_quit = TRUE
+                             .client_crash = TRUE
                          }, test_run);
 
     return g_test_run();

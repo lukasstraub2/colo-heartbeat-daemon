@@ -9,6 +9,7 @@
 
 #include "coutil.h"
 #include "util.h"
+#include "daemon.h"
 
 #include <glib-2.0/glib.h>
 
@@ -30,6 +31,7 @@ int _colod_channel_read_line_timeout_co(Coroutine *coroutine,
     if (timeout) {
         CO timeout_source_id = g_timeout_add(timeout, coroutine->cb.plain,
                                              coroutine);
+        g_source_set_name_by_id(CO timeout_source_id, "channel read timeout");
     }
 
     while (TRUE) {
@@ -41,6 +43,7 @@ int _colod_channel_read_line_timeout_co(Coroutine *coroutine,
                                              G_IO_IN | G_IO_HUP,
                                              coroutine->cb.iofunc,
                                              coroutine);
+            g_source_set_name_by_id(CO io_source_id, "channel read io watch");
             co_yield_int(G_SOURCE_REMOVE);
 
             guint source_id = g_source_get_id(g_main_current_source());
@@ -51,6 +54,8 @@ int _colod_channel_read_line_timeout_co(Coroutine *coroutine,
                 goto err;
             } else if (source_id != CO io_source_id) {
                 g_source_remove(CO io_source_id);
+                colod_trace("%s:%u: Got woken by unknown source\n",
+                            __func__, __LINE__);
             }
         } else if (ret == G_IO_STATUS_NORMAL) {
             break;
@@ -102,6 +107,7 @@ int _colod_channel_write_timeout_co(Coroutine *coroutine,
     if (timeout) {
         CO timeout_source_id = g_timeout_add(timeout, coroutine->cb.plain,
                                              coroutine);
+        g_source_set_name_by_id(CO timeout_source_id, "channel write timeout");
     }
 
     CO offset = 0;
@@ -117,6 +123,7 @@ int _colod_channel_write_timeout_co(Coroutine *coroutine,
                 CO io_source_id = g_io_add_watch(channel, G_IO_OUT | G_IO_HUP,
                                                  coroutine->cb.iofunc,
                                                  coroutine);
+                g_source_set_name_by_id(CO io_source_id, "channel write io watch");
                 co_yield_int(G_SOURCE_REMOVE);
 
                 guint source_id = g_source_get_id(g_main_current_source());
@@ -127,6 +134,8 @@ int _colod_channel_write_timeout_co(Coroutine *coroutine,
                     goto err;
                 } else if (source_id != CO io_source_id) {
                     g_source_remove(CO io_source_id);
+                    colod_trace("%s:%u: Got woken by unknown source\n",
+                                __func__, __LINE__);
                 }
             }
         } else if (ret == G_IO_STATUS_ERROR) {
@@ -144,6 +153,7 @@ int _colod_channel_write_timeout_co(Coroutine *coroutine,
             CO io_source_id = g_io_add_watch(channel, G_IO_OUT | G_IO_HUP,
                                              coroutine->cb.iofunc,
                                              coroutine);
+            g_source_set_name_by_id(CO io_source_id, "channel flush io watch");
             co_yield_int(G_SOURCE_REMOVE);
 
             guint source_id = g_source_get_id(g_main_current_source());
@@ -154,6 +164,8 @@ int _colod_channel_write_timeout_co(Coroutine *coroutine,
                 goto err;
             } else if (source_id != CO io_source_id) {
                 g_source_remove(CO io_source_id);
+                colod_trace("%s:%u: Got woken by unknown source\n",
+                            __func__, __LINE__);
             }
         } else if (ret == G_IO_STATUS_NORMAL) {
             break;

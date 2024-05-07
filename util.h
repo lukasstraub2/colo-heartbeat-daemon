@@ -70,4 +70,10 @@ void colod_callback_del(ColodCallbackHead *head,
                         ColodCallbackFunc func, gpointer user_data);
 void colod_callback_clear(ColodCallbackHead *head);
 
+const char *colod_source_name_or_null(GSource *source);
+#define colod_assert_remove_one_source(data) \
+    _colod_assert_remove_one_source((data), __func__, __LINE__)
+void _colod_assert_remove_one_source(gpointer data, const gchar *func,
+                                     int line);
+
 #endif // UTIL_H

@@ -392,8 +392,7 @@ static gboolean qmp_handshake_readable_co(gpointer data) {
         return GPOINTER_TO_INT(coroutine->yield_value);
     }
 
-    g_source_remove_by_user_data(coroutine);
-    assert(!g_source_remove_by_user_data(coroutine));
+    colod_assert_remove_one_source(coroutine);
     qmpco->state->inflight--;
     g_free(coroutine);
     return ret;
@@ -553,8 +552,7 @@ static gboolean qmp_event_co(gpointer data) {
         return GPOINTER_TO_INT(coroutine->yield_value);
     }
 
-    g_source_remove_by_user_data(coroutine);
-    assert(!g_source_remove_by_user_data(coroutine));
+    colod_assert_remove_one_source(coroutine);
     qmpco->state->inflight--;
     g_free(qmpco);
     return ret;
@@ -637,7 +635,9 @@ static Coroutine *qmp_event_coroutine(ColodQmpState *state,
 }
 
 guint qmp_hup_source(ColodQmpState *state, GIOFunc func, gpointer data) {
-    return g_io_add_watch(state->channel.channel, G_IO_HUP, func, data);
+    guint id = g_io_add_watch(state->channel.channel, G_IO_HUP, func, data);
+    g_source_set_name_by_id(id, "qmp hup source");
+    return id;
 }
 
 void qmp_set_yank_instances(ColodQmpState *state, JsonNode *instances) {

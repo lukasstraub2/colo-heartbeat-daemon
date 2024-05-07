@@ -33,7 +33,25 @@ struct ColodMainCoroutine {
     gboolean failed, yellow, qemu_quit;
     gboolean primary;
     gboolean replication, peer_failover, peer_failed;
+
+    ColodMainCoroutine *unique_ptr_for_hup_source;
+    guint hup_source;
 };
+
+#define colod_trace_source(data) \
+    _colod_trace_source((data), __func__, __LINE__)
+static void _colod_trace_source(gpointer data, const gchar *func,
+                                int line) {
+    GMainContext *mainctx = g_main_context_default();
+    GSource *found = g_main_context_find_source_by_user_data(mainctx, data);
+    const gchar *found_name = colod_source_name_or_null(found);
+
+    GSource *current = g_main_current_source();
+    const gchar *current_name = colod_source_name_or_null(current);
+
+    colod_trace("%s:%u: found source \"%s\", current source \"%s\"\n",
+                func, line, found_name, current_name);
+}
 
 void colod_query_status(ColodMainCoroutine *this, ColodState *ret) {
     ret->primary = this->primary;
@@ -154,6 +172,7 @@ void _colod_event_queue(ColodMainCoroutine *this, ColodEvent event,
         this->wake_source_id = g_idle_add_full(G_PRIORITY_DEFAULT_IDLE,
                                                this->coroutine.cb.plain, this,
                                                event_wake_source_destroy_cb);
+        g_source_set_name_by_id(this->wake_source_id, "wake for event");
     }
 
     if (!queue_empty(queue)) {
@@ -513,8 +532,7 @@ static gboolean colod_raise_timeout_co(gpointer data) {
 
     qmp_set_timeout(mainco->qmp, mainco->ctx->qmp_timeout_low);
 
-    g_source_remove_by_user_data(coroutine);
-    assert(!g_source_remove_by_user_data(coroutine));
+    colod_assert_remove_one_source(coroutine);
     g_free(mainco->raise_timeout_coroutine);
     mainco->raise_timeout_coroutine = NULL;
     return ret;
@@ -893,8 +911,7 @@ static gboolean colod_main_co(gpointer data) {
         return GPOINTER_TO_INT(coroutine->yield_value);
     }
 
-    g_source_remove_by_user_data(this);
-    assert(!g_source_remove_by_user_data(this));
+    colod_assert_remove_one_source(this);
     this->quit = TRUE;
     return ret;
 }
@@ -1066,11 +1083,14 @@ autoquit:
 static gboolean colod_hup_cb(G_GNUC_UNUSED GIOChannel *channel,
                              G_GNUC_UNUSED GIOCondition revents,
                              gpointer data) {
-    ColodMainCoroutine *this = data;
+    ColodMainCoroutine **unique_ptr = data;
+    ColodMainCoroutine *this = *unique_ptr;
 
     log_error("qemu quit");
     this->qemu_quit = TRUE;
     colod_event_queue(this, EVENT_QEMU_QUIT, "qmp hup");
+
+    this->hup_source = 0;
     return G_SOURCE_REMOVE;
 }
 
@@ -1123,7 +1143,10 @@ ColodMainCoroutine *colod_main_new(const ColodContext *ctx) {
 
     this->primary = ctx->primary_startup;
     qmp_add_notify_event(this->qmp, colod_qmp_event_cb, this);
-    qmp_hup_source(this->qmp, colod_hup_cb, this);
+
+    this->unique_ptr_for_hup_source = this;
+    this->hup_source = qmp_hup_source(this->qmp, colod_hup_cb,
+                                      &this->unique_ptr_for_hup_source);
 
     g_idle_add(colod_main_co, this);
     return this;
@@ -1131,6 +1154,9 @@ ColodMainCoroutine *colod_main_new(const ColodContext *ctx) {
 
 void colod_main_free(ColodMainCoroutine *this) {
     colod_event_queue(this, EVENT_QUIT, "teardown");
+    if (this->hup_source) {
+        g_source_remove(this->hup_source);
+    }
     qmp_del_notify_event(this->qmp, colod_qmp_event_cb, this);
     colod_raise_timeout_coroutine_free(this);
 

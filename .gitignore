@@ -1,5 +1,6 @@
 colod
 smoketest_quit_early
+smoketest_client_quit
 io_watch_test
 netlink_test
 *.o
