@@ -20,6 +20,22 @@
 #include "cpg.h"
 #include "json_util.h"
 
+typedef enum MainState {
+    STATE_SECONDARY_STARTUP,
+    STATE_SECONDARY_WAIT,
+    STATE_SECONDARY_COLO_RUNNING,
+    STATE_PRIMARY_STARTUP,
+    STATE_PRIMARY_WAIT,
+    STATE_PRIMARY_START_MIGRATION,
+    STATE_PRIMARY_COLO_RUNNING,
+    STATE_FAILOVER_SYNC,
+    STATE_FAILOVER,
+    STATE_FAILED_PEER_FAILOVER,
+    STATE_FAILED,
+    STATE_QUIT,
+    STATE_AUTOQUIT
+} MainState;
+
 struct ColodMainCoroutine {
     Coroutine coroutine;
     gboolean quit;
@@ -621,7 +637,8 @@ static int _colod_stop_co(Coroutine *coroutine, ColodMainCoroutine *this,
 
 #define colod_failover_co(...) \
     co_wrap(_colod_failover_co(__VA_ARGS__))
-static ColodEvent _colod_failover_co(Coroutine *coroutine, ColodMainCoroutine *this) {
+static MainState _colod_failover_co(Coroutine *coroutine,
+                                    ColodMainCoroutine *this) {
     struct {
         JsonNode *commands;
     } *co;
@@ -629,13 +646,13 @@ static ColodEvent _colod_failover_co(Coroutine *coroutine, ColodMainCoroutine *t
     GError *local_errp = NULL;
 
     co_frame(co, sizeof(*co));
-    co_begin(ColodEvent, EVENT_FAILED);
+    co_begin(MainState, STATE_FAILED);
 
     co_recurse(ret = qmp_yank_co(coroutine, this->qmp, &local_errp));
     if (ret < 0) {
         log_error(local_errp->message);
         g_error_free(local_errp);
-        return EVENT_FAILED;
+        return STATE_FAILED;
     }
 
     if (this->primary) {
@@ -650,20 +667,20 @@ static ColodEvent _colod_failover_co(Coroutine *coroutine, ColodMainCoroutine *t
     if (ret < 0) {
         log_error(local_errp->message);
         g_error_free(local_errp);
-        return EVENT_FAILED;
+        return STATE_FAILED;
     }
 
     co_end;
 
-    return EVENT_DID_FAILOVER;
+    return STATE_PRIMARY_WAIT;
 }
 
 #define colod_failover_sync_co(...) \
     co_wrap(_colod_failover_sync_co(__VA_ARGS__))
-static ColodEvent _colod_failover_sync_co(Coroutine *coroutine,
-                                          ColodMainCoroutine *this) {
+static MainState _colod_failover_sync_co(Coroutine *coroutine,
+                                         ColodMainCoroutine *this) {
 
-    co_begin(ColodEvent, EVENT_FAILED);
+    co_begin(MainState, STATE_FAILED);
 
     colod_cpg_send(this->ctx->cpg, MESSAGE_FAILOVER);
 
@@ -671,38 +688,178 @@ static ColodEvent _colod_failover_sync_co(Coroutine *coroutine,
         ColodEvent event;
         co_recurse(event = colod_event_wait(coroutine, this));
         if (event == EVENT_FAILOVER_WIN) {
-            break;
+            return STATE_FAILOVER;
         } else if (event == EVENT_PEER_FAILED) {
-            break;
+            return STATE_FAILOVER;
         } else if (event_critical(event) && event_escalate(event)) {
-            return event;
+            assert(event != EVENT_NONE);
+            if (event_failed(event)) {
+                if (event == EVENT_PEER_FAILOVER) {
+                    return STATE_FAILED_PEER_FAILOVER;
+                } else {
+                    return STATE_FAILED;
+                }
+            } else if (event == EVENT_QUIT) {
+                return STATE_QUIT;
+            } else if (event == EVENT_AUTOQUIT) {
+                return STATE_AUTOQUIT;
+            } else {
+                abort();
+            }
         }
     }
 
-    ColodEvent event;
-    co_recurse(event = colod_failover_co(coroutine, this));
-    return event;
-
     co_end;
 
-    return EVENT_FAILED;
+    return STATE_FAILED;
 }
 
-#define colod_start_migration_co(...) \
-    co_wrap(_colod_start_migration_co(__VA_ARGS__))
-static ColodEvent _colod_start_migration_co(Coroutine *coroutine,
-                                            ColodMainCoroutine *this) {
+#define colod_secondary_startup_co(...) \
+    co_wrap(_colod_secondary_startup_co(__VA_ARGS__));
+static MainState _colod_secondary_startup_co(Coroutine *coroutine,
+                                             ColodMainCoroutine *this) {
+    GError *local_errp = NULL;
+    ColodQmpResult *result;
+
+    result =_colod_execute_co(coroutine, this, &local_errp,
+                            "{'execute': 'migrate-set-capabilities',"
+                            "'arguments': {'capabilities': ["
+                                "{'capability': 'events', 'state': true }]}}\n");
+    if (coroutine->yield) {
+        return 0;
+    }
+
+    if (!result) {
+        log_error(local_errp->message);
+        g_error_free(local_errp);
+        return STATE_FAILED;
+    }
+    qmp_result_free(result);
+
+    return STATE_SECONDARY_WAIT;
+}
+
+#define colod_secondary_wait_co(...) \
+    co_wrap(_colod_secondary_wait_co(__VA_ARGS__))
+static MainState _colod_secondary_wait_co(Coroutine *coroutine,
+                                          ColodMainCoroutine *this) {
+    GError *local_errp = NULL;
+    int ret;
+
+    while (TRUE) {
+        ret = _colod_qmp_event_wait_co(coroutine, this, 0,
+                                      "{'event': 'RESUME'}", &local_errp);
+        if (coroutine->yield) {
+            return 0;
+        }
+
+        if (ret < 0) {
+            // Interrupted
+            g_error_free(local_errp);
+            assert(colod_event_pending(this));
+            ColodEvent event = _colod_event_wait(coroutine, this, __func__,
+                                                 __LINE__);
+            assert(!coroutine->yield);
+
+            if (event_critical(event) && event_escalate(event)) {
+                if (event_failed(event)) {
+                    if (event == EVENT_PEER_FAILOVER) {
+                        return STATE_FAILED_PEER_FAILOVER;
+                    } else {
+                        return STATE_FAILED;
+                    }
+                } else if (event == EVENT_QUIT) {
+                    return STATE_QUIT;
+                } else if (event == EVENT_AUTOQUIT) {
+                    return STATE_AUTOQUIT;
+                } else if (event == EVENT_DID_FAILOVER) {
+                    abort();
+                    return STATE_PRIMARY_WAIT;
+                }
+            }
+            continue;
+        }
+
+        break;
+    }
+
+    colod_raise_timeout_coroutine(this);
+
+    return STATE_SECONDARY_COLO_RUNNING;
+}
+
+#define colod_colo_running_co(...) \
+    co_wrap(_colod_colo_running_co(__VA_ARGS__))
+static MainState _colod_colo_running_co(Coroutine *coroutine,
+                                        ColodMainCoroutine *this) {
+
+    while (TRUE) {
+        ColodEvent event = _colod_event_wait(coroutine, this, __func__, __LINE__);
+        if (coroutine->yield) {
+            return 0;
+        }
+
+        if (event == EVENT_FAILOVER_SYNC) {
+            return STATE_FAILOVER_SYNC;
+        } else if (event == EVENT_PEER_FAILED) {
+            return STATE_FAILOVER;
+        } else if (event_critical(event) && event_escalate(event)) {
+            assert(event != EVENT_NONE);
+            if (event_failed(event)) {
+                if (event == EVENT_PEER_FAILOVER) {
+                    return STATE_FAILED_PEER_FAILOVER;
+                } else {
+                    return STATE_FAILED;
+                }
+            } else if (event == EVENT_QUIT) {
+                return STATE_QUIT;
+            } else if (event == EVENT_AUTOQUIT) {
+                return STATE_AUTOQUIT;
+            } else {
+                abort();
+            }
+        }
+    }
+}
+
+#define colod_primary_wait_co(...) \
+    co_wrap(_colod_primary_wait_co(__VA_ARGS__))
+static MainState _colod_primary_wait_co(Coroutine *coroutine,
+                                        ColodMainCoroutine *this) {
+    while (TRUE) {
+        ColodEvent event = _colod_event_wait(coroutine, this, __func__, __LINE__);
+        if (coroutine->yield) {
+            return 0;
+        }
+
+        if (event == EVENT_START_MIGRATION) {
+            return STATE_PRIMARY_START_MIGRATION;
+        } else if (event_failed(event)) {
+            if (event != EVENT_PEER_FAILOVER) {
+                return STATE_FAILED;
+            }
+        } else if (event == EVENT_QUIT) {
+            return STATE_QUIT;
+        } else if (event == EVENT_AUTOQUIT) {
+            return STATE_AUTOQUIT;
+        }
+    }
+}
+
+#define colod_primary_start_migration_co(...) \
+    co_wrap(_colod_primary_start_migration_co(__VA_ARGS__))
+static MainState _colod_primary_start_migration_co(Coroutine *coroutine,
+                                                   ColodMainCoroutine *this) {
     struct {
-        guint event;
+        ColodEvent event;
     } *co;
     ColodQmpState *qmp = this->qmp;
     ColodQmpResult *qmp_result;
-    ColodEvent result;
     int ret;
     GError *local_errp = NULL;
 
     co_frame(co, sizeof(*co));
-    co_begin(ColodEvent, EVENT_FAILED);
+    co_begin(MainState, STATE_FAILED);
     co_recurse(qmp_result = colod_execute_co(coroutine, this, &local_errp,
                     "{'execute': 'migrate-set-capabilities',"
                     "'arguments': {'capabilities': ["
@@ -767,7 +924,7 @@ static ColodEvent _colod_start_migration_co(Coroutine *coroutine,
         goto qmp_error;
     }
 
-    return EVENT_NONE;
+    return STATE_PRIMARY_COLO_RUNNING;
 
 qmp_error:
     if (g_error_matches(local_errp, COLOD_ERROR, COLOD_ERROR_INTERRUPT)) {
@@ -778,7 +935,7 @@ qmp_error:
         if (event_failover(CO event)) {
             goto failover;
         } else {
-            return CO event;
+            goto misc_event;
         }
     } else {
         log_error(local_errp->message);
@@ -790,7 +947,7 @@ qmp_error:
 qemu_failed:
     log_error(local_errp->message);
     g_error_free(local_errp);
-    return EVENT_FAILED;
+    return STATE_FAILED;
 
 handle_event:
     assert(colod_critical_pending(this));
@@ -798,7 +955,7 @@ handle_event:
     if (event_failover(CO event)) {
         goto failover;
     } else {
-        return CO event;
+        goto misc_event;
     }
 
 failover:
@@ -810,86 +967,32 @@ failover:
     qmp_result_free(qmp_result);
     assert(event_failover(CO event));
     if (CO event == EVENT_FAILOVER_SYNC) {
-        co_recurse(result = colod_failover_sync_co(coroutine, this));
+        return STATE_FAILOVER_SYNC;
     } else {
-        co_recurse(result = colod_failover_co(coroutine, this));
+        return STATE_FAILOVER;
     }
-    return result;
 
-    co_end;
-
-    return EVENT_FAILED;
-}
-
-#define colod_replication_wait_co(...) \
-    co_wrap(_colod_replication_wait_co(__VA_ARGS__))
-static ColodEvent _colod_replication_wait_co(Coroutine *coroutine,
-                                             ColodMainCoroutine *this) {
-    ColodEvent event;
-    int ret;
-    ColodQmpResult *qmp_result;
-    GError *local_errp = NULL;
-
-    co_begin(ColodEvent, EVENT_FAILED);
-
-    co_recurse(qmp_result = colod_execute_co(coroutine, this, &local_errp,
-                        "{'execute': 'migrate-set-capabilities',"
-                        "'arguments': {'capabilities': ["
-                            "{'capability': 'events', 'state': true }]}}\n"));
-    if (!qmp_result) {
-        log_error(local_errp->message);
-        g_error_free(local_errp);
-        return EVENT_FAILED;
-    }
-    qmp_result_free(qmp_result);
-
-    while (TRUE) {
-        this->transitioning = TRUE;
-        co_recurse(ret = colod_qmp_event_wait_co(coroutine, this, 0,
-                                      "{'event': 'RESUME'}", &local_errp));
-        this->transitioning = FALSE;
-        if (ret < 0) {
-            g_error_free(local_errp);
-            assert(colod_event_pending(this));
-            co_recurse(event = colod_event_wait(coroutine, this));
-            if (event_critical(event) && event_escalate(event)) {
-                return event;
-            }
-            continue;
+misc_event:
+    assert(event_escalate(CO event));
+    if (event_failed(CO event)) {
+        if (CO event == EVENT_PEER_FAILOVER) {
+            return STATE_FAILED_PEER_FAILOVER;
+        } else {
+            return STATE_FAILED;
         }
-        break;
+    } else if (CO event == EVENT_QUIT) {
+        return STATE_QUIT;
+    } else if (CO event == EVENT_AUTOQUIT) {
+        return STATE_AUTOQUIT;
+    } else if (CO event == EVENT_DID_FAILOVER) {
+        return STATE_PRIMARY_WAIT;
     }
 
-    colod_raise_timeout_coroutine(this);
+    return STATE_PRIMARY_COLO_RUNNING;
 
     co_end;
 
-    return EVENT_NONE;
-}
-
-#define colod_replication_running_co(...) \
-    co_wrap(_colod_replication_running_co(__VA_ARGS__))
-static ColodEvent _colod_replication_running_co(Coroutine *coroutine,
-                                                ColodMainCoroutine *this) {
-    co_begin(ColodEvent, EVENT_FAILED);
-
-    while (TRUE) {
-        ColodEvent event;
-        co_recurse(event = colod_event_wait(coroutine, this));
-        if (event == EVENT_FAILOVER_SYNC) {
-            co_recurse(event = colod_failover_sync_co(coroutine, this));
-            return event;
-        } else if (event == EVENT_PEER_FAILED) {
-            co_recurse(event = colod_failover_co(coroutine, this));
-            return event;
-        } else if (event_critical(event) && event_escalate(event)) {
-            return event;
-        }
-    }
-
-    co_end;
-
-    return EVENT_FAILED;
+    return STATE_FAILED;
 }
 
 void colod_quit(ColodMainCoroutine *this) {
@@ -924,154 +1027,106 @@ static gboolean colod_main_co_wrap(
 }
 
 static gboolean _colod_main_co(Coroutine *coroutine, ColodMainCoroutine *this) {
-    ColodEvent event = EVENT_NONE;
+    struct {
+        MainState state;
+    } *co;
     int ret;
     GError *local_errp = NULL;
 
+    co_frame(co, sizeof(*co));
     co_begin(gboolean, G_SOURCE_CONTINUE);
 
-    if (!this->primary) {
-        colod_syslog(LOG_INFO, "starting in secondary mode");
-        while (TRUE) {
-            co_recurse(event = colod_replication_wait_co(coroutine, this));
-            assert(event_escalate(event));
-            if (event_failed(event)) {
-                goto failed;
-            } else if (event == EVENT_QUIT) {
-                return G_SOURCE_REMOVE;
-            } else if (event == EVENT_AUTOQUIT) {
-                goto autoquit;
-            } else if (event == EVENT_DID_FAILOVER) {
-                break;
-            }
-            this->replication = TRUE;
-
-            co_recurse(event = colod_replication_running_co(coroutine, this));
-            assert(event_escalate(event));
-            assert(event != EVENT_NONE);
-            if (event_failed(event)) {
-                goto failed;
-            } else if (event == EVENT_QUIT) {
-                return G_SOURCE_REMOVE;
-            } else if (event == EVENT_AUTOQUIT) {
-                goto autoquit;
-            } else if (event == EVENT_DID_FAILOVER) {
-                break;
-            } else {
-                abort();
-            }
-        }
-    } else {
+    if (this->primary) {
         colod_syslog(LOG_INFO, "starting in primary mode");
+        CO state = STATE_PRIMARY_STARTUP;
+    } else {
+        colod_syslog(LOG_INFO, "starting in secondary mode");
+        CO state = STATE_SECONDARY_STARTUP;
     }
 
-    // Now running primary standalone
-    this->primary = TRUE;
-    this->replication = FALSE;
-
     while (TRUE) {
-        co_recurse(event = colod_event_wait(coroutine, this));
-        if (event == EVENT_START_MIGRATION) {
-            this->pending_action = TRUE;
-            co_recurse(event = colod_start_migration_co(coroutine, this));
-            assert(event_escalate(event));
-            this->pending_action = FALSE;
-            if (event_failed(event)) {
-                goto failed;
-            } else if (event == EVENT_QUIT) {
-                return G_SOURCE_REMOVE;
-            } else if (event == EVENT_AUTOQUIT) {
-                goto autoquit;
-            } else if (event == EVENT_DID_FAILOVER) {
-                continue;
-            }
+        if (CO state == STATE_SECONDARY_STARTUP) {
+            co_recurse(CO state = colod_secondary_startup_co(coroutine,
+                                                                this));
+        } else if (CO state == STATE_SECONDARY_WAIT) {
+            co_recurse(CO state = colod_secondary_wait_co(coroutine, this));
+        } else if (CO state == STATE_SECONDARY_COLO_RUNNING) {
             this->replication = TRUE;
+            co_recurse(CO state = colod_colo_running_co(coroutine, this));
+            this->replication = FALSE;
+        } else if (CO state == STATE_PRIMARY_STARTUP) {
+            CO state = STATE_PRIMARY_WAIT;
+        } else if (CO state == STATE_PRIMARY_WAIT) {
+            // Now running primary standalone
+            this->primary = TRUE;
+            this->replication = FALSE;
 
-            co_recurse(event = colod_replication_running_co(coroutine, this));
-            assert(event_escalate(event));
-            assert(event != EVENT_NONE);
-            if (event_failed(event)) {
-                 goto failed;
-             } else if (event == EVENT_QUIT) {
-                 return G_SOURCE_REMOVE;
-             } else if (event == EVENT_AUTOQUIT) {
-                 goto autoquit;
-             } else if (event == EVENT_DID_FAILOVER) {
-                this->replication = FALSE;
-                continue;
-             } else {
-                 abort();
-             }
-        } else if (event_failed(event)) {
-            if (event != EVENT_PEER_FAILOVER) {
-                goto failed;
-            }
-        } else if (event == EVENT_QUIT) {
-            return G_SOURCE_REMOVE;
-        } else if (event == EVENT_AUTOQUIT) {
-            goto autoquit;
-        }
-    }
-
-failed:
-    qmp_set_timeout(this->qmp, this->ctx->qmp_timeout_low);
-    ret = qmp_get_error(this->qmp, &local_errp);
-    if (ret < 0) {
-        log_error_fmt("qemu failed: %s", local_errp->message);
-        g_error_free(local_errp);
-        local_errp = NULL;
-    }
-
-    this->failed = TRUE;
-    colod_cpg_send(this->ctx->cpg, MESSAGE_FAILED);
-
-    if (event == EVENT_NONE) {
-        log_error("Failed with EVENT_NONE");
-    }
-    if (event == EVENT_PEER_FAILOVER) {
-        this->peer_failover = TRUE;
-    }
-    if (event != EVENT_QEMU_QUIT) {
-        co_recurse(ret = colod_stop_co(coroutine, this, &local_errp));
-        if (ret < 0) {
-            if (event == EVENT_PEER_FAILOVER) {
-                log_error_fmt("Failed to stop qemu in response to "
-                              "peer failover: %s", local_errp->message);
-            }
-            g_error_free(local_errp);
-            local_errp = NULL;
-        }
-    }
-
-    while (TRUE) {
-        ColodEvent event;
-        co_recurse(event = colod_event_wait(coroutine, this));
-        if (event == EVENT_PEER_FAILOVER) {
+            co_recurse(CO state = colod_primary_wait_co(coroutine, this));
+        } else if (CO state == STATE_PRIMARY_START_MIGRATION) {
+            co_recurse(CO state = colod_primary_start_migration_co(coroutine,
+                                                                      this));
+        } else if (CO state == STATE_PRIMARY_COLO_RUNNING) {
+            this->replication = TRUE;
+            co_recurse(CO state = colod_colo_running_co(coroutine, this));
+            this->replication = FALSE;
+        } else if (CO state == STATE_FAILOVER_SYNC) {
+            co_recurse(CO state = colod_failover_sync_co(coroutine, this));
+        } else if (CO state == STATE_FAILOVER) {
+            co_recurse(CO state = colod_failover_co(coroutine, this));
+        } else if (CO state == STATE_FAILED_PEER_FAILOVER) {
             this->peer_failover = TRUE;
-        } else if (event == EVENT_QUIT) {
-            return G_SOURCE_REMOVE;
-        } else if (event == EVENT_AUTOQUIT) {
-            if (this->qemu_quit) {
-                do_autoquit(this);
-            } else {
-                goto autoquit;
+            CO state = STATE_FAILED;
+        } else if (CO state == STATE_FAILED) {
+            this->failed = TRUE;
+            colod_cpg_send(this->ctx->cpg, MESSAGE_FAILED);
+
+            qmp_set_timeout(this->qmp, this->ctx->qmp_timeout_low);
+            ret = qmp_get_error(this->qmp, &local_errp);
+            if (ret < 0) {
+                log_error_fmt("qemu failed: %s", local_errp->message);
+                g_error_free(local_errp);
+                local_errp = NULL;
             }
-        }
-    }
 
-autoquit:
-    this->failed = TRUE;
-    colod_cpg_send(this->ctx->cpg, MESSAGE_FAILED);
+            co_recurse(ret = colod_stop_co(coroutine, this, &local_errp));
+            if (ret < 0) {
+                g_error_free(local_errp);
+                local_errp = NULL;
+            }
 
-    while (TRUE) {
-        ColodEvent event;
-        co_recurse(event = colod_event_wait(coroutine, this));
-        if (event == EVENT_PEER_FAILOVER) {
-            this->peer_failover = TRUE;
-        } else if (event == EVENT_QUIT) {
+            while (TRUE) {
+                ColodEvent event;
+                co_recurse(event = colod_event_wait(coroutine, this));
+                if (event == EVENT_PEER_FAILOVER) {
+                    this->peer_failover = TRUE;
+                } else if (event == EVENT_QUIT) {
+                    return G_SOURCE_REMOVE;
+                } else if (event == EVENT_AUTOQUIT) {
+                    if (this->qemu_quit) {
+                        do_autoquit(this);
+                    } else {
+                        CO state = STATE_AUTOQUIT;
+                        break;
+                    }
+                }
+            }
+        } else if (CO state == STATE_QUIT) {
             return G_SOURCE_REMOVE;
-        } else if (event == EVENT_QEMU_QUIT) {
-            do_autoquit(this);
+        } else if (CO state == STATE_AUTOQUIT) {
+            this->failed = TRUE;
+            colod_cpg_send(this->ctx->cpg, MESSAGE_FAILED);
+
+            while (TRUE) {
+                ColodEvent event;
+                co_recurse(event = colod_event_wait(coroutine, this));
+                if (event == EVENT_PEER_FAILOVER) {
+                    this->peer_failover = TRUE;
+                } else if (event == EVENT_QUIT) {
+                    return G_SOURCE_REMOVE;
+                } else if (event == EVENT_QEMU_QUIT) {
+                    do_autoquit(this);
+                }
+            }
         }
     }
 
