@@ -25,12 +25,6 @@ typedef struct ColodState {
     gboolean replication, failed, peer_failover, peer_failed;
 } ColodState;
 
-#define colod_event_queue(ctx, event, reason) \
-    _colod_event_queue((ctx), (event), (reason), __func__, __LINE__)
-void _colod_event_queue(ColodMainCoroutine *ctx, ColodEvent event,
-                        const gchar *reason, const gchar *func,
-                        int line);
-
 #define colod_check_health_co(...) \
     co_wrap(_colod_check_health_co(__VA_ARGS__))
 int _colod_check_health_co(Coroutine *coroutine, ColodMainCoroutine *this,

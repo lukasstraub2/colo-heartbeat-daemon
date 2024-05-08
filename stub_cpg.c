@@ -13,9 +13,28 @@
 #include "daemon.h"
 
 struct Cpg {
-    int dummy;
+    ColodCallbackHead callbacks;
 };
 
+void colod_cpg_add_notify(Cpg *this, CpgCallback _func, gpointer user_data) {
+    ColodCallbackFunc func = (ColodCallbackFunc) _func;
+    colod_callback_add(&this->callbacks, func, user_data);
+}
+
+void colod_cpg_del_notify(Cpg *this, CpgCallback _func, gpointer user_data) {
+    ColodCallbackFunc func = (ColodCallbackFunc) _func;
+    colod_callback_del(&this->callbacks, func, user_data);
+}
+
+void colod_cpg_stub_notify(Cpg *this, ColodMessage message,
+                           gboolean message_from_this_node,
+                           gboolean peer_left_group) {
+    ColodCallback *entry, *next_entry;
+    QLIST_FOREACH_SAFE(entry, &this->callbacks, next, next_entry) {
+        CpgCallback func = (CpgCallback) entry->func;
+        func(entry->user_data, message, message_from_this_node, peer_left_group);
+    }
+}
 
 void colod_cpg_send(G_GNUC_UNUSED Cpg *cpg, G_GNUC_UNUSED uint32_t message) {}
 

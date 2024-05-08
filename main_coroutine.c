@@ -169,9 +169,9 @@ static void event_wake_source_destroy_cb(gpointer data) {
 
 #define colod_event_queue(ctx, event, reason) \
     _colod_event_queue((ctx), (event), (reason), __func__, __LINE__)
-void _colod_event_queue(ColodMainCoroutine *this, ColodEvent event,
-                        const gchar *reason, const gchar *func,
-                        int line) {
+static void _colod_event_queue(ColodMainCoroutine *this, ColodEvent event,
+                               const gchar *reason, const gchar *func,
+                               int line) {
     ColodQueue *queue;
 
     colod_trace("%s:%u: queued %s (%s)\n", func, line, event_str(event),
@@ -1183,6 +1183,30 @@ static void colod_qmp_event_cb(gpointer data, ColodQmpResult *result) {
     }
 }
 
+static void colod_cpg_event_cb(gpointer data, ColodMessage message,
+                               gboolean message_from_this_node,
+                               gboolean peer_left_group) {
+    ColodMainCoroutine *this = data;
+
+    if (peer_left_group) {
+        log_error("Peer failed");
+        colod_peer_failed(this);
+        colod_event_queue(this, EVENT_PEER_FAILED, "peer left cpg group");
+    } else if (message == MESSAGE_FAILOVER) {
+        if (message_from_this_node) {
+            colod_event_queue(this, EVENT_FAILOVER_WIN, "Got our failover msg");
+        } else {
+            colod_event_queue(this, EVENT_PEER_FAILOVER, "Got peer failover msg");
+        }
+    } else if (message == MESSAGE_FAILED) {
+        if (!message_from_this_node) {
+            log_error("Peer failed");
+            colod_peer_failed(this);
+            colod_event_queue(this, EVENT_PEER_FAILED, "got MESSAGE_FAILED");
+        }
+    }
+}
+
 ColodMainCoroutine *colod_main_new(const ColodContext *ctx) {
     ColodMainCoroutine *this;
     Coroutine *coroutine;
@@ -1203,12 +1227,16 @@ ColodMainCoroutine *colod_main_new(const ColodContext *ctx) {
     this->hup_source = qmp_hup_source(this->qmp, colod_hup_cb,
                                       &this->unique_ptr_for_hup_source);
 
+    colod_cpg_add_notify(ctx->cpg, colod_cpg_event_cb, this);
+
     g_idle_add(colod_main_co, this);
     return this;
 }
 
 void colod_main_free(ColodMainCoroutine *this) {
     colod_event_queue(this, EVENT_QUIT, "teardown");
+
+    colod_cpg_del_notify(this->ctx->cpg, colod_cpg_event_cb, this);
     if (this->hup_source) {
         g_source_remove(this->hup_source);
     }

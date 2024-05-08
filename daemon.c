@@ -71,8 +71,8 @@ void daemon_mainloop(ColodContext *mctx) {
     g_main_loop_unref(ctx->mainloop);
     mctx->mainloop = NULL;
 
-    cpg_free(ctx->cpg);
     colod_main_free(ctx->main_coroutine);
+    cpg_free(ctx->cpg);
     colo_watchdog_free(ctx->watchdog);
     client_listener_free(ctx->listener);
     qmp_commands_free(ctx->commands);

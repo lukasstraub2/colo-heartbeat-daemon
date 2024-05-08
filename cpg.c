@@ -21,7 +21,28 @@ struct Cpg {
     cpg_handle_t handle;
     guint source_id;
     ColodContext *ctx;
+    ColodCallbackHead callbacks;
 };
+
+void colod_cpg_add_notify(Cpg *this, CpgCallback _func, gpointer user_data) {
+    ColodCallbackFunc func = (ColodCallbackFunc) _func;
+    colod_callback_add(&this->callbacks, func, user_data);
+}
+
+void colod_cpg_del_notify(Cpg *this, CpgCallback _func, gpointer user_data) {
+    ColodCallbackFunc func = (ColodCallbackFunc) _func;
+    colod_callback_del(&this->callbacks, func, user_data);
+}
+
+static void notify(Cpg *this, ColodMessage message,
+                   gboolean message_from_this_node,
+                   gboolean peer_left_group) {
+    ColodCallback *entry, *next_entry;
+    QLIST_FOREACH_SAFE(entry, &this->callbacks, next, next_entry) {
+        CpgCallback func = (CpgCallback) entry->func;
+        func(entry->user_data, message, message_from_this_node, peer_left_group);
+    }
+}
 
 static void colod_cpg_deliver(cpg_handle_t handle,
                               G_GNUC_UNUSED const struct cpg_name *group_name,
@@ -37,29 +58,18 @@ static void colod_cpg_deliver(cpg_handle_t handle,
     cpg_local_get(handle, &myid);
 
     if (msg_len != sizeof(conv)) {
-        log_error_fmt("Got message of invalid length %zu", msg_len);
+        log_error_fmt("cpg: Got message of invalid length %zu", msg_len);
         return;
     }
     conv = ntohl((*(uint32_t*)msg));
 
     switch (conv) {
         case MESSAGE_FAILOVER:
-            if (nodeid == myid) {
-                colod_event_queue(cpg->ctx->main_coroutine,
-                                  EVENT_FAILOVER_WIN, "");
-            } else {
-                colod_event_queue(cpg->ctx->main_coroutine,
-                                  EVENT_PEER_FAILOVER, "");
-            }
+            notify(cpg, MESSAGE_FAILOVER, nodeid == myid, FALSE);
         break;
 
         case MESSAGE_FAILED:
-            if (nodeid != myid) {
-                log_error("Peer failed");
-                colod_peer_failed(cpg->ctx->main_coroutine);
-                colod_event_queue(cpg->ctx->main_coroutine, EVENT_PEER_FAILED,
-                                  "got MESSAGE_FAILED");
-            }
+            notify(cpg, MESSAGE_FAILED, nodeid == myid, FALSE);
         break;
     }
 }
@@ -77,10 +87,7 @@ static void colod_cpg_confchg(cpg_handle_t handle,
     cpg_context_get(handle, (void**) &cpg);
 
     if (left_list_entries) {
-        log_error("Peer failed");
-        colod_peer_failed(cpg->ctx->main_coroutine);
-        colod_event_queue(cpg->ctx->main_coroutine, EVENT_PEER_FAILED,
-                          "peer left cpg group");
+        notify(cpg, MESSAGE_NONE, FALSE, TRUE);
     }
 }
 
