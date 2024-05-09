@@ -924,16 +924,11 @@ qmp_error:
     if (g_error_matches(local_errp, COLOD_ERROR, COLOD_ERROR_INTERRUPT)) {
         g_error_free(local_errp);
         local_errp = NULL;
-        assert(colod_critical_pending(this));
-        co_recurse(CO event = colod_event_wait(coroutine, this));
-        if (event_failover(CO event)) {
-            goto failover;
-        } else {
-            goto misc_event;
-        }
+        goto handle_event;
     } else {
         log_error(local_errp->message);
         g_error_free(local_errp);
+        local_errp = NULL;
     }
     CO event = EVENT_PEER_FAILED;
     goto failover;
