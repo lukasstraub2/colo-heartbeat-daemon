@@ -89,7 +89,6 @@ static const gchar *event_str(ColodEvent event) {
     switch (event) {
         case EVENT_NONE: return "EVENT_NONE";
         case EVENT_FAILED: return "EVENT_FAILED";
-        case EVENT_QEMU_QUIT: return "EVENT_QEMU_QUIT";
         case EVENT_PEER_FAILOVER: return "EVENT_PEER_FAILOVER";
         case EVENT_FAILOVER_SYNC: return "EVENT_FAILOVER_SYNC";
         case EVENT_PEER_FAILED: return "EVENT_PEER_FAILED";
@@ -106,7 +105,6 @@ static gboolean event_escalate(ColodEvent event) {
     switch (event) {
         case EVENT_NONE:
         case EVENT_FAILED:
-        case EVENT_QEMU_QUIT:
         case EVENT_PEER_FAILOVER:
         case EVENT_QUIT:
         case EVENT_AUTOQUIT:
@@ -139,7 +137,6 @@ static gboolean event_critical(ColodEvent event) {
 static gboolean event_failed(ColodEvent event) {
     switch (event) {
         case EVENT_FAILED:
-        case EVENT_QEMU_QUIT:
         case EVENT_PEER_FAILOVER:
             return TRUE;
         break;
@@ -1110,7 +1107,7 @@ static gboolean _colod_main_co(Coroutine *coroutine, ColodMainCoroutine *this) {
                     this->peer_failover = TRUE;
                 } else if (event == EVENT_QUIT) {
                     return G_SOURCE_REMOVE;
-                } else if (event == EVENT_QEMU_QUIT) {
+                } else if (event == EVENT_FAILED && this->qemu_quit) {
                     do_autoquit(this);
                 }
             }
@@ -1130,7 +1127,7 @@ static gboolean colod_hup_cb(G_GNUC_UNUSED GIOChannel *channel,
 
     log_error("qemu quit");
     this->qemu_quit = TRUE;
-    colod_event_queue(this, EVENT_QEMU_QUIT, "qmp hup");
+    colod_event_queue(this, EVENT_FAILED, "qmp hup");
 
     this->hup_source = 0;
     return G_SOURCE_REMOVE;

@@ -8,7 +8,6 @@ typedef enum ColodEvent ColodEvent;
 enum ColodEvent {
     EVENT_NONE = 0,
     EVENT_FAILED,
-    EVENT_QEMU_QUIT,
     EVENT_PEER_FAILOVER,
     EVENT_FAILOVER_SYNC,
     EVENT_PEER_FAILED,
