@@ -98,7 +98,6 @@ static const gchar *event_str(ColodEvent event) {
         case EVENT_AUTOQUIT: return "EVENT_AUTOQUIT";
         case EVENT_YELLOW: return "EVENT_YELLOW";
         case EVENT_START_MIGRATION: return "EVENT_START_MIGRATION";
-        case EVENT_DID_FAILOVER: return "EVENT_DID_FAILOVER";
     }
     abort();
 }
@@ -113,7 +112,6 @@ static gboolean event_escalate(ColodEvent event) {
         case EVENT_AUTOQUIT:
         case EVENT_YELLOW:
         case EVENT_START_MIGRATION:
-        case EVENT_DID_FAILOVER:
             return TRUE;
         break;
 
@@ -129,7 +127,6 @@ static gboolean event_critical(ColodEvent event) {
         case EVENT_FAILOVER_WIN:
         case EVENT_YELLOW:
         case EVENT_START_MIGRATION:
-        case EVENT_DID_FAILOVER:
             return FALSE;
         break;
 
@@ -772,9 +769,6 @@ static MainState _colod_secondary_wait_co(Coroutine *coroutine,
                     return STATE_QUIT;
                 } else if (event == EVENT_AUTOQUIT) {
                     return STATE_AUTOQUIT;
-                } else if (event == EVENT_DID_FAILOVER) {
-                    abort();
-                    return STATE_PRIMARY_WAIT;
                 }
             }
             continue;
@@ -984,8 +978,6 @@ misc_event:
         return STATE_QUIT;
     } else if (CO event == EVENT_AUTOQUIT) {
         return STATE_AUTOQUIT;
-    } else if (CO event == EVENT_DID_FAILOVER) {
-        return STATE_PRIMARY_WAIT;
     }
 
     return STATE_PRIMARY_COLO_RUNNING;

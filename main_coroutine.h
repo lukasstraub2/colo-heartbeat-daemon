@@ -16,8 +16,7 @@ enum ColodEvent {
     EVENT_QUIT,
     EVENT_AUTOQUIT,
     EVENT_YELLOW,
-    EVENT_START_MIGRATION,
-    EVENT_DID_FAILOVER
+    EVENT_START_MIGRATION
 };
 
 typedef struct ColodState {
