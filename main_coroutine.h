@@ -6,7 +6,6 @@
 typedef enum ColodEvent ColodEvent;
 
 enum ColodEvent {
-    EVENT_NONE = 0,
     EVENT_FAILED,
     EVENT_PEER_FAILOVER,
     EVENT_FAILOVER_SYNC,

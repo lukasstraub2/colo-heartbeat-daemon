@@ -87,7 +87,6 @@ void colod_clear_peer_status(ColodMainCoroutine *this) {
 
 static const gchar *event_str(ColodEvent event) {
     switch (event) {
-        case EVENT_NONE: return "EVENT_NONE";
         case EVENT_FAILED: return "EVENT_FAILED";
         case EVENT_PEER_FAILOVER: return "EVENT_PEER_FAILOVER";
         case EVENT_FAILOVER_SYNC: return "EVENT_FAILOVER_SYNC";
@@ -103,7 +102,6 @@ static const gchar *event_str(ColodEvent event) {
 
 static gboolean event_escalate(ColodEvent event) {
     switch (event) {
-        case EVENT_NONE:
         case EVENT_FAILED:
         case EVENT_PEER_FAILOVER:
         case EVENT_QUIT:
@@ -121,7 +119,6 @@ static gboolean event_escalate(ColodEvent event) {
 
 static gboolean event_critical(ColodEvent event) {
     switch (event) {
-        case EVENT_NONE:
         case EVENT_FAILOVER_WIN:
         case EVENT_YELLOW:
         case EVENT_START_MIGRATION:
@@ -673,7 +670,6 @@ static MainState _colod_failover_sync_co(Coroutine *coroutine,
         } else if (event == EVENT_PEER_FAILED) {
             return STATE_FAILOVER;
         } else if (event_critical(event) && event_escalate(event)) {
-            assert(event != EVENT_NONE);
             if (event == EVENT_FAILED) {
                 return STATE_FAILED;
             } else if (event == EVENT_PEER_FAILOVER) {
@@ -778,7 +774,6 @@ static MainState _colod_colo_running_co(Coroutine *coroutine,
         } else if (event == EVENT_PEER_FAILED) {
             return STATE_FAILOVER;
         } else if (event_critical(event) && event_escalate(event)) {
-            assert(event != EVENT_NONE);
             if (event == EVENT_FAILED) {
                 return STATE_FAILED;
             } else if (event == EVENT_PEER_FAILOVER) {
