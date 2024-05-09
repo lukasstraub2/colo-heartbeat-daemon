@@ -134,19 +134,6 @@ static gboolean event_critical(ColodEvent event) {
     }
 }
 
-static gboolean event_failed(ColodEvent event) {
-    switch (event) {
-        case EVENT_FAILED:
-        case EVENT_PEER_FAILOVER:
-            return TRUE;
-        break;
-
-        default:
-            return FALSE;
-        break;
-    }
-}
-
 static gboolean event_failover(ColodEvent event) {
     return event == EVENT_FAILOVER_SYNC || event == EVENT_PEER_FAILED;
 }
@@ -687,12 +674,10 @@ static MainState _colod_failover_sync_co(Coroutine *coroutine,
             return STATE_FAILOVER;
         } else if (event_critical(event) && event_escalate(event)) {
             assert(event != EVENT_NONE);
-            if (event_failed(event)) {
-                if (event == EVENT_PEER_FAILOVER) {
-                    return STATE_FAILED_PEER_FAILOVER;
-                } else {
-                    return STATE_FAILED;
-                }
+            if (event == EVENT_FAILED) {
+                return STATE_FAILED;
+            } else if (event == EVENT_PEER_FAILOVER) {
+                return STATE_FAILED_PEER_FAILOVER;
             } else if (event == EVENT_QUIT) {
                 return STATE_QUIT;
             } else if (event == EVENT_AUTOQUIT) {
@@ -756,12 +741,10 @@ static MainState _colod_secondary_wait_co(Coroutine *coroutine,
             assert(!coroutine->yield);
 
             if (event_critical(event) && event_escalate(event)) {
-                if (event_failed(event)) {
-                    if (event == EVENT_PEER_FAILOVER) {
-                        return STATE_FAILED_PEER_FAILOVER;
-                    } else {
-                        return STATE_FAILED;
-                    }
+                if (event == EVENT_FAILED) {
+                    return STATE_FAILED;
+                } else if (event == EVENT_PEER_FAILOVER) {
+                    return STATE_FAILED_PEER_FAILOVER;
                 } else if (event == EVENT_QUIT) {
                     return STATE_QUIT;
                 } else if (event == EVENT_AUTOQUIT) {
@@ -796,12 +779,10 @@ static MainState _colod_colo_running_co(Coroutine *coroutine,
             return STATE_FAILOVER;
         } else if (event_critical(event) && event_escalate(event)) {
             assert(event != EVENT_NONE);
-            if (event_failed(event)) {
-                if (event == EVENT_PEER_FAILOVER) {
-                    return STATE_FAILED_PEER_FAILOVER;
-                } else {
-                    return STATE_FAILED;
-                }
+            if (event == EVENT_FAILED) {
+                return STATE_FAILED;
+            } else if (event == EVENT_PEER_FAILOVER) {
+                return STATE_FAILED_PEER_FAILOVER;
             } else if (event == EVENT_QUIT) {
                 return STATE_QUIT;
             } else if (event == EVENT_AUTOQUIT) {
@@ -825,10 +806,13 @@ static MainState _colod_primary_wait_co(Coroutine *coroutine,
 
         if (event == EVENT_START_MIGRATION) {
             return STATE_PRIMARY_START_MIGRATION;
-        } else if (event_failed(event)) {
-            if (event != EVENT_PEER_FAILOVER) {
-                return STATE_FAILED;
-            }
+        } else if (event == EVENT_FAILED) {
+            return STATE_FAILED;
+        } else if (event == EVENT_PEER_FAILOVER) {
+            /*
+             * Failover message from node that lost failover sync may
+             * arrive later, when we've failed over.
+             */
         } else if (event == EVENT_QUIT) {
             return STATE_QUIT;
         } else if (event == EVENT_AUTOQUIT) {
@@ -960,12 +944,10 @@ failover:
 
 misc_event:
     assert(event_escalate(CO event));
-    if (event_failed(CO event)) {
-        if (CO event == EVENT_PEER_FAILOVER) {
-            return STATE_FAILED_PEER_FAILOVER;
-        } else {
-            return STATE_FAILED;
-        }
+    if (CO event == EVENT_FAILED) {
+        return STATE_FAILED;
+    } else if (CO event == EVENT_PEER_FAILOVER) {
+        return STATE_FAILED_PEER_FAILOVER;
     } else if (CO event == EVENT_QUIT) {
         return STATE_QUIT;
     } else if (CO event == EVENT_AUTOQUIT) {
