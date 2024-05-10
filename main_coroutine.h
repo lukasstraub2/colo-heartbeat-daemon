@@ -3,20 +3,6 @@
 
 #include "daemon.h"
 
-typedef enum ColodEvent ColodEvent;
-
-enum ColodEvent {
-    EVENT_FAILED,
-    EVENT_PEER_FAILOVER,
-    EVENT_FAILOVER_SYNC,
-    EVENT_PEER_FAILED,
-    EVENT_FAILOVER_WIN,
-    EVENT_QUIT,
-    EVENT_AUTOQUIT,
-    EVENT_YELLOW,
-    EVENT_START_MIGRATION
-};
-
 typedef struct ColodState {
     gboolean primary;
     gboolean replication, failed, peer_failover, peer_failed;
