@@ -173,6 +173,7 @@ Cpg *cpg_new(Cpg *cpg, GError **errp) {
 }
 
 void cpg_free(Cpg *cpg) {
+    colod_callback_clear(&cpg->callbacks);
     g_source_remove(cpg->source_id);
     g_free(cpg);
 }

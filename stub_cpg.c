@@ -47,5 +47,6 @@ Cpg *cpg_new(Cpg *cpg, G_GNUC_UNUSED GError **errp) {
 }
 
 void cpg_free(Cpg *cpg) {
+    colod_callback_clear(&cpg->callbacks);
     g_free(cpg);
 }

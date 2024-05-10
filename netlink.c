@@ -120,6 +120,8 @@ err:
 }
 
 void netlink_free(ColodNetlink *this) {
+    colod_callback_clear(&this->callbacks);
+
     if (this->source_id) {
         g_source_remove(this->source_id);
     }
