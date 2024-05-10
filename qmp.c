@@ -33,9 +33,11 @@ struct ColodQmpState {
     JsonNode *yank_instances;
     ColodCallbackHead yank_callbacks;
     ColodCallbackHead event_callbacks;
+    ColodCallbackHead hup_callbacks;
     gboolean did_yank;
     GError *error;
     guint inflight;
+    guint hup_source_id;
 };
 
 static void qmp_set_error(ColodQmpState *state, GError *error) {
@@ -74,22 +76,34 @@ void qmp_add_notify_event(ColodQmpState *state, QmpEventCallback _func,
     colod_callback_add(&state->event_callbacks, func, user_data);
 }
 
-void qmp_add_notify_yank(ColodQmpState *state, QmpYankCallback _func,
-                         gpointer user_data) {
-    ColodCallbackFunc func = (ColodCallbackFunc) _func;
-    colod_callback_add(&state->yank_callbacks, func, user_data);
-}
-
 void qmp_del_notify_event(ColodQmpState *state, QmpEventCallback _func,
                           gpointer user_data) {
     ColodCallbackFunc func = (ColodCallbackFunc) _func;
     colod_callback_del(&state->event_callbacks, func, user_data);
 }
 
+void qmp_add_notify_yank(ColodQmpState *state, QmpYankCallback _func,
+                         gpointer user_data) {
+    ColodCallbackFunc func = (ColodCallbackFunc) _func;
+    colod_callback_add(&state->yank_callbacks, func, user_data);
+}
+
 void qmp_del_notify_yank(ColodQmpState *state, QmpYankCallback _func,
                          gpointer user_data) {
     ColodCallbackFunc func = (ColodCallbackFunc) _func;
     colod_callback_del(&state->yank_callbacks, func, user_data);
+}
+
+void qmp_add_notify_hup(ColodQmpState *state, QmpYankCallback _func,
+                        gpointer user_data) {
+    ColodCallbackFunc func = (ColodCallbackFunc) _func;
+    colod_callback_add(&state->hup_callbacks, func, user_data);
+}
+
+void qmp_del_notify_hup(ColodQmpState *state, QmpYankCallback _func,
+                        gpointer user_data) {
+    ColodCallbackFunc func = (ColodCallbackFunc) _func;
+    colod_callback_del(&state->hup_callbacks, func, user_data);
 }
 
 static void notify_event(ColodQmpState *state, ColodQmpResult *result) {
@@ -103,6 +117,14 @@ static void notify_event(ColodQmpState *state, ColodQmpResult *result) {
 static void notify_yank(ColodQmpState *state) {
     ColodCallback *entry, *next_entry;
     QLIST_FOREACH_SAFE(entry, &state->yank_callbacks, next, next_entry) {
+        QmpYankCallback func = (QmpYankCallback) entry->func;
+        func(entry->user_data);
+    }
+}
+
+static void notify_hup(ColodQmpState *state) {
+    ColodCallback *entry, *next_entry;
+    QLIST_FOREACH_SAFE(entry, &state->hup_callbacks, next, next_entry) {
         QmpYankCallback func = (QmpYankCallback) entry->func;
         func(entry->user_data);
     }
@@ -614,6 +636,17 @@ static gboolean _qmp_event_co(Coroutine *coroutine) {
     return G_SOURCE_REMOVE;
 }
 
+static gboolean qmp_hup_cb(G_GNUC_UNUSED GIOChannel *channel,
+                           G_GNUC_UNUSED GIOCondition revents,
+                           gpointer data) {
+    ColodQmpState *state = data;
+
+    notify_hup(state);
+
+    state->hup_source_id = 0;
+    return G_SOURCE_REMOVE;
+}
+
 static Coroutine *qmp_event_coroutine(ColodQmpState *state,
                                       QmpChannel *channel) {
     QmpCoroutine *qmpco;
@@ -654,8 +687,13 @@ void qmp_set_timeout(ColodQmpState *state, guint timeout) {
 }
 
 void qmp_free(ColodQmpState *state) {
+    if (state->hup_source_id) {
+        g_source_remove(state->hup_source_id);
+    }
+
     colod_callback_clear(&state->event_callbacks);
     colod_callback_clear(&state->yank_callbacks);
+    colod_callback_clear(&state->hup_callbacks);
 
     colod_shutdown_channel(state->yank_channel.channel);
     colod_shutdown_channel(state->channel.channel);
@@ -692,6 +730,9 @@ ColodQmpState *qmp_new(int fd, int yank_fd, guint timeout, GError **errp) {
     qmp_handshake_coroutine(state, &state->yank_channel);
     qmp_event_coroutine(state, &state->channel);
     qmp_event_coroutine(state, &state->yank_channel);
+
+    state->hup_source_id = g_io_add_watch(state->channel.channel, G_IO_HUP,
+                                          qmp_hup_cb, state);
 
     return state;
 }

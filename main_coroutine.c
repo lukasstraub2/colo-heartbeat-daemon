@@ -50,9 +50,6 @@ struct ColodMainCoroutine {
     gboolean failed, yellow, qemu_quit;
     gboolean primary;
     gboolean replication, peer_failover, peer_failed;
-
-    ColodMainCoroutine *unique_ptr_for_hup_source;
-    guint hup_source;
 };
 
 #define colod_trace_source(data) \
@@ -1049,18 +1046,12 @@ static gboolean _colod_main_co(Coroutine *coroutine, ColodMainCoroutine *this) {
     return G_SOURCE_REMOVE;
 }
 
-static gboolean colod_hup_cb(G_GNUC_UNUSED GIOChannel *channel,
-                             G_GNUC_UNUSED GIOCondition revents,
-                             gpointer data) {
-    ColodMainCoroutine **unique_ptr = data;
-    ColodMainCoroutine *this = *unique_ptr;
+static void colod_hup_cb(gpointer data) {
+    ColodMainCoroutine *this = data;
 
     log_error("qemu quit");
     this->qemu_quit = TRUE;
     colod_event_queue(this, EVENT_FAILED, "qmp hup");
-
-    this->hup_source = 0;
-    return G_SOURCE_REMOVE;
 }
 
 static void colod_qmp_event_cb(gpointer data, ColodQmpResult *result) {
@@ -1138,10 +1129,7 @@ ColodMainCoroutine *colod_main_new(const ColodContext *ctx) {
 
     this->primary = ctx->primary_startup;
     qmp_add_notify_event(this->qmp, colod_qmp_event_cb, this);
-
-    this->unique_ptr_for_hup_source = this;
-    this->hup_source = qmp_hup_source(this->qmp, colod_hup_cb,
-                                      &this->unique_ptr_for_hup_source);
+    qmp_add_notify_hup(this->qmp, colod_hup_cb, this);
 
     colod_cpg_add_notify(ctx->cpg, colod_cpg_event_cb, this);
 
@@ -1153,9 +1141,8 @@ void colod_main_free(ColodMainCoroutine *this) {
     colod_event_queue(this, EVENT_QUIT, "teardown");
 
     colod_cpg_del_notify(this->ctx->cpg, colod_cpg_event_cb, this);
-    if (this->hup_source) {
-        g_source_remove(this->hup_source);
-    }
+
+    qmp_del_notify_hup(this->qmp, colod_hup_cb, this);
     qmp_del_notify_event(this->qmp, colod_qmp_event_cb, this);
     colod_raise_timeout_coroutine_free(this);
 

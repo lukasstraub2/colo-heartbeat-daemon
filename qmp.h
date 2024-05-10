@@ -56,12 +56,16 @@ int _qmp_yank_co(Coroutine *coroutine, ColodQmpState *state,
 
 void qmp_add_notify_event(ColodQmpState *state, QmpEventCallback _func,
                           gpointer user_data);
-void qmp_add_notify_yank(ColodQmpState *state, QmpYankCallback _func,
-                         gpointer user_data);
 void qmp_del_notify_event(ColodQmpState *state, QmpEventCallback _func,
                           gpointer user_data);
+void qmp_add_notify_yank(ColodQmpState *state, QmpYankCallback _func,
+                         gpointer user_data);
 void qmp_del_notify_yank(ColodQmpState *state, QmpYankCallback _func,
                          gpointer user_data);
+void qmp_add_notify_hup(ColodQmpState *state, QmpYankCallback _func,
+                        gpointer user_data);
+void qmp_del_notify_hup(ColodQmpState *state, QmpYankCallback _func,
+                        gpointer user_data);
 
 #define qmp_wait_event_co(...) \
     co_wrap(_qmp_wait_event_co(__VA_ARGS__))
