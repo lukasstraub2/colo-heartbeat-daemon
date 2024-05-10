@@ -47,6 +47,7 @@ const Event *eventqueue_last(EventQueue *this);
 
 gboolean eventqueue_pending(EventQueue *this);
 gboolean eventqueue_pending_interrupt(EventQueue *this);
+gboolean eventqueue_event_interrupting(EventQueue *this, ColodEvent event);
 
 EventQueue *eventqueue_new(guint size, ...);
 void eventqueue_free(EventQueue *this);

@@ -139,6 +139,10 @@ gboolean eventqueue_pending_interrupt(EventQueue *this) {
     return this->interrupting[event->event];
 }
 
+gboolean eventqueue_event_interrupting(EventQueue *this, ColodEvent event) {
+    return this->interrupting[event];
+}
+
 EventQueue *eventqueue_new(guint size, ...){
     va_list args;
     EventQueue *this;

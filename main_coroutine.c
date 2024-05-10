@@ -159,12 +159,15 @@ static void _colod_event_queue(ColodMainCoroutine *this, ColodEvent event,
     colod_trace("%s:%u: queued %s (%s)\n", func, line, event_str(event),
                 reason);
 
-    if (!eventqueue_pending(this->queue) && !this->wake_source_id) {
-        colod_trace("%s:%u: Waking main coroutine\n", __func__, __LINE__);
-        this->wake_source_id = g_idle_add_full(G_PRIORITY_DEFAULT_IDLE,
-                                               this->coroutine.cb.plain, this,
-                                               event_wake_source_destroy_cb);
-        g_source_set_name_by_id(this->wake_source_id, "wake for event");
+    if (!this->wake_source_id) {
+        if (!eventqueue_pending(this->queue)
+                || eventqueue_event_interrupting(this->queue, event)) {
+            colod_trace("%s:%u: Waking main coroutine\n", __func__, __LINE__);
+            this->wake_source_id = g_idle_add_full(G_PRIORITY_DEFAULT_IDLE,
+                                                   this->coroutine.cb.plain, this,
+                                                   event_wake_source_destroy_cb);
+            g_source_set_name_by_id(this->wake_source_id, "wake for event");
+        }
     }
 
     last_event = eventqueue_last(this->queue);
