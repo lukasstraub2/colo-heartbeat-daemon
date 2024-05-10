@@ -328,7 +328,6 @@ static int _colod_execute_array_co(Coroutine *coroutine, ColodMainCoroutine *thi
         gchar *line;
         guint i, count;
     } *co;
-    int ret = 0;
     GError *local_errp = NULL;
 
     co_frame(co, sizeof(*co));
@@ -342,6 +341,13 @@ static int _colod_execute_array_co(Coroutine *coroutine, ColodMainCoroutine *thi
     for (CO i = 0; CO i < CO count; CO i++) {
         JsonNode *node = json_array_get_element(CO array, CO i);
         assert(node);
+
+        if (eventqueue_pending_interrupt(this->queue)) {
+            g_set_error(errp, COLOD_ERROR, COLOD_ERROR_INTERRUPT,
+                        "Got interrupting event while executing array");
+            return -1;
+            break;
+        }
 
         gchar *tmp = json_to_string(node, FALSE);
         CO line = g_strdup_printf("%s\n", tmp);
@@ -358,8 +364,7 @@ static int _colod_execute_array_co(Coroutine *coroutine, ColodMainCoroutine *thi
         } else if (!result) {
             g_propagate_error(errp, local_errp);
             g_free(CO line);
-            ret = -1;
-            break;
+            return -1;
         }
         qmp_result_free(result);
         g_free(CO line);
@@ -367,7 +372,7 @@ static int _colod_execute_array_co(Coroutine *coroutine, ColodMainCoroutine *thi
 
     co_end;
 
-    return ret;
+    return 0;
 }
 
 static gboolean qemu_runnng(const gchar *status) {
