@@ -361,6 +361,7 @@ static int _colod_execute_array_co(Coroutine *coroutine, ColodMainCoroutine *thi
             break;
         }
         qmp_result_free(result);
+        g_free(CO line);
     }
 
     co_end;
