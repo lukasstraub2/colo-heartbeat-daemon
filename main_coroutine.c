@@ -810,10 +810,8 @@ static MainState _colod_primary_start_migration_co(Coroutine *coroutine,
                     "'arguments': {'capabilities': ["
                         "{'capability': 'events', 'state': true },"
                         "{'capability': 'pause-before-switchover', 'state': true}]}}\n"));
-    if (g_error_matches(local_errp, COLOD_ERROR, COLOD_ERROR_QMP)) {
+    if (!qmp_result) {
         goto qmp_error;
-    } else if (!qmp_result) {
-        goto qemu_failed;
     }
     qmp_result_free(qmp_result);
     if (eventqueue_pending_interrupt(this->queue)) {
@@ -823,10 +821,8 @@ static MainState _colod_primary_start_migration_co(Coroutine *coroutine,
     co_recurse(ret = colod_execute_array_co(coroutine, this,
                                             this->ctx->commands->migration_start,
                                             FALSE, &local_errp));
-    if (g_error_matches(local_errp, COLOD_ERROR, COLOD_ERROR_QMP)) {
+    if (ret < 0) {
         goto qmp_error;
-    } else if (ret < 0) {
-        goto qemu_failed;
     }
     if (eventqueue_pending_interrupt(this->queue)) {
         goto handle_event;
@@ -844,10 +840,8 @@ static MainState _colod_primary_start_migration_co(Coroutine *coroutine,
     co_recurse(ret = colod_execute_array_co(coroutine, this,
                                             this->ctx->commands->migration_switchover,
                                             FALSE, &local_errp));
-    if (g_error_matches(local_errp, COLOD_ERROR, COLOD_ERROR_QMP)) {
+    if (ret < 0) {
         goto qmp_error;
-    } else if (ret < 0) {
-        goto qemu_failed;
     }
     if (eventqueue_pending_interrupt(this->queue)) {
         goto handle_event;
@@ -858,12 +852,9 @@ static MainState _colod_primary_start_migration_co(Coroutine *coroutine,
     co_recurse(qmp_result = colod_execute_co(coroutine, this, &local_errp,
                     "{'execute': 'migrate-continue',"
                     "'arguments': {'state': 'pre-switchover'}}\n"));
-    if (g_error_matches(local_errp, COLOD_ERROR, COLOD_ERROR_QMP)) {
+    if (!qmp_result) {
         qmp_set_timeout(qmp, this->ctx->qmp_timeout_low);
         goto qmp_error;
-    } else if (!qmp_result) {
-        qmp_set_timeout(qmp, this->ctx->qmp_timeout_low);
-        goto qemu_failed;
     }
     qmp_result_free(qmp_result);
     if (eventqueue_pending_interrupt(this->queue)) {
@@ -887,18 +878,17 @@ qmp_error:
         g_error_free(local_errp);
         local_errp = NULL;
         goto handle_event;
-    } else {
+    } else if (g_error_matches(local_errp, COLOD_ERROR, COLOD_ERROR_QMP)) {
         log_error(local_errp->message);
         g_error_free(local_errp);
         local_errp = NULL;
+        CO event = EVENT_PEER_FAILED;
+        goto failover;
+    } else {
+        log_error(local_errp->message);
+        g_error_free(local_errp);
+        return STATE_FAILED;
     }
-    CO event = EVENT_PEER_FAILED;
-    goto failover;
-
-qemu_failed:
-    log_error(local_errp->message);
-    g_error_free(local_errp);
-    return STATE_FAILED;
 
 handle_event:
     assert(eventqueue_pending_interrupt(this->queue));
@@ -913,7 +903,9 @@ failover:
     co_recurse(qmp_result = colod_execute_co(coroutine, this, &local_errp,
                     "{'execute': 'migrate_cancel'}\n"));
     if (!qmp_result) {
-        goto qemu_failed;
+        log_error(local_errp->message);
+        g_error_free(local_errp);
+        return STATE_FAILED;
     }
     qmp_result_free(qmp_result);
     assert(event_failover(CO event));
