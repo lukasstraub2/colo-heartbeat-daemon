@@ -824,7 +824,7 @@ def qmp_setup_colod(fd):
             {"type": "chardev", "id": "comp_sec_in0"},
             {"type": "migration"}]},
 
-        {"exec-colod": "set-migration", "commands": [
+        {"exec-colod": "set-migration-switchover", "commands": [
             {"execute": "qom-set", "arguments": {"path": "/objects/mirror0", "property": "status", "value": "on"}},
             {"execute": "qom-set", "arguments": {"path": "/objects/comp_pri_in0", "property": "status", "value": "on"}}]},
 

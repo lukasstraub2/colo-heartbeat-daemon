@@ -820,6 +820,18 @@ static MainState _colod_primary_start_migration_co(Coroutine *coroutine,
         goto handle_event;
     }
 
+    co_recurse(ret = colod_execute_array_co(coroutine, this,
+                                            this->ctx->commands->migration_start,
+                                            FALSE, &local_errp));
+    if (g_error_matches(local_errp, COLOD_ERROR, COLOD_ERROR_QMP)) {
+        goto qmp_error;
+    } else if (ret < 0) {
+        goto qemu_failed;
+    }
+    if (eventqueue_pending_interrupt(this->queue)) {
+        goto handle_event;
+    }
+
     this->transitioning = TRUE;
     co_recurse(ret = colod_qmp_event_wait_co(coroutine, this, 5*60*1000,
                     "{'event': 'MIGRATION',"
@@ -830,7 +842,7 @@ static MainState _colod_primary_start_migration_co(Coroutine *coroutine,
     }
 
     co_recurse(ret = colod_execute_array_co(coroutine, this,
-                                            this->ctx->commands->migration,
+                                            this->ctx->commands->migration_switchover,
                                             FALSE, &local_errp));
     if (g_error_matches(local_errp, COLOD_ERROR, COLOD_ERROR_QMP)) {
         goto qmp_error;

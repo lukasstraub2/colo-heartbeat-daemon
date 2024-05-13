@@ -14,11 +14,12 @@
 #include <json-glib-1.0/json-glib/json-glib.h>
 
 typedef struct QmpCommands {
-    JsonNode *migration;
+    JsonNode *migration_start, *migration_switchover;
     JsonNode *failover_primary, *failover_secondary;
 } QmpCommands;
 
-int qmp_commands_set_migration(QmpCommands *this, JsonNode *commands);
+int qmp_commands_set_migration_start(QmpCommands *this, JsonNode *commands);
+int qmp_commands_set_migration_switchover(QmpCommands *this, JsonNode *commands);
 int qmp_commands_set_failover_primary(QmpCommands *this, JsonNode *commands);
 int qmp_commands_set_failover_secondary(QmpCommands *this, JsonNode *commands);
 

@@ -183,8 +183,8 @@ static JsonNode *get_commands(ColodQmpResult *request, GError **errp) {
     return commands;
 }
 
-static ColodQmpResult *handle_set_migration(ColodQmpResult *request,
-                                            const ColodContext *ctx) {
+static ColodQmpResult *handle_set_migration_start(ColodQmpResult *request,
+                                                  const ColodContext *ctx) {
     GError *local_errp = NULL;
     ColodQmpResult *reply;
 
@@ -195,7 +195,24 @@ static ColodQmpResult *handle_set_migration(ColodQmpResult *request,
         return reply;
     }
 
-    qmp_commands_set_migration(ctx->commands, commands);
+    qmp_commands_set_migration_start(ctx->commands, commands);
+
+    return create_reply("{}");
+}
+
+static ColodQmpResult *handle_set_migration_switchover(ColodQmpResult *request,
+                                                       const ColodContext *ctx) {
+    GError *local_errp = NULL;
+    ColodQmpResult *reply;
+
+    JsonNode *commands = get_commands(request, &local_errp);
+    if (!commands) {
+        reply = create_error_reply(local_errp->message);
+        g_error_free(local_errp);
+        return reply;
+    }
+
+    qmp_commands_set_migration_switchover(ctx->commands, commands);
 
     return create_reply("{}");
 }
@@ -394,8 +411,12 @@ static gboolean _colod_client_co(Coroutine *coroutine) {
                 CO result = handle_quit(client->ctx);
             } else if (!strcmp(command, "autoquit")) {
                 CO result = handle_autoquit(client->ctx);
-            } else if (!strcmp(command, "set-migration")) {
-                CO result = handle_set_migration(CO request, client->ctx);
+            } else if (!strcmp(command, "set-migration-start")) {
+                CO result = handle_set_migration_start(CO request,
+                                                       client->ctx);
+            } else if (!strcmp(command, "set-migration-switchover")) {
+                CO result = handle_set_migration_switchover(CO request,
+                                                            client->ctx);
             } else if (!strcmp(command, "start-migration")) {
                 CO result = handle_start_migration(client->ctx);
             } else if (!strcmp(command, "set-primary-failover")) {
