@@ -48,9 +48,12 @@ struct ColodMainCoroutine {
 
     MainState state;
     gboolean transitioning;
-    gboolean failed, yellow, qemu_quit;
+    gboolean failed, peer_failed;
+    gboolean yellow, peer_yellow;
+    gboolean qemu_quit;
+    gboolean peer_failover;
     gboolean primary;
-    gboolean replication, peer_failover, peer_failed;
+    gboolean replication;
 };
 
 #define colod_trace_source(data) \
@@ -82,6 +85,7 @@ void colod_peer_failed(ColodMainCoroutine *this) {
 
 void colod_clear_peer_status(ColodMainCoroutine *this) {
     this->peer_failed = FALSE;
+    this->peer_yellow = FALSE;
 }
 
 static const gchar *event_str(ColodEvent event) {
@@ -149,6 +153,13 @@ static void event_wake_source_destroy_cb(gpointer data) {
     this->wake_source_id = 0;
 }
 
+static void colod_event_queued_cb(ColodMainCoroutine *this, ColodEvent event) {
+    if (event == EVENT_YELLOW) {
+        this->yellow = TRUE;
+        colod_cpg_send(this->ctx->cpg, MESSAGE_YELLOW);
+    }
+}
+
 #define colod_event_queue(ctx, event, reason) \
     _colod_event_queue((ctx), (event), (reason), __func__, __LINE__)
 static void _colod_event_queue(ColodMainCoroutine *this, ColodEvent event,
@@ -158,6 +169,8 @@ static void _colod_event_queue(ColodMainCoroutine *this, ColodEvent event,
 
     colod_trace("%s:%u: queued %s (%s)\n", func, line, event_str(event),
                 reason);
+
+    colod_event_queued_cb(this, event);
 
     if (!this->wake_source_id) {
         if (!eventqueue_pending(this->queue)
@@ -961,6 +974,8 @@ static gboolean _colod_main_co(Coroutine *coroutine, ColodMainCoroutine *this) {
         this->state = STATE_SECONDARY_STARTUP;
     }
 
+    colod_cpg_send(this->ctx->cpg, MESSAGE_HELLO);
+
     while (TRUE) {
         this->transitioning = FALSE;
         if (this->state == STATE_SECONDARY_STARTUP) {
@@ -1125,6 +1140,14 @@ static void colod_cpg_event_cb(gpointer data, ColodMessage message,
             log_error("Peer failed");
             colod_peer_failed(this);
             colod_event_queue(this, EVENT_PEER_FAILED, "got MESSAGE_FAILED");
+        }
+    } else if (message == MESSAGE_HELLO) {
+        if (this->yellow) {
+            colod_cpg_send(this->ctx->cpg, MESSAGE_YELLOW);
+        }
+    } else if (message == MESSAGE_YELLOW) {
+        if (!message_from_this_node) {
+            this->peer_yellow = TRUE;
         }
     }
 }
