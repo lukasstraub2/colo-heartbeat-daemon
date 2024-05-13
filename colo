@@ -903,43 +903,44 @@ def qmp_start_migration(fd, peer):
         ])
 
     # Connect mirror and compare_in to secondary
-    qmp_execute(fd, [
+    commands = [
         {"execute": "chardev-add", "arguments": {"id": "comp_pri_in0..", "backend": {"type": "socket", "data": {"addr": {"type": "unix", "data": {"path": str(COMP_PRI_SOCK)}}, "server": True}}}},
         {"execute": "chardev-add", "arguments": {"id": "comp_pri_in0", "backend": {"type": "socket", "data": {"addr": {"type": "unix", "data": {"path": str(COMP_PRI_SOCK)}}, "server": False}}}},
         {"execute": "chardev-add", "arguments": {"id": "comp_out0..", "backend": {"type": "socket", "data": {"addr": {"type": "unix", "data": {"path": str(COMP_OUT_SOCK)}}, "server": True}}}},
         {"execute": "chardev-add", "arguments": {"id": "comp_out0", "backend": {"type": "socket", "data": {"addr": {"type": "unix", "data": {"path": str(COMP_OUT_SOCK)}}, "server": False}}}},
         {"execute": "chardev-add", "arguments": {"id": "mirror0", "backend": {"type": "socket", "data": {"addr": {"type": "inet", "data": {"host": str(ip), "port": str(mirror_port())}}, "server": False, "nodelay": True }}}},
         {"execute": "chardev-add", "arguments": {"id": "comp_sec_in0", "backend": {"type": "socket", "data": {"addr": {"type": "inet", "data": {"host": str(ip), "port": str(compare_in_port())}}, "server": False, "nodelay": True }}}}
-        ])
+            ]
 
     # Add the COLO filters
     vnet_hdr_support = config["vnet-hdr"]
     if have_filter_rewriter:
-        qmp_execute(fd, [
+        commands += [
             {"execute": "object-add", "arguments": {"qom-type": "filter-mirror", "id": "mirror0", "status": "off", "insert": "before", "position": "id=rew0", "netdev": "hn0", "queue": "tx", "outdev": "mirror0", "vnet_hdr_support": vnet_hdr_support}},
             {"execute": "object-add", "arguments": {"qom-type": "filter-redirector", "id": "comp_out0", "insert": "before", "position": "id=rew0", "netdev": "hn0", "queue": "rx", "indev": "comp_out0..", "vnet_hdr_support": vnet_hdr_support}},
             {"execute": "object-add", "arguments": {"qom-type": "filter-redirector", "id": "comp_pri_in0", "status": "off", "insert": "before", "position": "id=rew0", "netdev": "hn0", "queue": "rx", "outdev": "comp_pri_in0..", "vnet_hdr_support": vnet_hdr_support}}
-            ])
+            ]
     else:
-        qmp_execute(fd, [
+        commands += [
             {"execute": "object-add", "arguments": {"qom-type": "filter-mirror", "id": "mirror0", "status": "off", "netdev": "hn0", "queue": "tx", "outdev": "mirror0", "vnet_hdr_support": vnet_hdr_support}},
             {"execute": "object-add", "arguments": {"qom-type": "filter-redirector", "id": "comp_out0", "netdev": "hn0", "queue": "rx", "indev": "comp_out0..", "vnet_hdr_support": vnet_hdr_support}},
             {"execute": "object-add", "arguments": {"qom-type": "filter-redirector", "id": "comp_pri_in0", "status": "off", "netdev": "hn0", "queue": "rx", "outdev": "comp_pri_in0..", "vnet_hdr_support": vnet_hdr_support}}
-            ])
+            ]
 
     colo_compare_options = config["colo-compare-options"]
     colo_compare_arguments = {"qom-type": "colo-compare", "id": "comp0", "primary_in": "comp_pri_in0", "secondary_in": "comp_sec_in0", "outdev": "comp_out0", "iothread": "iothread1", "vnet_hdr_support": vnet_hdr_support}
     colo_compare_arguments.update(colo_compare_options)
-    qmp_execute(fd, [
+    commands += [
         {"execute": "object-add", "arguments": {"qom-type": "iothread", "id": "iothread1"}},
-        {"execute": "object-add", "arguments": colo_compare_arguments}
-        ])
+        {"execute": "object-add", "arguments": colo_compare_arguments},
+        {"execute": "migrate", "arguments": {"uri": "tcp:%s:%s" % (ip, migrate_port())}}
+        ]
 
     # Start migration
     qmp_migrate_settings(fd, config)
     qmp_execute(fd, [
-        {"exec-colod": "start-migration"},
-        {"execute": "migrate", "arguments": {"uri": "tcp:%s:%s" % (ip, migrate_port())}}
+        {"exec-colod": "set-migration-start", "commands": commands},
+        {"exec-colod": "start-migration"}
         ])
 
 def qmp_query_status(fd):
