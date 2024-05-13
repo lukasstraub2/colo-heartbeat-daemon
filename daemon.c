@@ -55,10 +55,6 @@ void daemon_mainloop(ColodContext *mctx) {
         exit(EXIT_FAILURE);
     }
 
-    mctx->commands = qmp_commands_new();
-    mctx->main_coroutine = colod_main_new(ctx);
-    mctx->listener = client_listener_new(ctx->mngmt_listen_fd, ctx);
-    mctx->watchdog = colod_watchdog_new(ctx);
     mctx->cpg = cpg_new(ctx->cpg, &local_errp);
     if (!ctx->cpg) {
         colod_syslog(LOG_ERR, "Failed to initialize cpg: %s",
@@ -66,6 +62,11 @@ void daemon_mainloop(ColodContext *mctx) {
         g_error_free(local_errp);
         exit(EXIT_FAILURE);
     }
+
+    mctx->commands = qmp_commands_new();
+    mctx->main_coroutine = colod_main_new(ctx);
+    mctx->listener = client_listener_new(ctx->mngmt_listen_fd, ctx);
+    mctx->watchdog = colod_watchdog_new(ctx);
 
     g_main_loop_run(ctx->mainloop);
     g_main_loop_unref(ctx->mainloop);
