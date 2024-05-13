@@ -20,6 +20,7 @@
 #include "cpg.h"
 #include "json_util.h"
 #include "eventqueue.h"
+#include "raise_timeout_coroutine.h"
 
 typedef enum MainState {
     STATE_SECONDARY_STARTUP,
@@ -44,7 +45,7 @@ struct ColodMainCoroutine {
     EventQueue *queue;
     guint wake_source_id;
     ColodQmpState *qmp;
-    Coroutine *raise_timeout_coroutine;
+    ColodRaiseCoroutine *raise_timeout_coroutine;
 
     MainState state;
     gboolean transitioning;
@@ -519,95 +520,6 @@ void colod_qemu_failed(ColodMainCoroutine *this) {
     colod_event_queue(this, EVENT_FAILED, "?");
 }
 
-typedef struct ColodRaiseCoroutine {
-    Coroutine coroutine;
-    ColodMainCoroutine *mainco;
-} ColodRaiseCoroutine;
-
-static gboolean _colod_raise_timeout_co(Coroutine *coroutine,
-                                        ColodMainCoroutine *mainco);
-static gboolean colod_raise_timeout_co(gpointer data) {
-    ColodRaiseCoroutine *raiseco = data;
-    Coroutine *coroutine = &raiseco->coroutine;
-    ColodMainCoroutine *mainco = raiseco->mainco;
-    gboolean ret;
-
-    co_enter(coroutine, ret = _colod_raise_timeout_co(coroutine, mainco));
-    if (coroutine->yield) {
-        return GPOINTER_TO_INT(coroutine->yield_value);
-    }
-
-    qmp_set_timeout(mainco->qmp, mainco->ctx->qmp_timeout_low);
-
-    colod_assert_remove_one_source(coroutine);
-    g_free(mainco->raise_timeout_coroutine);
-    mainco->raise_timeout_coroutine = NULL;
-    return ret;
-}
-
-static gboolean colod_raise_timeout_co_wrap(
-        G_GNUC_UNUSED GIOChannel *channel,
-        G_GNUC_UNUSED GIOCondition revents,
-        gpointer data) {
-    return colod_raise_timeout_co(data);
-}
-
-static gboolean _colod_raise_timeout_co(Coroutine *coroutine,
-                                        ColodMainCoroutine *mainco) {
-    int ret;
-
-    co_begin(gboolean, G_SOURCE_CONTINUE);
-
-    co_recurse(ret = qmp_wait_event_co(coroutine, mainco->qmp, 0,
-                                       "{'event': 'STOP'}", NULL));
-    if (ret < 0) {
-        return G_SOURCE_REMOVE;
-    }
-
-    co_recurse(ret = qmp_wait_event_co(coroutine, mainco->qmp, 0,
-                                       "{'event': 'RESUME'}", NULL));
-    if (ret < 0) {
-        return G_SOURCE_REMOVE;
-    }
-
-    co_end;
-
-    return G_SOURCE_REMOVE;
-}
-
-static void colod_raise_timeout_coroutine_free(ColodMainCoroutine *mainco) {
-    if (!mainco->raise_timeout_coroutine) {
-        return;
-    }
-
-    g_idle_add(colod_raise_timeout_co, mainco->raise_timeout_coroutine);
-
-    while (mainco->raise_timeout_coroutine) {
-        g_main_context_iteration(g_main_context_default(), TRUE);
-    }
-}
-
-static void colod_raise_timeout_coroutine(ColodMainCoroutine *mainco) {
-    ColodRaiseCoroutine *raiseco;
-    Coroutine *coroutine;
-
-    if (mainco->raise_timeout_coroutine) {
-        return;
-    }
-
-    qmp_set_timeout(mainco->qmp, mainco->ctx->qmp_timeout_high);
-
-    raiseco = g_new0(ColodRaiseCoroutine, 1);
-    coroutine = &raiseco->coroutine;
-    coroutine->cb.plain = colod_raise_timeout_co;
-    coroutine->cb.iofunc = colod_raise_timeout_co_wrap;
-    raiseco->mainco = mainco;
-    mainco->raise_timeout_coroutine = coroutine;
-
-    g_idle_add(colod_raise_timeout_co, raiseco);
-    return;
-}
-
 #define colod_stop_co(...) \
     co_wrap(_colod_stop_co(__VA_ARGS__))
 static int _colod_stop_co(Coroutine *coroutine, ColodMainCoroutine *this,
@@ -749,7 +661,8 @@ static MainState _colod_secondary_wait_co(Coroutine *coroutine,
         break;
     }
 
-    colod_raise_timeout_coroutine(this);
+    colod_raise_timeout_coroutine(&this->raise_timeout_coroutine, this->qmp,
+                                  this->ctx);
 
     return STATE_SECONDARY_COLO_RUNNING;
 }
@@ -860,7 +773,8 @@ static MainState _colod_primary_start_migration_co(Coroutine *coroutine,
         goto handle_event;
     }
 
-    colod_raise_timeout_coroutine(this);
+    colod_raise_timeout_coroutine(&this->raise_timeout_coroutine, this->qmp,
+                                  this->ctx);
 
     co_recurse(qmp_result = colod_execute_co(coroutine, this, &local_errp,
                     "{'execute': 'migrate-continue',"
@@ -1116,7 +1030,8 @@ static void colod_qmp_event_cb(gpointer data, ColodQmpResult *result) {
             colod_event_queue(this, EVENT_FAILOVER_SYNC, "COLO_EXIT qmp event");
         }
     } else if (!strcmp(event, "RESET")) {
-        colod_raise_timeout_coroutine(this);
+        colod_raise_timeout_coroutine(&this->raise_timeout_coroutine, this->qmp,
+                                      this->ctx);
     }
 }
 
@@ -1184,7 +1099,7 @@ void colod_main_free(ColodMainCoroutine *this) {
 
     qmp_del_notify_hup(this->qmp, colod_hup_cb, this);
     qmp_del_notify_event(this->qmp, colod_qmp_event_cb, this);
-    colod_raise_timeout_coroutine_free(this);
+    colod_raise_timeout_coroutine_free(&this->raise_timeout_coroutine);
 
     while (!this->quit) {
         g_main_context_iteration(g_main_context_default(), TRUE);
