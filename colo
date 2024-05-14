@@ -166,6 +166,7 @@ def qemu_secondary_cmdline(config):
         "server=on,wait=off,nodelay=on"
         " -object filter-redirector,id=mirror0,netdev=hn0,queue=tx,"
         "indev=mirror0"
+        " -object filter-drop,id=drop0,netdev=hn0,queue=rx"
         " -object filter-redirector,id=comp_sec_in0,netdev=hn0,queue=rx,"
         "outdev=comp_sec_in0") \
         % (OCF_RESKEY_qemu_binary, config["qemu-options-str"],
@@ -847,10 +848,12 @@ def qmp_setup_colod(fd):
             {"execute": "chardev-remove", "arguments": {"id": "comp_out0"}}]},
 
         {"exec-colod": "set-secondary-failover", "commands": [
+            {"execute": "qom-set", "arguments": {"path": "/objects/drop0", "property": "status", "value": "off"}},
             {"execute": "qom-set", "arguments": {"path": "/objects/comp_sec_in0", "property": "status", "value": "off"}},
             {"execute": "nbd-server-stop"},
             {"execute": "x-colo-lost-heartbeat"},
             {"execute": "object-del", "arguments": {"id": "mirror0"}},
+            {"execute": "object-del", "arguments": {"id": "drop0"}},
             {"execute": "object-del", "arguments": {"id": "comp_sec_in0"}},
             {"execute": "chardev-remove", "arguments": {"id": "mirror0"}},
             {"execute": "chardev-remove", "arguments": {"id": "comp_sec_in0"}}]}
