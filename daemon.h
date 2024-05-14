@@ -24,6 +24,7 @@ typedef struct ColodContext {
     /* Parameters */
     gchar *node_name, *instance_name, *base_dir;
     gchar *qmp_path, *qmp_yank_path;
+    gchar *monitor_interface;
     gboolean daemonize;
     guint qmp_timeout_low, qmp_timeout_high;
     guint watchdog_interval;

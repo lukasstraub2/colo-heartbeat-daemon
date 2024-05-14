@@ -25,6 +25,7 @@ enum ColodEvent {
 
     EVENT_FAILOVER_WIN,
     EVENT_YELLOW,
+    EVENT_UNYELLOW,
     EVENT_START_MIGRATION,
     EVENT_MAX
 };

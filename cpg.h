@@ -8,7 +8,8 @@ typedef enum ColodMessage {
     MESSAGE_FAILOVER,
     MESSAGE_FAILED,
     MESSAGE_HELLO,
-    MESSAGE_YELLOW
+    MESSAGE_YELLOW,
+    MESSAGE_UNYELLOW
 } ColodMessage;
 
 typedef void (*CpgCallback)(gpointer user_data, ColodMessage message,
