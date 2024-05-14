@@ -21,6 +21,7 @@
 #include "json_util.h"
 #include "eventqueue.h"
 #include "raise_timeout_coroutine.h"
+#include "yellow_coroutine.h"
 
 typedef enum MainState {
     STATE_SECONDARY_STARTUP,
@@ -46,6 +47,7 @@ struct ColodMainCoroutine {
     guint wake_source_id;
     ColodQmpState *qmp;
     ColodRaiseCoroutine *raise_timeout_coroutine;
+    YellowCoroutine *yellow_co;
 
     MainState state;
     gboolean transitioning;
@@ -100,6 +102,7 @@ static const gchar *event_str(ColodEvent event) {
         case EVENT_PEER_FAILED: return "EVENT_PEER_FAILED";
         case EVENT_FAILOVER_WIN: return "EVENT_FAILOVER_WIN";
         case EVENT_YELLOW: return "EVENT_YELLOW";
+        case EVENT_UNYELLOW: return "EVENT_UNYELLOW";
         case EVENT_START_MIGRATION: return "EVENT_START_MIGRATION";
         case EVENT_MAX: abort();
     }
@@ -148,17 +151,14 @@ static MainState handle_event_failover(ColodEvent event) {
     }
 }
 
+static gboolean event_yellow(ColodEvent event) {
+    return event == EVENT_YELLOW || event == EVENT_UNYELLOW;
+}
+
 static void event_wake_source_destroy_cb(gpointer data) {
     ColodMainCoroutine *this = data;
 
     this->wake_source_id = 0;
-}
-
-static void colod_event_queued_cb(ColodMainCoroutine *this, ColodEvent event) {
-    if (event == EVENT_YELLOW) {
-        this->yellow = TRUE;
-        colod_cpg_send(this->ctx->cpg, MESSAGE_YELLOW);
-    }
 }
 
 #define colod_event_queue(ctx, event, reason) \
@@ -170,8 +170,6 @@ static void _colod_event_queue(ColodMainCoroutine *this, ColodEvent event,
 
     colod_trace("%s:%u: queued %s (%s)\n", func, line, event_str(event),
                 reason);
-
-    colod_event_queued_cb(this, event);
 
     if (!this->wake_source_id) {
         if (!eventqueue_pending(this->queue)
@@ -1010,6 +1008,9 @@ static void colod_qmp_event_cb(gpointer data, ColodQmpResult *result) {
             }
         } else {
             if (!!strcmp(type, "read")) {
+                this->yellow = TRUE;
+                colod_cpg_send(this->ctx->cpg, MESSAGE_YELLOW);
+                yellow_shutdown(this->yellow_co);
                 colod_event_queue(this, EVENT_YELLOW,
                                   "local disk write/flush error");
             }
@@ -1064,10 +1065,28 @@ static void colod_cpg_event_cb(gpointer data, ColodMessage message,
         if (!message_from_this_node) {
             this->peer_yellow = TRUE;
         }
+    } else if (message == MESSAGE_UNYELLOW) {
+        if (!message_from_this_node) {
+            this->peer_yellow = FALSE;
+        }
     }
 }
 
-ColodMainCoroutine *colod_main_new(const ColodContext *ctx) {
+static void colod_yellow_event_cb(gpointer data, ColodEvent event) {
+    ColodMainCoroutine *this = data;
+
+    if (event == EVENT_YELLOW) {
+        this->yellow = TRUE;
+        colod_event_queue(this, EVENT_YELLOW, "link down event");
+    } else if (event == EVENT_UNYELLOW) {
+        this->yellow = FALSE;
+        colod_event_queue(this, EVENT_UNYELLOW, "link up event");
+    } else {
+        abort();
+    }
+}
+
+ColodMainCoroutine *colod_main_new(const ColodContext *ctx, GError **errp) {
     ColodMainCoroutine *this;
     Coroutine *coroutine;
 
@@ -1080,6 +1099,12 @@ ColodMainCoroutine *colod_main_new(const ColodContext *ctx) {
     this->ctx = ctx;
     this->qmp = ctx->qmp;
 
+    this->yellow_co = yellow_coroutine_new(ctx->cpg, ctx, 500, 1000, errp);
+    if (!this->yellow_co) {
+        g_free(this);
+        return NULL;
+    }
+
     this->queue = colod_eventqueue_new();
 
     this->primary = ctx->primary_startup;
@@ -1088,12 +1113,17 @@ ColodMainCoroutine *colod_main_new(const ColodContext *ctx) {
 
     colod_cpg_add_notify(ctx->cpg, colod_cpg_event_cb, this);
 
+    yellow_add_notify(this->yellow_co, colod_yellow_event_cb, this);
+
     g_idle_add(colod_main_co, this);
     return this;
 }
 
 void colod_main_free(ColodMainCoroutine *this) {
     colod_event_queue(this, EVENT_QUIT, "teardown");
+
+    yellow_del_notify(this->yellow_co, colod_yellow_event_cb, this);
+    yellow_coroutine_free(this->yellow_co);
 
     colod_cpg_del_notify(this->ctx->cpg, colod_cpg_event_cb, this);
 

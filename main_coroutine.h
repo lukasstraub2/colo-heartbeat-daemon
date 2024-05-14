@@ -40,7 +40,7 @@ ColodQmpResult *_colod_execute_co(Coroutine *coroutine,
                                   GError **errp,
                                   const gchar *command);
 
-ColodMainCoroutine *colod_main_new(const ColodContext *ctx);
+ColodMainCoroutine *colod_main_new(const ColodContext *ctx, GError **errp);
 void colod_main_free(ColodMainCoroutine *this);
 
 #endif // MAIN_COROUTINE_H

@@ -64,7 +64,13 @@ void daemon_mainloop(ColodContext *mctx) {
     }
 
     mctx->commands = qmp_commands_new();
-    mctx->main_coroutine = colod_main_new(ctx);
+    mctx->main_coroutine = colod_main_new(ctx, &local_errp);
+    if (!ctx->main_coroutine) {
+        colod_syslog(LOG_ERR, "Failed to initialize main coroutine: %s",
+                     local_errp->message);
+        g_error_free(local_errp);
+        exit(EXIT_FAILURE);
+    }
     mctx->listener = client_listener_new(ctx->mngmt_listen_fd, ctx);
     mctx->watchdog = colod_watchdog_new(ctx);
 
@@ -208,6 +214,7 @@ static int daemon_parse_options(ColodContext *ctx, int *argc, char ***argv,
         {"watchdog_interval", 'a', 0, G_OPTION_ARG_INT, &ctx->watchdog_interval, "Watchdog interval (0 to disable)", NULL},
         {"primary", 'p', 0, G_OPTION_ARG_NONE, &ctx->primary_startup, "Startup in primary mode", NULL},
         {"trace", 0, 0, G_OPTION_ARG_NONE, &ctx->do_trace, "Enable tracing", NULL},
+        {"monitor_interface", 'm', 0, G_OPTION_ARG_STRING, &ctx->monitor_interface, "The interface to monitor", NULL},
         {0}
     };
 
