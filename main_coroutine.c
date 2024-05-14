@@ -670,18 +670,28 @@ static MainState _colod_secondary_wait_co(Coroutine *coroutine,
 static MainState _colod_colo_running_co(Coroutine *coroutine,
                                         ColodMainCoroutine *this) {
 
+    co_begin(MainState, STATE_FAILED);
+
+    if (this->primary && this->yellow && !this->peer_yellow) {
+        return STATE_FAILED;
+    }
+
     while (TRUE) {
-        ColodEvent event = _colod_event_wait(coroutine, this, __func__, __LINE__);
-        if (coroutine->yield) {
-            return 0;
-        }
+        ColodEvent event;
+        co_recurse(event = colod_event_wait(coroutine, this));
 
         if (event_failover(event)) {
             return handle_event_failover(event);
         } else if (event_always_interrupting(event)) {
             return handle_always_interrupting(event);
+        } else if (event_yellow(event)) {
+            if (this->primary && this->yellow && !this->peer_yellow) {
+                return STATE_FAILED;
+            }
         }
     }
+
+    co_end;
 }
 
 #define colod_primary_wait_co(...) \
@@ -1064,10 +1074,12 @@ static void colod_cpg_event_cb(gpointer data, ColodMessage message,
     } else if (message == MESSAGE_YELLOW) {
         if (!message_from_this_node) {
             this->peer_yellow = TRUE;
+            colod_event_queue(this, EVENT_YELLOW, "peer yellow state change");
         }
     } else if (message == MESSAGE_UNYELLOW) {
         if (!message_from_this_node) {
             this->peer_yellow = FALSE;
+            colod_event_queue(this, EVENT_YELLOW, "peer yellow state change");
         }
     }
 }
