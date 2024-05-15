@@ -95,6 +95,7 @@ void colod_raise_timeout_coroutine(ColodRaiseCoroutine **ptr,
     coroutine->cb.iofunc = colod_raise_timeout_co_wrap;
     this->qmp = qmp;
     this->ctx = ctx;
+    this->ptr = ptr;
     *ptr = this;
 
     g_idle_add(colod_raise_timeout_co, this);
