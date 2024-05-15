@@ -883,52 +883,54 @@ static gboolean colod_main_co_wrap(
 static gboolean _colod_main_co(Coroutine *coroutine, ColodMainCoroutine *this) {
     int ret;
     GError *local_errp = NULL;
+    MainState new_state;
 
     co_begin(gboolean, G_SOURCE_CONTINUE);
 
     if (this->primary) {
         colod_syslog(LOG_INFO, "starting in primary mode");
-        this->state = STATE_PRIMARY_STARTUP;
+        new_state = STATE_PRIMARY_STARTUP;
     } else {
         colod_syslog(LOG_INFO, "starting in secondary mode");
-        this->state = STATE_SECONDARY_STARTUP;
+        new_state = STATE_SECONDARY_STARTUP;
     }
 
     colod_cpg_send(this->ctx->cpg, MESSAGE_HELLO);
 
     while (TRUE) {
         this->transitioning = FALSE;
+        this->state = new_state;
         if (this->state == STATE_SECONDARY_STARTUP) {
-            co_recurse(this->state = colod_secondary_startup_co(coroutine,
+            co_recurse(new_state = colod_secondary_startup_co(coroutine,
                                                                 this));
         } else if (this->state == STATE_SECONDARY_WAIT) {
-            co_recurse(this->state = colod_secondary_wait_co(coroutine, this));
+            co_recurse(new_state = colod_secondary_wait_co(coroutine, this));
         } else if (this->state == STATE_SECONDARY_COLO_RUNNING) {
             this->replication = TRUE;
-            co_recurse(this->state = colod_colo_running_co(coroutine, this));
+            co_recurse(new_state = colod_colo_running_co(coroutine, this));
             this->replication = FALSE;
         } else if (this->state == STATE_PRIMARY_STARTUP) {
-            this->state = STATE_PRIMARY_WAIT;
+            new_state = STATE_PRIMARY_WAIT;
         } else if (this->state == STATE_PRIMARY_WAIT) {
             // Now running primary standalone
             this->primary = TRUE;
             this->replication = FALSE;
 
-            co_recurse(this->state = colod_primary_wait_co(coroutine, this));
+            co_recurse(new_state = colod_primary_wait_co(coroutine, this));
         } else if (this->state == STATE_PRIMARY_START_MIGRATION) {
-            co_recurse(this->state = colod_primary_start_migration_co(coroutine,
+            co_recurse(new_state = colod_primary_start_migration_co(coroutine,
                                                                       this));
         } else if (this->state == STATE_PRIMARY_COLO_RUNNING) {
             this->replication = TRUE;
-            co_recurse(this->state = colod_colo_running_co(coroutine, this));
+            co_recurse(new_state = colod_colo_running_co(coroutine, this));
             this->replication = FALSE;
         } else if (this->state == STATE_FAILOVER_SYNC) {
-            co_recurse(this->state = colod_failover_sync_co(coroutine, this));
+            co_recurse(new_state = colod_failover_sync_co(coroutine, this));
         } else if (this->state == STATE_FAILOVER) {
-            co_recurse(this->state = colod_failover_co(coroutine, this));
+            co_recurse(new_state = colod_failover_co(coroutine, this));
         } else if (this->state == STATE_FAILED_PEER_FAILOVER) {
             this->peer_failover = TRUE;
-            this->state = STATE_FAILED;
+            new_state = STATE_FAILED;
         } else if (this->state == STATE_FAILED) {
             this->failed = TRUE;
             colod_cpg_send(this->ctx->cpg, MESSAGE_FAILED);
@@ -953,13 +955,13 @@ static gboolean _colod_main_co(Coroutine *coroutine, ColodMainCoroutine *this) {
                 if (event == EVENT_PEER_FAILOVER) {
                     this->peer_failover = TRUE;
                 } else if (event == EVENT_QUIT) {
-                    this->state = STATE_QUIT;
+                    new_state = STATE_QUIT;
                     break;
                 } else if (event == EVENT_AUTOQUIT) {
                     if (this->qemu_quit) {
                         do_autoquit(this);
                     } else {
-                        this->state = STATE_AUTOQUIT;
+                        new_state = STATE_AUTOQUIT;
                         break;
                     }
                 }
@@ -976,7 +978,7 @@ static gboolean _colod_main_co(Coroutine *coroutine, ColodMainCoroutine *this) {
                 if (event == EVENT_PEER_FAILOVER) {
                     this->peer_failover = TRUE;
                 } else if (event == EVENT_QUIT) {
-                    this->state = STATE_QUIT;
+                    new_state = STATE_QUIT;
                     break;
                 } else if (event == EVENT_FAILED && this->qemu_quit) {
                     do_autoquit(this);
