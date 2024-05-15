@@ -227,12 +227,11 @@ static int _colod_qmp_event_wait_co(Coroutine *coroutine,
     int ret;
     GError *local_errp = NULL;
 
+    co_begin(int, -1)
     while (TRUE) {
-        ret = _qmp_wait_event_co(coroutine, this->qmp, timeout, match,
-                                 &local_errp);
-        if (coroutine->yield) {
-            return -1;
-        }
+        co_recurse(ret = qmp_wait_event_co(coroutine, this->qmp, timeout, match,
+                                           &local_errp));
+
         if (g_error_matches(local_errp, COLOD_ERROR, COLOD_ERROR_INTERRUPT)) {
             assert(eventqueue_pending(this->queue));
             if (!eventqueue_pending_interrupt(this->queue)) {
@@ -249,6 +248,7 @@ static int _colod_qmp_event_wait_co(Coroutine *coroutine,
 
         break;
     }
+    co_end;
 
     return ret;
 }
@@ -635,20 +635,17 @@ static MainState _colod_secondary_wait_co(Coroutine *coroutine,
     GError *local_errp = NULL;
     int ret;
 
+    co_begin(MainState, STATE_FAILED);
     while (TRUE) {
-        ret = _colod_qmp_event_wait_co(coroutine, this, 0,
-                                      "{'event': 'RESUME'}", &local_errp);
-        if (coroutine->yield) {
-            return 0;
-        }
+        co_recurse(ret = colod_qmp_event_wait_co(coroutine, this, 0,
+                                        "{'event': 'RESUME'}", &local_errp));
 
         if (ret < 0) {
             // Interrupted
+            ColodEvent event;
             g_error_free(local_errp);
             assert(eventqueue_pending(this->queue));
-            ColodEvent event = _colod_event_wait(coroutine, this, __func__,
-                                                 __LINE__);
-            assert(!coroutine->yield);
+            co_recurse(event = colod_event_wait(coroutine, this));
 
             if (event_always_interrupting(event)) {
                 return handle_always_interrupting(event);
@@ -658,6 +655,7 @@ static MainState _colod_secondary_wait_co(Coroutine *coroutine,
 
         break;
     }
+    co_end;
 
     colod_raise_timeout_coroutine(&this->raise_timeout_coroutine, this->qmp,
                                   this->ctx);
@@ -698,11 +696,10 @@ static MainState _colod_colo_running_co(Coroutine *coroutine,
     co_wrap(_colod_primary_wait_co(__VA_ARGS__))
 static MainState _colod_primary_wait_co(Coroutine *coroutine,
                                         ColodMainCoroutine *this) {
+    co_begin(MainState, STATE_FAILED);
     while (TRUE) {
-        ColodEvent event = _colod_event_wait(coroutine, this, __func__, __LINE__);
-        if (coroutine->yield) {
-            return 0;
-        }
+        ColodEvent event;
+        co_recurse(event = colod_event_wait(coroutine, this));
 
         if (event == EVENT_START_MIGRATION) {
             return STATE_PRIMARY_START_MIGRATION;
@@ -719,6 +716,7 @@ static MainState _colod_primary_wait_co(Coroutine *coroutine,
             return STATE_AUTOQUIT;
         }
     }
+    co_end;
 }
 
 #define colod_primary_start_migration_co(...) \
