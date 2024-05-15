@@ -77,6 +77,7 @@ OCF_RESKEY_advanced_config_default = "{}"
 OCF_RESKEY_listen_address_default = "0.0.0.0"
 OCF_RESKEY_host_map_default = "{}"
 OCF_RESKEY_base_port_default = "9000"
+OCF_RESKEY_monitor_interface_default = ""
 OCF_RESKEY_low_yank_timeout_default = "1000"
 OCF_RESKEY_high_yank_timeout_default = "20000"
 OCF_RESKEY_debug_default = "0"
@@ -91,6 +92,7 @@ OCF_RESKEY_advanced_config = os.getenv("OCF_RESKEY_advanced_config", OCF_RESKEY_
 OCF_RESKEY_listen_address = os.getenv("OCF_RESKEY_listen_address", OCF_RESKEY_listen_address_default)
 OCF_RESKEY_host_map = os.getenv("OCF_RESKEY_host_map", OCF_RESKEY_host_map_default)
 OCF_RESKEY_base_port = os.getenv("OCF_RESKEY_base_port", OCF_RESKEY_base_port_default)
+OCF_RESKEY_monitor_interface = os.getenv("OCF_RESKEY_monitor_interface", OCF_RESKEY_monitor_interface_default)
 OCF_RESKEY_low_yank_timeout = os.getenv("OCF_RESKEY_low_yank_timeout", OCF_RESKEY_low_yank_timeout_default)
 OCF_RESKEY_high_yank_timeout = os.getenv("OCF_RESKEY_high_yank_timeout", OCF_RESKEY_high_yank_timeout_default)
 OCF_RESKEY_debug = os.getenv("OCF_RESKEY_debug", OCF_RESKEY_debug_default)
@@ -211,6 +213,9 @@ def colod_cmdline():
 
     if int(OCF_RESKEY_debug) >= 1:
         cmdline += " --trace"
+
+    if OCF_RESKEY_monitor_interface:
+        cmdline += " -m " + OCF_RESKEY_monitor_interface
 
     return cmdline
 
@@ -353,6 +358,12 @@ Example:
         </longdesc>
         <shortdesc lang="en">Ports to use</shortdesc>
         <content type="integer" default=\"""" + OCF_RESKEY_base_port_default + """\"/>
+    </parameter>
+
+    <parameter name="monitor_interface" unique="0" required="0">
+        <longdesc lang="en">interface to monitor</longdesc>
+        <shortdesc lang="en">monitor interface</shortdesc>
+        <content type="string" default=\"""" + OCF_RESKEY_monitor_interface_default + """\"/>
     </parameter>
 
     <parameter name="low_yank_timeout" unique="0" required="0">
