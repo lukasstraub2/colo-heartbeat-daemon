@@ -77,7 +77,6 @@ OCF_RESKEY_advanced_config_default = "{}"
 OCF_RESKEY_listen_address_default = "0.0.0.0"
 OCF_RESKEY_host_map_default = "{}"
 OCF_RESKEY_base_port_default = "9000"
-OCF_RESKEY_max_disk_errors_default = "1"
 OCF_RESKEY_low_yank_timeout_default = "1000"
 OCF_RESKEY_high_yank_timeout_default = "20000"
 OCF_RESKEY_debug_default = "0"
@@ -92,7 +91,6 @@ OCF_RESKEY_advanced_config = os.getenv("OCF_RESKEY_advanced_config", OCF_RESKEY_
 OCF_RESKEY_listen_address = os.getenv("OCF_RESKEY_listen_address", OCF_RESKEY_listen_address_default)
 OCF_RESKEY_host_map = os.getenv("OCF_RESKEY_host_map", OCF_RESKEY_host_map_default)
 OCF_RESKEY_base_port = os.getenv("OCF_RESKEY_base_port", OCF_RESKEY_base_port_default)
-OCF_RESKEY_max_disk_errors = os.getenv("OCF_RESKEY_max_disk_errors", OCF_RESKEY_max_disk_errors_default)
 OCF_RESKEY_low_yank_timeout = os.getenv("OCF_RESKEY_low_yank_timeout", OCF_RESKEY_low_yank_timeout_default)
 OCF_RESKEY_high_yank_timeout = os.getenv("OCF_RESKEY_high_yank_timeout", OCF_RESKEY_high_yank_timeout_default)
 OCF_RESKEY_debug = os.getenv("OCF_RESKEY_debug", OCF_RESKEY_debug_default)
@@ -357,17 +355,6 @@ Example:
         <content type="integer" default=\"""" + OCF_RESKEY_base_port_default + """\"/>
     </parameter>
 
-    <parameter name="max_disk_errors" unique="0" required="0">
-        <longdesc lang="en">
-Maximum disk read errors per monitor interval before marking the resource
-as failed. A write error is always fatal except if the value is 0.
-A value of 0 will disable disk error handling.
-Primary disk errors are only handled if there is a healthy secondary.
-        </longdesc>
-        <shortdesc lang="en">Maximum disk errors</shortdesc>
-        <content type="integer" default=\"""" + OCF_RESKEY_max_disk_errors_default + """\"/>
-    </parameter>
-
     <parameter name="low_yank_timeout" unique="0" required="0">
         <longdesc lang="en">
 Timeout for QMP commands after which to execute the "yank" command,
@@ -496,10 +483,6 @@ def qemu_colo_validate_all():
     # Check resource parameters
     if not str.isdigit(OCF_RESKEY_base_port):
         log.error("base_port needs to be a number")
-        return OCF_ERR_CONFIGURED
-
-    if not str.isdigit(OCF_RESKEY_max_disk_errors):
-        log.error("max_disk_errors needs to be a number")
         return OCF_ERR_CONFIGURED
 
     if not str.isdigit(OCF_RESKEY_low_yank_timeout):
