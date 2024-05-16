@@ -633,6 +633,16 @@ static MainState _colod_secondary_wait_co(Coroutine *coroutine,
     int ret;
 
     co_begin(MainState, STATE_FAILED);
+
+    /*
+     * We need to be interrupted and discard all these events or
+     * else they will be delayed until we are in another state like
+     * colo_running and wreak havoc.
+     */
+    eventqueue_set_interrupting(this->queue, EVENT_FAILOVER_SYNC,
+                                EVENT_FAILOVER_WIN, EVENT_YELLOW,
+                                EVENT_UNYELLOW, 0);
+
     while (TRUE) {
         co_recurse(ret = colod_qmp_event_wait_co(coroutine, this, 0,
                                         "{'event': 'RESUME'}", &local_errp));
@@ -646,6 +656,8 @@ static MainState _colod_secondary_wait_co(Coroutine *coroutine,
 
             if (event_always_interrupting(event)) {
                 return handle_always_interrupting(event);
+            } else if (event_failover(event)) {
+                this->peer_failed = FALSE;
             }
             continue;
         }
