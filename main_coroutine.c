@@ -676,13 +676,53 @@ static MainState _colod_secondary_wait_co(Coroutine *coroutine,
     co_wrap(_colod_colo_running_co(__VA_ARGS__))
 static MainState _colod_colo_running_co(Coroutine *coroutine,
                                         ColodMainCoroutine *this) {
+    struct {
+        guint source_id;
+    } *co;
+    GError *local_errp = NULL;
+    int ret;
 
+    co_frame(co, sizeof(*co));
     co_begin(MainState, STATE_FAILED);
 
-    if (this->primary && this->yellow && !this->peer_yellow) {
-        return STATE_FAILED;
+    eventqueue_set_interrupting(this->queue, EVENT_FAILOVER_SYNC, 0);
+
+    if (this->primary) {
+        co_recurse(ret = colod_qmp_event_wait_co(coroutine, this, 0,
+                                        "{'event': 'RESUME'}", &local_errp));
+
+        if (ret < 0) {
+            // Interrupted
+            g_error_free(local_errp);
+            goto handle_event;
+        }
+
+        co_recurse(ret = colod_qmp_event_wait_co(coroutine, this, 0,
+                                        "{'event': 'RESUME'}", &local_errp));
+
+        if (ret < 0) {
+            // Interrupted
+            g_error_free(local_errp);
+            goto handle_event;
+        }
+
+        CO source_id = g_timeout_add(10000, coroutine->cb.plain, coroutine);
+        g_source_set_name_by_id(CO source_id, "Waiting before failing to yellow");
+        co_yield_int(G_SOURCE_REMOVE);
+
+        guint source_id = g_source_get_id(g_main_current_source());
+        if (source_id != CO source_id) {
+            // Interrupted
+            g_source_remove(CO source_id);
+            goto handle_event;
+        }
+
+        if (this->yellow && !this->peer_yellow) {
+            return STATE_FAILED;
+        }
     }
 
+handle_event:
     while (TRUE) {
         ColodEvent event;
         co_recurse(event = colod_event_wait(coroutine, this));
