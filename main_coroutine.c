@@ -99,7 +99,6 @@ static const gchar *event_str(ColodEvent event) {
         case EVENT_AUTOQUIT: return "EVENT_AUTOQUIT";
 
         case EVENT_FAILOVER_SYNC: return "EVENT_FAILOVER_SYNC";
-        case EVENT_PEER_FAILED: return "EVENT_PEER_FAILED";
         case EVENT_FAILOVER_WIN: return "EVENT_FAILOVER_WIN";
         case EVENT_YELLOW: return "EVENT_YELLOW";
         case EVENT_UNYELLOW: return "EVENT_UNYELLOW";
@@ -140,14 +139,14 @@ static MainState handle_always_interrupting(ColodEvent event) {
 }
 
 static gboolean event_failover(ColodEvent event) {
-    return event == EVENT_FAILOVER_SYNC || event == EVENT_PEER_FAILED;
+    return event == EVENT_FAILOVER_SYNC;
 }
 
 static MainState handle_event_failover(ColodEvent event) {
-    switch (event) {
-        case EVENT_FAILOVER_SYNC: return STATE_FAILOVER_SYNC;
-        case EVENT_PEER_FAILED: return STATE_FAILOVER;
-        default: abort();
+    if (event == EVENT_FAILOVER_SYNC) {
+        return STATE_FAILOVER_SYNC;
+    } else {
+        abort();
     }
 }
 
@@ -591,8 +590,6 @@ static MainState _colod_failover_sync_co(Coroutine *coroutine,
         co_recurse(event = colod_event_wait(coroutine, this));
         if (event == EVENT_FAILOVER_WIN) {
             return STATE_FAILOVER;
-        } else if (event == EVENT_PEER_FAILED) {
-            return STATE_FAILOVER;
         } else if (event_always_interrupting(event)) {
             return handle_always_interrupting(event);
         }
@@ -734,8 +731,7 @@ static MainState _colod_primary_start_migration_co(Coroutine *coroutine,
     co_frame(co, sizeof(*co));
     co_begin(MainState, STATE_FAILED);
 
-    eventqueue_set_interrupting(this->queue, EVENT_FAILOVER_SYNC,
-                                EVENT_PEER_FAILED, 0);
+    eventqueue_set_interrupting(this->queue, EVENT_FAILOVER_SYNC, 0);
 
     co_recurse(qmp_result = colod_execute_co(coroutine, this, &local_errp,
                     "{'execute': 'migrate-set-capabilities',"
@@ -815,7 +811,7 @@ qmp_error:
         log_error(local_errp->message);
         g_error_free(local_errp);
         local_errp = NULL;
-        CO event = EVENT_PEER_FAILED;
+        CO event = EVENT_FAILOVER_SYNC;
         goto failover;
     } else {
         log_error(local_errp->message);
@@ -1030,7 +1026,7 @@ static void colod_qmp_event_cb(gpointer data, ColodQmpResult *result) {
         status = get_member_member_str(result->json_root, "data", "status");
         if (!strcmp(status, "failed")
                 && this->state == STATE_PRIMARY_START_MIGRATION) {
-            colod_event_queue(this, EVENT_PEER_FAILED,
+            colod_event_queue(this, EVENT_FAILOVER_SYNC,
                               "migration failed qmp event");
         }
     } else if (!strcmp(event, "COLO_EXIT")) {
@@ -1054,7 +1050,7 @@ static void colod_cpg_event_cb(gpointer data, ColodMessage message,
     if (peer_left_group) {
         log_error("Peer failed");
         colod_peer_failed(this);
-        colod_event_queue(this, EVENT_PEER_FAILED, "peer left cpg group");
+        colod_event_queue(this, EVENT_FAILOVER_SYNC, "peer left cpg group");
     } else if (message == MESSAGE_FAILOVER) {
         if (message_from_this_node) {
             colod_event_queue(this, EVENT_FAILOVER_WIN, "Got our failover msg");
@@ -1065,7 +1061,7 @@ static void colod_cpg_event_cb(gpointer data, ColodMessage message,
         if (!message_from_this_node) {
             log_error("Peer failed");
             colod_peer_failed(this);
-            colod_event_queue(this, EVENT_PEER_FAILED, "got MESSAGE_FAILED");
+            colod_event_queue(this, EVENT_FAILOVER_SYNC, "got MESSAGE_FAILED");
         }
     } else if (message == MESSAGE_HELLO) {
         if (this->yellow) {
