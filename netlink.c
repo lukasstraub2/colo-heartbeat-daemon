@@ -146,6 +146,15 @@ ColodNetlink *netlink_new(GError **errp) {
         goto err;
     }
 
+    ret = nl_socket_add_memberships(sock, RTNLGRP_LINK, 0);
+    if (ret < 0) {
+        colod_error_set(errp, "Failed to join netlink mcast membership: %s",
+                        nl_geterror(ret));
+        goto err;
+    }
+
+    nl_socket_disable_seq_check(sock);
+
     ret = nl_socket_set_nonblocking(sock);
     if (ret < 0) {
         colod_error_set(errp, "Failed to set netlink socket nonblocking: %s",
