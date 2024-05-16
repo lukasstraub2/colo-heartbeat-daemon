@@ -334,6 +334,32 @@ static ColodQmpResult *_handle_cont_co(Coroutine *coroutine,
     return result;
 }
 
+static ColodQmpResult *handle_set_peer(ColodQmpResult *request,
+                                       const ColodContext *ctx) {
+    const gchar *peer;
+
+    if (!has_member(request->json_root, "peer")) {
+        return create_error_reply("Member 'peer' missing");
+    }
+
+    peer = get_member_str(request->json_root, "peer");
+    colod_set_peer(ctx->main_coroutine, peer);
+
+    return create_reply("{}");
+}
+
+static ColodQmpResult *handle_query_peer(const ColodContext *ctx) {
+    ColodQmpResult *result;
+    gchar *reply;
+    reply = g_strdup_printf("{\"return\": "
+                            "{\"peer\": \"%s\"}}\n",
+                            colod_get_peer(ctx->main_coroutine));
+
+    result = qmp_parse_result(reply, strlen(reply), NULL);
+    assert(result);
+    return result;
+}
+
 static void client_free(ColodClient *client) {
     QLIST_REMOVE(client, next);
     g_io_channel_unref(client->channel);
@@ -433,8 +459,12 @@ static gboolean _colod_client_co(Coroutine *coroutine) {
                 co_recurse(CO result = handle_stop_co(coroutine, client));
             } else if (!strcmp(command, "cont")) {
                 co_recurse(CO result = handle_cont_co(coroutine, client));
-            } else if (!strcmp(command, "clear-peer-status")) {
-                colod_clear_peer_status(client->ctx->main_coroutine);
+            } else if (!strcmp(command, "set-peer")) {
+                CO result = handle_set_peer(CO request, client->ctx);
+            } else if (!strcmp(command, "query-peer")) {
+                CO result = handle_query_peer(client->ctx);
+            } else if (!strcmp(command, "clear-peer")) {
+                colod_clear_peer(client->ctx->main_coroutine);
                 CO result = create_reply("{}");
             } else {
                 CO result = create_error_reply("Unknown command");

@@ -57,6 +57,7 @@ struct ColodMainCoroutine {
     gboolean peer_failover;
     gboolean primary;
     gboolean replication;
+    gchar *peer;
 };
 
 #define colod_trace_source(data) \
@@ -86,9 +87,20 @@ void colod_peer_failed(ColodMainCoroutine *this) {
     this->peer_failed = TRUE;
 }
 
-void colod_clear_peer_status(ColodMainCoroutine *this) {
+void colod_set_peer(ColodMainCoroutine *this, const gchar *peer) {
+    g_free(this->peer);
+    this->peer = g_strdup(peer);
     this->peer_failed = FALSE;
     this->peer_yellow = FALSE;
+}
+
+const gchar *colod_get_peer(ColodMainCoroutine *this) {
+    return this->peer;
+}
+
+void colod_clear_peer(ColodMainCoroutine *this) {
+    g_free(this->peer);
+    this->peer = g_strdup("");
 }
 
 static const gchar *event_str(ColodEvent event) {
@@ -570,6 +582,8 @@ static MainState _colod_failover_co(Coroutine *coroutine,
         g_error_free(local_errp);
         return STATE_FAILED;
     }
+
+    colod_clear_peer(this);
 
     co_end;
 
@@ -1168,6 +1182,7 @@ ColodMainCoroutine *colod_main_new(const ColodContext *ctx, GError **errp) {
     this->queue = colod_eventqueue_new();
 
     this->primary = ctx->primary_startup;
+    this->peer = g_strdup("");
     qmp_add_notify_event(this->qmp, colod_qmp_event_cb, this);
     qmp_add_notify_hup(this->qmp, colod_hup_cb, this);
 
@@ -1196,5 +1211,6 @@ void colod_main_free(ColodMainCoroutine *this) {
     }
 
     eventqueue_free(this->queue);
+    g_free(this->peer);
     g_free(this);
 }

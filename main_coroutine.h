@@ -15,7 +15,9 @@ int _colod_check_health_co(Coroutine *coroutine, ColodMainCoroutine *this,
 void colod_query_status(ColodMainCoroutine *this, ColodState *ret);
 
 void colod_peer_failed(ColodMainCoroutine *this);
-void colod_clear_peer_status(ColodMainCoroutine *this);
+void colod_set_peer(ColodMainCoroutine *this, const gchar *peer);
+const gchar *colod_get_peer(ColodMainCoroutine *this);
+void colod_clear_peer(ColodMainCoroutine *this);
 
 int colod_start_migration(ColodMainCoroutine *this);
 void colod_autoquit(ColodMainCoroutine *this);

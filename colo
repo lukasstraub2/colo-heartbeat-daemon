@@ -810,7 +810,7 @@ def qmp_cancel_resync(fd):
         ])
 
 def qmp_setup_colod(fd):
-    qmp_update_store(fd, {"peer": None, "pretend-secondary": False})
+    qmp_update_store(fd, {"pretend-secondary": False})
 
     qmp_execute(fd, [
         {"exec-colod": "set-yank", "instances": [
@@ -946,6 +946,9 @@ def qmp_query_status(fd):
 def qmp_query_store(fd):
     return qmp_execute(fd, [{"exec-colod": "query-store"}])["return"]
 
+def qmp_query_peer(fd):
+    return qmp_execute(fd, [{"exec-colod": "query-peer"}])["return"]["peer"]
+
 def qmp_update_store(fd, update):
     store = qmp_query_store(fd)
     store.update(update)
@@ -976,19 +979,18 @@ def check_running_pid():
     return pid_running(QEMU_PIDFILE) or pid_running(COLOD_PIDFILE)
 
 def new_peer(fd, peer):
-    if qmp_query_store(fd)["peer"]:
+    if qmp_query_peer(fd):
         return
 
     qmp_start_resync(fd, peer)
-    qmp_update_store(fd, {"peer": peer})
-    qmp_execute(fd, [{"exec-colod": "clear-peer-status"}])
+    qmp_execute(fd, [{"exec-colod": "set-peer", "peer": peer}])
     # The secondary has inconsistent data until resync is finished
     set_remote_master_score(peer, 0)
 
 def del_peer(fd):
     if qmp_check_resync(fd):
         qmp_cancel_resync(fd)
-    qmp_update_store(fd, {"peer": None})
+    qmp_execute(fd, [{"exec-colod": "clear-peer"}])
 
 def qemu_colo_monitor():
     running = check_running_pid()
@@ -1009,18 +1011,18 @@ def qemu_colo_monitor():
             if block_job:
                 if "error" in block_job:
                     log.error("resync error: %s" % block_job["error"])
-                    peer = qmp_query_store(fd)["peer"]
+                    peer = qmp_query_peer(fd)
                     del_peer(fd)
                     report_remote_failure(peer)
 
                 elif status["peer-failed"]:
-                    peer = qmp_query_store(fd)["peer"]
+                    peer = qmp_query_peer(fd)
                     del_peer(fd)
                     report_remote_failure(peer)
 
                 elif block_job["ready"]:
                     log.info("resync done, starting migration")
-                    peer = qmp_query_store(fd)["peer"]
+                    peer = qmp_query_peer(fd)
                     qmp_start_migration(fd, peer)
 
                 else:
@@ -1284,10 +1286,11 @@ def qemu_colo_notify():
         if not env_do_shutdown_guest() \
            and (status["primary"] or status["replication"]) \
            and HOSTNAME != str.strip(OCF_RESKEY_CRM_meta_notify_stop_uname):
+            peer = str.strip(OCF_RESKEY_CRM_meta_notify_stop_uname)
             fd = qmp_open()
-            peer = qmp_query_store(fd)["peer"]
-            log.debug("our peer: %s" % peer)
-            if peer == str.strip(OCF_RESKEY_CRM_meta_notify_stop_uname):
+            our_peer = qmp_query_peer(fd)
+            log.debug("our peer: %s" % our_peer)
+            if peer == our_peer:
                 del_peer(fd)
             fd.close()
 
@@ -1296,6 +1299,12 @@ def qemu_colo_notify():
          and (status["primary"] or status["replication"]):
         peer = str.strip(OCF_RESKEY_CRM_meta_notify_stop_uname)
         set_remote_master_score(peer, 0)
+        fd = qmp_open()
+        our_peer = qmp_query_peer(fd)
+        log.debug("our peer: %s" % our_peer)
+        if peer == our_peer:
+            del_peer(fd)
+        fd.close()
 
     return OCF_SUCCESS
 
