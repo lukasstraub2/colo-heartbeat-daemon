@@ -22,6 +22,8 @@ struct Cpg {
     guint source_id;
     ColodContext *ctx;
     ColodCallbackHead callbacks;
+    guint retransmit_source_id;
+    gboolean retransmit[MESSAGE_MAX];
 };
 
 void colod_cpg_add_notify(Cpg *this, CpgCallback _func, gpointer user_data) {
@@ -44,6 +46,30 @@ static void notify(Cpg *this, ColodMessage message,
     }
 }
 
+static gboolean colod_cpg_retransmit(Cpg *cpg) {
+    gboolean retransmitted = FALSE;
+
+    for (int message = 0; message < MESSAGE_MAX; message++) {
+        if (cpg->retransmit[message]) {
+            colod_cpg_send(cpg, message);
+            retransmitted = TRUE;
+        }
+    }
+
+    return retransmitted;
+}
+
+static gboolean colod_cpg_retransmit_cb(gpointer data) {
+    Cpg *cpg = data;
+
+    if (colod_cpg_retransmit(cpg)) {
+        return G_SOURCE_CONTINUE;
+    }
+
+    cpg->retransmit_source_id = 0;
+    return G_SOURCE_REMOVE;
+}
+
 static void colod_cpg_deliver(cpg_handle_t handle,
                               G_GNUC_UNUSED const struct cpg_name *group_name,
                               uint32_t nodeid,
@@ -63,15 +89,11 @@ static void colod_cpg_deliver(cpg_handle_t handle,
     }
     conv = ntohl((*(uint32_t*)msg));
 
-    switch (conv) {
-        case MESSAGE_FAILOVER:
-            notify(cpg, MESSAGE_FAILOVER, nodeid == myid, FALSE);
-        break;
-
-        case MESSAGE_FAILED:
-            notify(cpg, MESSAGE_FAILED, nodeid == myid, FALSE);
-        break;
+    if (nodeid == myid) {
+        cpg->retransmit[conv] = FALSE;
     }
+
+    notify(cpg, conv, nodeid == myid, FALSE);
 }
 
 static void colod_cpg_confchg(cpg_handle_t handle,
@@ -87,6 +109,7 @@ static void colod_cpg_confchg(cpg_handle_t handle,
     cpg_context_get(handle, (void**) &cpg);
 
     if (left_list_entries) {
+        colod_cpg_retransmit(cpg);
         notify(cpg, MESSAGE_NONE, FALSE, TRUE);
     }
 }
@@ -109,6 +132,12 @@ static gboolean colod_cpg_readable(G_GNUC_UNUSED gint fd,
 void colod_cpg_send(Cpg *cpg, uint32_t message) {
     struct iovec vec;
     uint32_t conv = htonl(message);
+
+    cpg->retransmit[message] = TRUE;
+    if (!cpg->retransmit_source_id) {
+        cpg->retransmit_source_id = g_timeout_add(100, colod_cpg_retransmit_cb,
+                                                  cpg);
+    }
 
     vec.iov_len = sizeof(conv);
     vec.iov_base = &conv;
@@ -174,6 +203,9 @@ Cpg *cpg_new(Cpg *cpg, GError **errp) {
 
 void cpg_free(Cpg *cpg) {
     colod_callback_clear(&cpg->callbacks);
+    if (cpg->retransmit_source_id) {
+        g_source_remove(cpg->retransmit_source_id);
+    }
     g_source_remove(cpg->source_id);
     g_free(cpg);
 }
