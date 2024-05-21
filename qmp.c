@@ -224,6 +224,10 @@ static ColodQmpResult *_qmp_read_line_co(Coroutine *coroutine,
                 notify_event(state, result);
             }
             qmp_result_free(result);
+            if (!channel->discard_events) {
+                g_idle_add(coroutine->cb.plain, coroutine);
+                co_yield_int(G_SOURCE_REMOVE);
+            }
             continue;
         }
 
@@ -506,7 +510,8 @@ static void qmp_wait_event_cb(gpointer data, ColodQmpResult *result) {
 
     if (object_matches(result->json_root, state->match)) {
         state->fired = TRUE;
-        g_idle_add(state->coroutine->cb.plain, state->coroutine);
+        g_idle_add_full(G_PRIORITY_HIGH, state->coroutine->cb.plain,
+                        state->coroutine, NULL);
         qmp_del_notify_event(state->state, qmp_wait_event_cb, state);
     }
 }
