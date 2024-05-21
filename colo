@@ -361,7 +361,10 @@ Example:
     </parameter>
 
     <parameter name="monitor_interface" unique="0" required="0">
-        <longdesc lang="en">interface to monitor</longdesc>
+        <longdesc lang="en">
+When this is set and the link goes down on the
+primary node, failover to the secondary node.
+        </longdesc>
         <shortdesc lang="en">monitor interface</shortdesc>
         <content type="string" default=\"""" + OCF_RESKEY_monitor_interface_default + """\"/>
     </parameter>
