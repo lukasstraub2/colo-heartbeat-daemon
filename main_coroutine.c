@@ -970,7 +970,6 @@ static gboolean _colod_main_co(Coroutine *coroutine, ColodMainCoroutine *this) {
         } else if (this->state == STATE_SECONDARY_COLO_RUNNING) {
             this->replication = TRUE;
             co_recurse(new_state = colod_colo_running_co(coroutine, this));
-            this->replication = FALSE;
         } else if (this->state == STATE_PRIMARY_STARTUP) {
             new_state = STATE_PRIMARY_WAIT;
         } else if (this->state == STATE_PRIMARY_WAIT) {
@@ -985,7 +984,6 @@ static gboolean _colod_main_co(Coroutine *coroutine, ColodMainCoroutine *this) {
         } else if (this->state == STATE_PRIMARY_COLO_RUNNING) {
             this->replication = TRUE;
             co_recurse(new_state = colod_colo_running_co(coroutine, this));
-            this->replication = FALSE;
         } else if (this->state == STATE_FAILOVER_SYNC) {
             co_recurse(new_state = colod_failover_sync_co(coroutine, this));
         } else if (this->state == STATE_FAILOVER) {
