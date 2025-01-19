@@ -1,6 +1,7 @@
 QemuLauncher -> stubable
 - returns qmp
 - Optionals
-- Keep MainCo
+- Keep MainCo as a function
   -> returns FAILED, REBOOT, SHUTDOWN, DEMOTED
 - Command Event
+- qmp templates as singleton with custom printf format
