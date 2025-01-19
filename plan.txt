@@ -1,0 +1,6 @@
+QemuLauncher -> stubable
+- returns qmp
+- Optionals
+- Keep MainCo
+  -> returns FAILED, REBOOT, SHUTDOWN, DEMOTED
+- Command Event
