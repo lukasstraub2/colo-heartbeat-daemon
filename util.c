@@ -260,3 +260,44 @@ void _colod_assert_remove_one_source(gpointer data, const gchar *func,
 
     abort();
 }
+
+MyArray *my_array_new(GDestroyNotify destroy_func) {
+    const unsigned alloc = 1024;
+	MyArray *ret = g_atomic_rc_box_new0(MyArray);
+    ret->array = (void **) calloc(alloc, sizeof(void **));
+	assert(ret->array);
+    ret->destroy_func = destroy_func;
+	ret->size = 0;
+    ret->alloc = alloc;
+	return ret;
+}
+
+void my_array_append(MyArray *this, void *data) {
+    if (this->size >= this->alloc) {
+        this->alloc *= 2;
+        this->array = (void **) reallocarray(this->array, this->alloc, sizeof(void **));
+        assert(this->array);
+    }
+
+    this->array[this->size] = data;
+    this->size++;
+}
+
+static void my_array_free(gpointer data) {
+    MyArray *this = data;
+    if (this->destroy_func) {
+        for (int i = 0; i < this->size; i++) {
+            this->destroy_func(this->array[i]);
+        }
+    }
+
+    free(this->array);
+}
+
+void my_array_ref(MyArray *this) {
+    g_atomic_rc_box_acquire(this);
+}
+
+void my_array_unref(MyArray *this) {
+    g_atomic_rc_box_release_full(this, my_array_free);
+}

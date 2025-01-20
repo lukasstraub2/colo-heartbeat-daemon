@@ -66,4 +66,16 @@ const char *colod_source_name_or_null(GSource *source);
 void _colod_assert_remove_one_source(gpointer data, const gchar *func,
                                      int line);
 
+typedef struct MyArray {
+    void **array;
+    GDestroyNotify destroy_func;
+    int size;
+    int alloc;
+} MyArray;
+
+MyArray *my_array_new(GDestroyNotify destroy_func);
+void my_array_append(MyArray *this, void *data);
+void my_array_ref(MyArray *this);
+void my_array_unref(MyArray *this);
+
 #endif // UTIL_H

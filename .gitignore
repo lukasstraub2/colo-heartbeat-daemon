@@ -5,4 +5,5 @@ io_watch_test
 netlink_test
 test_eventqueue
 test_yellow_coroutine
+test_myarray
 *.o
