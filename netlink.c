@@ -19,6 +19,7 @@
 #include <netinet/in.h>
 #include <linux/netlink.h>
 #include <linux/rtnetlink.h>
+#include <linux/if.h>
 #include <errno.h>
 
 #include "util.h"
