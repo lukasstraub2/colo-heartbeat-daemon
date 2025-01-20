@@ -162,43 +162,6 @@ void colod_shutdown_channel(GIOChannel *channel) {
     shutdown(fd, SHUT_RDWR);
 }
 
-static guint queue_size() {
-    ColodQueue queue;
-    return sizeof(queue.queue)/sizeof(queue.queue[0]);
-}
-
-gboolean queue_empty(ColodQueue *queue) {
-    return queue->read_pos == queue->write_pos;
-}
-
-void queue_add(ColodQueue *queue, guint entry) {
-    guint size = queue_size();
-    guint next_pos = (queue->write_pos + 1) % size;
-
-    if (next_pos == queue->read_pos) {
-        // queue full
-        return;
-    }
-
-    queue->queue[queue->write_pos] = entry;
-    queue->write_pos = next_pos;
-}
-
-guint queue_peek(ColodQueue *queue) {
-    assert(!queue_empty(queue));
-
-    return queue->queue[queue->read_pos];
-}
-
-guint queue_remove(ColodQueue *queue) {
-    guint size = queue_size();
-    guint ret;
-
-    ret = queue_peek(queue);
-    queue->read_pos = (queue->read_pos + 1) % size;
-    return ret;
-}
-
 ColodCallback *colod_callback_find(ColodCallbackHead *head,
                                    ColodCallbackFunc func, gpointer user_data) {
     ColodCallback *entry;
