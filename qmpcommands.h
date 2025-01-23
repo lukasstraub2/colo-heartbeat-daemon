@@ -13,17 +13,22 @@
 #include <glib-2.0/glib.h>
 #include <json-glib-1.0/json-glib/json-glib.h>
 
-typedef struct QmpCommands {
-    JsonNode *migration_start, *migration_switchover;
-    JsonNode *failover_primary, *failover_secondary;
-} QmpCommands;
+#include "base_types.h"
+#include "util.h"
 
-int qmp_commands_set_migration_start(QmpCommands *this, JsonNode *commands);
-int qmp_commands_set_migration_switchover(QmpCommands *this, JsonNode *commands);
-int qmp_commands_set_failover_primary(QmpCommands *this, JsonNode *commands);
-int qmp_commands_set_failover_secondary(QmpCommands *this, JsonNode *commands);
+int qmp_commands_set_prepare_secondary(QmpCommands *this, JsonNode *commands, GError **errp);
+int qmp_commands_set_migration_start(QmpCommands *this, JsonNode *commands, GError **errp);
+int qmp_commands_set_migration_switchover(QmpCommands *this, JsonNode *commands, GError **errp);
+int qmp_commands_set_failover_primary(QmpCommands *this, JsonNode *commands, GError **errp);
+int qmp_commands_set_failover_secondary(QmpCommands *this, JsonNode *commands, GError **errp);
 
-QmpCommands *qmp_commands_new();
-void qmp_commands_free(QmpCommands *commands);
+MyArray *qmp_commands_get_prepare_secondary(QmpCommands *this);
+MyArray *qmp_commands_get_migration_start(QmpCommands *this, const char *address);
+MyArray *qmp_commands_get_migration_switchover(QmpCommands *this);
+MyArray *qmp_commands_get_failover_primary(QmpCommands *this);
+MyArray *qmp_commands_get_failover_secondary(QmpCommands *this);
+
+QmpCommands *qmp_commands_new(const char *base_dir, const char *listen_address, int base_port);
+void qmp_commands_free(QmpCommands *this);
 
 #endif // QMPCOMMANDS_H

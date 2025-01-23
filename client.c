@@ -183,8 +183,9 @@ static JsonNode *get_commands(ColodQmpResult *request, GError **errp) {
     return commands;
 }
 
-static ColodQmpResult *handle_set_migration_start(ColodQmpResult *request,
-                                                  const ColodContext *ctx) {
+static ColodQmpResult *handle_set(int (*func)(QmpCommands *, JsonNode *, GError **),
+                                  ColodQmpResult *request,
+                                  const ColodContext *ctx) {
     GError *local_errp = NULL;
     ColodQmpResult *reply;
 
@@ -195,60 +196,39 @@ static ColodQmpResult *handle_set_migration_start(ColodQmpResult *request,
         return reply;
     }
 
-    qmp_commands_set_migration_start(ctx->commands, commands);
+    int ret = func(ctx->commands, commands, &local_errp);
+    if (ret < 0) {
+        reply = create_error_reply(local_errp->message);
+        g_error_free(local_errp);
+        return reply;
+    }
 
     return create_reply("{}");
+}
+
+static ColodQmpResult *handle_set_prepare_secondary(ColodQmpResult *request,
+                                                  const ColodContext *ctx) {
+    return handle_set(qmp_commands_set_prepare_secondary, request, ctx);
+}
+
+static ColodQmpResult *handle_set_migration_start(ColodQmpResult *request,
+                                                  const ColodContext *ctx) {
+    return handle_set(qmp_commands_set_migration_start, request, ctx);
 }
 
 static ColodQmpResult *handle_set_migration_switchover(ColodQmpResult *request,
                                                        const ColodContext *ctx) {
-    GError *local_errp = NULL;
-    ColodQmpResult *reply;
-
-    JsonNode *commands = get_commands(request, &local_errp);
-    if (!commands) {
-        reply = create_error_reply(local_errp->message);
-        g_error_free(local_errp);
-        return reply;
-    }
-
-    qmp_commands_set_migration_switchover(ctx->commands, commands);
-
-    return create_reply("{}");
+    return handle_set(qmp_commands_set_migration_switchover, request, ctx);
 }
 
 static ColodQmpResult *handle_set_primary_failover(ColodQmpResult *request,
                                                    const ColodContext *ctx) {
-    GError *local_errp = NULL;
-    ColodQmpResult *reply;
-
-    JsonNode *commands = get_commands(request, &local_errp);
-    if (!commands) {
-        reply = create_error_reply(local_errp->message);
-        g_error_free(local_errp);
-        return reply;
-    }
-
-    qmp_commands_set_failover_primary(ctx->commands, commands);
-
-    return create_reply("{}");
+    return handle_set(qmp_commands_set_failover_primary, request, ctx);
 }
 
 static ColodQmpResult *handle_set_secondary_failover(ColodQmpResult *request,
                                                      const ColodContext *ctx) {
-    GError *local_errp = NULL;
-    ColodQmpResult *reply;
-
-    JsonNode *commands = get_commands(request, &local_errp);
-    if (!commands) {
-        reply = create_error_reply(local_errp->message);
-        g_error_free(local_errp);
-        return reply;
-    }
-
-    qmp_commands_set_failover_secondary(ctx->commands, commands);
-
-    return create_reply("{}");
+    return handle_set(qmp_commands_set_failover_secondary, request, ctx);
 }
 
 static ColodQmpResult *handle_set_yank(ColodQmpResult *request,
@@ -437,6 +417,9 @@ static gboolean _colod_client_co(Coroutine *coroutine) {
                 CO result = handle_quit(client->ctx);
             } else if (!strcmp(command, "autoquit")) {
                 CO result = handle_autoquit(client->ctx);
+            } else if (!strcmp(command, "set-prepare-secondary")) {
+                CO result = handle_set_prepare_secondary(CO request,
+                                                         client->ctx);
             } else if (!strcmp(command, "set-migration-start")) {
                 CO result = handle_set_migration_start(CO request,
                                                        client->ctx);

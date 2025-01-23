@@ -347,12 +347,10 @@ ColodQmpResult *_colod_execute_co(Coroutine *coroutine,
 #define colod_execute_array_co(...) \
     co_wrap(_colod_execute_array_co(__VA_ARGS__))
 static int _colod_execute_array_co(Coroutine *coroutine, ColodMainCoroutine *this,
-                                   JsonNode *array_node, gboolean ignore_errors,
+                                   MyArray *array, gboolean ignore_errors,
                                    GError **errp) {
     struct {
-        JsonArray *array;
-        gchar *line;
-        guint i, count;
+        int i;
     } *co;
     GError *local_errp = NULL;
 
@@ -360,14 +358,8 @@ static int _colod_execute_array_co(Coroutine *coroutine, ColodMainCoroutine *thi
     co_begin(int, -1);
 
     assert(!errp || !*errp);
-    assert(JSON_NODE_HOLDS_ARRAY(array_node));
 
-    CO array = json_node_get_array(array_node);
-    CO count = json_array_get_length(CO array);
-    for (CO i = 0; CO i < CO count; CO i++) {
-        JsonNode *node = json_array_get_element(CO array, CO i);
-        assert(node);
-
+    for (CO i = 0; CO i < array->size; CO i++) {
         if (eventqueue_pending_interrupt(this->queue)) {
             g_set_error(errp, COLOD_ERROR, COLOD_ERROR_INTERRUPT,
                         "Got interrupting event while executing array");
@@ -375,12 +367,8 @@ static int _colod_execute_array_co(Coroutine *coroutine, ColodMainCoroutine *thi
             break;
         }
 
-        gchar *tmp = json_to_string(node, FALSE);
-        CO line = g_strdup_printf("%s\n", tmp);
-        g_free(tmp);
-
         ColodQmpResult *result;
-        co_recurse(result = colod_execute_co(coroutine, this, &local_errp, CO line));
+        co_recurse(result = colod_execute_co(coroutine, this, &local_errp, array->array[CO i]));
         if (ignore_errors &&
                 g_error_matches(local_errp, COLOD_ERROR, COLOD_ERROR_QMP)) {
             colod_syslog(LOG_WARNING, "Ignoring qmp error: %s",
@@ -389,11 +377,9 @@ static int _colod_execute_array_co(Coroutine *coroutine, ColodMainCoroutine *thi
             local_errp = NULL;
         } else if (!result) {
             g_propagate_error(errp, local_errp);
-            g_free(CO line);
             return -1;
         }
         qmp_result_free(result);
-        g_free(CO line);
     }
 
     co_end;
@@ -552,7 +538,7 @@ static int _colod_stop_co(Coroutine *coroutine, ColodMainCoroutine *this,
 static MainState _colod_failover_co(Coroutine *coroutine,
                                     ColodMainCoroutine *this) {
     struct {
-        JsonNode *commands;
+        MyArray *commands;
     } *co;
     int ret;
     GError *local_errp = NULL;
@@ -570,13 +556,14 @@ static MainState _colod_failover_co(Coroutine *coroutine,
     }
 
     if (this->primary) {
-        CO commands = this->ctx->commands->failover_primary;
+        CO commands = qmp_commands_get_failover_primary(this->ctx->commands);
     } else {
-        CO commands = this->ctx->commands->failover_secondary;
+        CO commands = qmp_commands_get_failover_secondary(this->ctx->commands);
     }
     this->transitioning = TRUE;
     co_recurse(ret = colod_execute_array_co(coroutine, this, CO commands,
                                             TRUE, &local_errp));
+    my_array_unref(CO commands);
     if (ret < 0) {
         log_error(local_errp->message);
         g_error_free(local_errp);
@@ -788,6 +775,7 @@ static MainState _colod_primary_start_migration_co(Coroutine *coroutine,
                                                    ColodMainCoroutine *this) {
     struct {
         ColodEvent event;
+        MyArray *commands;
     } *co;
     ColodQmpState *qmp = this->qmp;
     ColodQmpResult *qmp_result;
@@ -812,9 +800,10 @@ static MainState _colod_primary_start_migration_co(Coroutine *coroutine,
         goto handle_event;
     }
 
-    co_recurse(ret = colod_execute_array_co(coroutine, this,
-                                            this->ctx->commands->migration_start,
+    CO commands = qmp_commands_get_migration_start(this->ctx->commands, "dummy");
+    co_recurse(ret = colod_execute_array_co(coroutine, this, CO commands,
                                             FALSE, &local_errp));
+    my_array_unref(CO commands);
     if (ret < 0) {
         goto qmp_error;
     }
@@ -831,9 +820,11 @@ static MainState _colod_primary_start_migration_co(Coroutine *coroutine,
         goto qmp_error;
     }
 
+    CO commands = qmp_commands_get_migration_switchover(this->ctx->commands);
     co_recurse(ret = colod_execute_array_co(coroutine, this,
-                                            this->ctx->commands->migration_switchover,
+                                            CO commands,
                                             FALSE, &local_errp));
+    my_array_unref(CO commands);
     if (ret < 0) {
         goto qmp_error;
     }

@@ -10,6 +10,7 @@
 #ifndef BASE_TYPES_H
 #define BASE_TYPES_H
 
+typedef struct QmpCommands QmpCommands;
 typedef struct ColodMainCoroutine ColodMainCoroutine;
 typedef struct ColodClientListener ColodClientListener;
 typedef struct ColodQmpState ColodQmpState;
