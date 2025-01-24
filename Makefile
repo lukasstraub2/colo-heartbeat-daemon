@@ -28,6 +28,9 @@ test_yellow_coroutine: util.o stub_cpg.o stub_netlink.o yellow_coroutine.o test_
 test_myarray: util.o test_myarray.o
 	$(CC) -o $@ $^ $(CFLAGS) $(LDFLAGS)
 
+test_qmpcommands: util.o qmpcommands.o test_qmpcommands.o
+	$(CC) -o $@ $^ $(CFLAGS) $(LDFLAGS)
+
 io_watch_test: util.o io_watch_test.o
 	$(CC) -o $@ $^ $(CFLAGS) $(LDFLAGS)
 
@@ -36,7 +39,7 @@ netlink_test: util.o netlink.o netlink_test.o
 
 .PHONY: clean check
 
-check: smoketest_quit_early smoketest_client_quit test_eventqueue test_yellow_coroutine netlink_test test_myarray
+check: smoketest_quit_early smoketest_client_quit test_eventqueue test_yellow_coroutine netlink_test test_myarray test_qmpcommands
 	$(foreach EXEC,$^, echo "./${EXEC}"; ./${EXEC} || exit 1;)
 
 clean:
