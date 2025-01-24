@@ -63,7 +63,7 @@ void daemon_mainloop(ColodContext *mctx) {
         exit(EXIT_FAILURE);
     }
 
-    mctx->commands = qmp_commands_new("", "", 9000);
+    mctx->commands = qmp_commands_new("", "", 9000, FALSE);
     mctx->main_coroutine = colod_main_new(ctx, &local_errp);
     if (!ctx->main_coroutine) {
         colod_syslog(LOG_ERR, "Failed to initialize main coroutine: %s",

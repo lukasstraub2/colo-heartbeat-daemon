@@ -18,6 +18,7 @@ struct QmpCommands {
     char *base_dir;
     char *listen_address;
     int base_port;
+    gboolean filter_rewriter;
 
     MyArray *prepare_secondary;
     MyArray *migration_start, *migration_switchover;
@@ -109,7 +110,8 @@ static MyArray *qmp_commands_format(const MyArray *entry,
                                     const char *base_dir,
                                     const char *address,
                                     const char *listen_address,
-                                    const int base_port) {
+                                    const int base_port,
+                                    gboolean filter_rewriter) {
     MyArray *ret = my_array_new(g_free);
     char *comp_pri_sock = g_build_filename(base_dir, "comp-pri-in0.sock", NULL);
     char *comp_out_sock = g_build_filename(base_dir, "comp-out0.sock", NULL);
@@ -119,19 +121,36 @@ static MyArray *qmp_commands_format(const MyArray *entry,
     char *compare_in_port = g_strdup_printf("%i", base_port + 3);
 
     for (int i = 0; i < entry->size; i++) {
-        GString *str = g_string_new(entry->array[i]);
+        const char *str = entry->array[i];
+        gboolean if_rewriter = !!g_strstr_len(str, -1, "@@IF_REWRITER@@");
+        gboolean if_not_rewriter = !!g_strstr_len(str, -1, "@@IF_NOT_REWRITER@@");
 
-        g_string_replace(str, "@@ADDRESS@@", address, 0);
-        g_string_replace(str, "@@LISTEN_ADDRESS@@", listen_address, 0);
-        g_string_replace(str, "@@COMP_PRI_SOCK@@", comp_pri_sock, 0);
-        g_string_replace(str, "@@COMP_OUT_SOCK@@", comp_out_sock, 0);
+        if (filter_rewriter) {
+            if (if_not_rewriter) {
+                continue;
+            }
+        } else {
+            if (if_rewriter) {
+                continue;
+            }
+        }
 
-        g_string_replace(str, "@@NBD_PORT@@", nbd_port, 0);
-        g_string_replace(str, "@@MIGRATE_PORT@@", migrate_port, 0);
-        g_string_replace(str, "@@MIRROR_PORT@@", mirror_port, 0);
-        g_string_replace(str, "@@COMPARE_IN_PORT@@", compare_in_port, 0);
+        GString *command = g_string_new(str);
 
-        my_array_append(ret, g_string_free(str, FALSE));
+        g_string_replace(command, "@@IF_REWRITER@@", "", 0);
+        g_string_replace(command, "@@IF_NOT_REWRITER@@", "", 0);
+
+        g_string_replace(command, "@@ADDRESS@@", address, 0);
+        g_string_replace(command, "@@LISTEN_ADDRESS@@", listen_address, 0);
+        g_string_replace(command, "@@COMP_PRI_SOCK@@", comp_pri_sock, 0);
+        g_string_replace(command, "@@COMP_OUT_SOCK@@", comp_out_sock, 0);
+
+        g_string_replace(command, "@@NBD_PORT@@", nbd_port, 0);
+        g_string_replace(command, "@@MIGRATE_PORT@@", migrate_port, 0);
+        g_string_replace(command, "@@MIRROR_PORT@@", mirror_port, 0);
+        g_string_replace(command, "@@COMPARE_IN_PORT@@", compare_in_port, 0);
+
+        my_array_append(ret, g_string_free(command, FALSE));
     }
 
     g_free(comp_pri_sock);
@@ -145,37 +164,43 @@ static MyArray *qmp_commands_format(const MyArray *entry,
 
 MyArray *qmp_commands_get_prepare_secondary(QmpCommands *this) {
     return qmp_commands_format(this->prepare_secondary, this->base_dir, "",
-                               this->listen_address, this->base_port);
+                               this->listen_address, this->base_port,
+                               this->filter_rewriter);
 }
 
 MyArray *qmp_commands_get_migration_start(QmpCommands *this,
                                           const char *address) {
     return qmp_commands_format(this->migration_start, this->base_dir, address,
-                               this->listen_address, this->base_port);
+                               this->listen_address, this->base_port,
+                               this->filter_rewriter);
 }
 
 MyArray *qmp_commands_get_migration_switchover(QmpCommands *this) {
     return qmp_commands_format(this->migration_switchover, this->base_dir, "",
-                               this->listen_address, this->base_port);
+                               this->listen_address, this->base_port,
+                               this->filter_rewriter);
 }
 
 MyArray *qmp_commands_get_failover_primary(QmpCommands *this) {
     return qmp_commands_format(this->failover_primary, this->base_dir, "",
-                               this->listen_address, this->base_port);
+                               this->listen_address, this->base_port,
+                               this->filter_rewriter);
 }
 
 MyArray *qmp_commands_get_failover_secondary(QmpCommands *this) {
     return qmp_commands_format(this->failover_secondary, this->base_dir, "",
-                               this->listen_address, this->base_port);
+                               this->listen_address, this->base_port,
+                               this->filter_rewriter);
 }
 
 QmpCommands *qmp_commands_new(const char *base_dir, const char *listen_address,
-                              int base_port) {
+                              int base_port, gboolean filter_rewriter) {
     QmpCommands *this = g_new0(QmpCommands, 1);
 
     this->base_dir = g_strdup(base_dir);
     this->listen_address = g_strdup(listen_address);
     this->base_port = base_port;
+    this->filter_rewriter = filter_rewriter;
 
     this->prepare_secondary = qmp_commands_static(0,
         "{'execute': 'migrate-set-capabilities', 'arguments': {'capabilities': [{'capability': 'x-colo', 'state': True}]}}",
@@ -193,9 +218,12 @@ QmpCommands *qmp_commands_new(const char *base_dir, const char *listen_address,
         "{'execute': 'chardev-add', 'arguments': {'id': 'comp_out0', 'backend': {'type': 'socket', 'data': {'addr': {'type': 'unix', 'data': {'path': '@@COMP_OUT_SOCK@@'}}, 'server': False}}}}",
         "{'execute': 'chardev-add', 'arguments': {'id': 'mirror0', 'backend': {'type': 'socket', 'data': {'addr': {'type': 'inet', 'data': {'host': '@@ADDRESS@@', 'port': '@@MIRROR_PORT@@'}}, 'server': False, 'nodelay': True}}}}",
         "{'execute': 'chardev-add', 'arguments': {'id': 'comp_sec_in0', 'backend': {'type': 'socket', 'data': {'addr': {'type': 'inet', 'data': {'host': '@@ADDRESS@@', 'port': '@@COMPARE_IN_PORT@@'}}, 'server': False, 'nodelay': True}}}}",
-        "{'execute': 'object-add', 'arguments': {'qom-type': 'filter-mirror', 'id': 'mirror0', 'status': 'off', 'netdev': 'hn0', 'queue': 'tx', 'outdev': 'mirror0'}}",
-        "{'execute': 'object-add', 'arguments': {'qom-type': 'filter-redirector', 'id': 'comp_out0', 'netdev': 'hn0', 'queue': 'rx', 'indev': 'comp_out0..'}}",
-        "{'execute': 'object-add', 'arguments': {'qom-type': 'filter-redirector', 'id': 'comp_pri_in0', 'status': 'off', 'netdev': 'hn0', 'queue': 'rx', 'outdev': 'comp_pri_in0..'}}",
+        "@@IF_REWRITER@@ {'execute': 'object-add', 'arguments': {'qom-type': 'filter-mirror', 'id': 'mirror0', 'status': 'off', 'insert': 'before', 'position': 'id=rew0', 'netdev': 'hn0', 'queue': 'tx', 'outdev': 'mirror0'}}",
+        "@@IF_REWRITER@@ {'execute': 'object-add', 'arguments': {'qom-type': 'filter-redirector', 'id': 'comp_out0', 'insert': 'before', 'position': 'id=rew0', 'netdev': 'hn0', 'queue': 'rx', 'indev': 'comp_out0..'}}",
+        "@@IF_REWRITER@@ {'execute': 'object-add', 'arguments': {'qom-type': 'filter-redirector', 'id': 'comp_pri_in0', 'status': 'off', 'insert': 'before', 'position': 'id=rew0', 'netdev': 'hn0', 'queue': 'rx', 'outdev': 'comp_pri_in0..'}}",
+        "@@IF_NOT_REWRITER@@ {'execute': 'object-add', 'arguments': {'qom-type': 'filter-mirror', 'id': 'mirror0', 'status': 'off', 'netdev': 'hn0', 'queue': 'tx', 'outdev': 'mirror0'}}",
+        "@@IF_NOT_REWRITER@@ {'execute': 'object-add', 'arguments': {'qom-type': 'filter-redirector', 'id': 'comp_out0', 'netdev': 'hn0', 'queue': 'rx', 'indev': 'comp_out0..'}}",
+        "@@IF_NOT_REWRITER@@ {'execute': 'object-add', 'arguments': {'qom-type': 'filter-redirector', 'id': 'comp_pri_in0', 'status': 'off', 'netdev': 'hn0', 'queue': 'rx', 'outdev': 'comp_pri_in0..'}}",
         "{'execute': 'object-add', 'arguments': {'qom-type': 'iothread', 'id': 'iothread1'}}",
         "{'execute': 'object-add', 'arguments': {'qom-type': 'colo-compare', 'id': 'comp0', 'primary_in': 'comp_pri_in0', 'secondary_in': 'comp_sec_in0', 'outdev': 'comp_out0', 'iothread': 'iothread1'}}",
         "{'execute': 'migrate', 'arguments': {'uri': 'tcp:@@ADDRESS@@:@@MIGRATE_PORT@@'}}",

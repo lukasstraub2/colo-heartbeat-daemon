@@ -16,7 +16,7 @@
 static void test_a() {
     int ret;
     GError *local_errp = NULL;
-    QmpCommands *commands = qmp_commands_new("/tmp", "0.0.0.0", 9000);
+    QmpCommands *commands = qmp_commands_new("/tmp", "0.0.0.0", 9000, FALSE);
 
     JsonNode *json = json_from_string("\"lol\"", NULL);
     assert(json);
@@ -48,7 +48,7 @@ static void test_a() {
 
 static void test_b() {
     int ret;
-    QmpCommands *commands = qmp_commands_new("/tmp", "0.0.0.0", 9000);
+    QmpCommands *commands = qmp_commands_new("/tmp", "0.0.0.0", 9000, FALSE);
 
     JsonNode *json = json_from_string("['some @@ADDRESS@@', 'and :@@NBD_PORT@@: then', '@@LISTEN_ADDRESS@@', 'and @@COMP_PRI_SOCK@@']", NULL);
     assert(json);
@@ -76,9 +76,33 @@ static void test_b() {
     qmp_commands_free(commands);
 }
 
+static void test_c(gboolean filter_rewriter) {
+    int ret;
+    QmpCommands *commands = qmp_commands_new("/tmp", "0.0.0.0", 9000, filter_rewriter);
+    JsonNode *json = json_from_string("['@@IF_REWRITER@@ rewriter', '@@IF_NOT_REWRITER@@ no rewriter']", NULL);
+    assert(json);
+
+    ret = qmp_commands_set_migration_switchover(commands, json, NULL);
+    assert(ret == 0);
+
+    MyArray *array = qmp_commands_get_migration_switchover(commands);
+    assert(array->size == 1);
+    if (filter_rewriter) {
+        assert(!strcmp(array->array[0], " rewriter\n"));
+    } else {
+        assert(!strcmp(array->array[0], " no rewriter\n"));
+    }
+    my_array_unref(array);
+
+    json_node_unref(json);
+    qmp_commands_free(commands);
+}
+
 int main(G_GNUC_UNUSED int argc, G_GNUC_UNUSED char **argv) {
     test_a();
     test_b();
+    test_c(TRUE);
+    test_c(FALSE);
 
     return 0;
 }
