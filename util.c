@@ -262,7 +262,7 @@ void _colod_assert_remove_one_source(gpointer data, const gchar *func,
 }
 
 MyArray *my_array_new(GDestroyNotify destroy_func) {
-    const unsigned alloc = 1024;
+    const unsigned alloc = 128;
 	MyArray *ret = g_atomic_rc_box_new0(MyArray);
     ret->array = (void **) calloc(alloc, sizeof(void **));
 	assert(ret->array);
