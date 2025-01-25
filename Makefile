@@ -40,7 +40,7 @@ netlink_test: util.o netlink.o netlink_test.o
 .PHONY: clean check
 
 check: smoketest_quit_early smoketest_client_quit test_eventqueue test_yellow_coroutine netlink_test test_myarray test_qmpcommands
-	$(foreach EXEC,$^, echo "./${EXEC}"; ./${EXEC} || exit 1;)
+	$(foreach EXEC,$^, echo "./${EXEC}"; G_DEBUG=fatal-warnings ./${EXEC} || exit 1;)
 
 clean:
 	rm -f *.o colod smoketest_quit_early smoketest_client_quit test_eventqueue io_watch_test netlink_test test_myarray test_qmpcommands

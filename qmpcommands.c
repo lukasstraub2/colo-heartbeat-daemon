@@ -64,12 +64,12 @@ static int qmp_commands_set_json(MyArray **entry, JsonNode *commands, GError **e
     }
 
     MyArray *formated = qmp_commands_format(new, "", "", "", 0, FALSE);
-    my_array_unref(formated);
     if (!formated) {
         g_set_error(errp, COLOD_ERROR, COLOD_ERROR_QMP, "Invalid format");
         ret = -1;
         goto out;
     }
+    my_array_unref(formated);
 
     my_array_unref(*entry);
     *entry = my_array_ref(new);
