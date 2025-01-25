@@ -143,8 +143,8 @@ static MyArray *qmp_commands_format(const MyArray *entry,
 
     for (int i = 0; i < entry->size; i++) {
         const char *str = entry->array[i];
-        gboolean if_rewriter = !!g_strstr_len(str, -1, "@@IF_REWRITER@@");
-        gboolean if_not_rewriter = !!g_strstr_len(str, -1, "@@IF_NOT_REWRITER@@");
+        gboolean if_rewriter = !!strstr(str, "@@IF_REWRITER@@");
+        gboolean if_not_rewriter = !!strstr(str, "@@IF_NOT_REWRITER@@");
 
         if (filter_rewriter) {
             if (if_not_rewriter) {
@@ -171,7 +171,7 @@ static MyArray *qmp_commands_format(const MyArray *entry,
         g_string_replace(command, "@@MIRROR_PORT@@", mirror_port, 0);
         g_string_replace(command, "@@COMPARE_IN_PORT@@", compare_in_port, 0);
 
-        if (g_strstr_len(command->str, -1, "@@")) {
+        if (strstr(command->str, "@@")) {
             g_string_free(command, TRUE);
             my_array_unref(ret);
             ret = NULL;
