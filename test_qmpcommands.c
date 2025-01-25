@@ -98,11 +98,29 @@ static void test_c(gboolean filter_rewriter) {
     qmp_commands_free(commands);
 }
 
+static void test_d() {
+    int ret;
+    GError *local_errp = NULL;
+    QmpCommands *commands = qmp_commands_new("/tmp", "0.0.0.0", 9000, FALSE);
+
+    JsonNode *json = json_from_string("['@@COMP_OUT_SOCK@@ @@unknown@@']", NULL);
+    assert(json);
+    ret = qmp_commands_set_migration_start(commands, json, &local_errp);
+    assert(ret < 0);
+    assert(local_errp);
+    g_error_free(local_errp);
+    local_errp = NULL;
+    json_node_unref(json);
+
+    qmp_commands_free(commands);
+}
+
 int main(G_GNUC_UNUSED int argc, G_GNUC_UNUSED char **argv) {
     test_a();
     test_b();
     test_c(TRUE);
     test_c(FALSE);
+    test_d();
 
     return 0;
 }

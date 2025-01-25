@@ -43,4 +43,4 @@ check: smoketest_quit_early smoketest_client_quit test_eventqueue test_yellow_co
 	$(foreach EXEC,$^, echo "./${EXEC}"; ./${EXEC} || exit 1;)
 
 clean:
-	rm -f *.o colod smoketest_quit_early smoketest_client_quit test_eventqueue io_watch_test netlink_test
+	rm -f *.o colod smoketest_quit_early smoketest_client_quit test_eventqueue io_watch_test netlink_test test_myarray test_qmpcommands
