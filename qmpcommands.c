@@ -25,16 +25,27 @@ struct QmpCommands {
     MyArray *failover_primary, *failover_secondary;
 };
 
+static MyArray *qmp_commands_format(const MyArray *entry,
+                                    const char *base_dir,
+                                    const char *address,
+                                    const char *listen_address,
+                                    const int base_port,
+                                    gboolean filter_rewriter);
+
 static int qmp_commands_set_json(MyArray **entry, JsonNode *commands, GError **errp) {
+    MyArray *new = my_array_new(g_free);
     JsonArray *array;
     int size;
+    int ret = 0;
+
     assert(!errp || !*errp);
     assert(entry && *entry);
 
     if (!JSON_NODE_HOLDS_ARRAY(commands)) {
         g_set_error(errp, COLOD_ERROR, COLOD_ERROR_QMP,
                     "Expected array of strings");
-        return -1;
+        ret = -1;
+        goto out;
     }
 
     array = json_node_get_array(commands);
@@ -45,22 +56,28 @@ static int qmp_commands_set_json(MyArray **entry, JsonNode *commands, GError **e
         if (!str) {
             g_set_error(errp, COLOD_ERROR, COLOD_ERROR_QMP,
                         "Expected array of strings");
-            return -1;
+            ret = -1;
+            goto out;
         }
+
+        my_array_append(new, g_strdup_printf("%s\n", str));
+    }
+
+    MyArray *formated = qmp_commands_format(new, "", "", "", 0, FALSE);
+    my_array_unref(formated);
+    if (!formated) {
+        g_set_error(errp, COLOD_ERROR, COLOD_ERROR_QMP, "Invalid format");
+        ret = -1;
+        goto out;
     }
 
     my_array_unref(*entry);
-    *entry = my_array_new(g_free);
+    *entry = my_array_ref(new);
 
-    for (int i = 0; i < size; i++) {
-        JsonNode *node = json_array_get_element(array, i);
-        const gchar *str = json_node_get_string(node);
-        assert(str);
+out:
+    my_array_unref(new);
 
-        my_array_append(*entry, g_strdup_printf("%s\n", str));
-    }
-
-    return 0;
+    return ret;
 }
 
 static MyArray *qmp_commands_static(int dummy, ...) {
@@ -77,6 +94,10 @@ static MyArray *qmp_commands_static(int dummy, ...) {
         my_array_append(ret, g_strdup_printf("%s\n", str));
     }
     va_end(args);
+
+    MyArray *formated = qmp_commands_format(ret, "", "", "", 0, FALSE);
+    assert(formated);
+    my_array_unref(formated);
 
     return ret;
 }
@@ -149,6 +170,13 @@ static MyArray *qmp_commands_format(const MyArray *entry,
         g_string_replace(command, "@@MIGRATE_PORT@@", migrate_port, 0);
         g_string_replace(command, "@@MIRROR_PORT@@", mirror_port, 0);
         g_string_replace(command, "@@COMPARE_IN_PORT@@", compare_in_port, 0);
+
+        if (g_strstr_len(command->str, -1, "@@")) {
+            g_string_free(command, TRUE);
+            my_array_unref(ret);
+            ret = NULL;
+            break;
+        }
 
         my_array_append(ret, g_string_free(command, FALSE));
     }

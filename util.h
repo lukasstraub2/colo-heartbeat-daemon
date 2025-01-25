@@ -75,7 +75,7 @@ typedef struct MyArray {
 
 MyArray *my_array_new(GDestroyNotify destroy_func);
 void my_array_append(MyArray *this, void *data);
-void my_array_ref(MyArray *this);
+MyArray *my_array_ref(MyArray *this);
 void my_array_unref(MyArray *this);
 
 #endif // UTIL_H

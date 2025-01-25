@@ -294,8 +294,8 @@ static void my_array_free(gpointer data) {
     free(this->array);
 }
 
-void my_array_ref(MyArray *this) {
-    g_atomic_rc_box_acquire(this);
+MyArray *my_array_ref(MyArray *this) {
+    return g_atomic_rc_box_acquire(this);
 }
 
 void my_array_unref(MyArray *this) {
