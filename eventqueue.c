@@ -173,6 +173,7 @@ void eventqueue_free(EventQueue *this) {
     while (!g_sequence_iter_is_end(iter)) {
         g_free(g_sequence_get(iter));
         g_sequence_remove(iter);
+        iter = g_sequence_get_begin_iter(this->sequence);
     }
 
     g_sequence_free(this->sequence);

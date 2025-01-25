@@ -386,6 +386,9 @@ static gboolean _colod_client_co(Coroutine *coroutine) {
         co_recurse(ret = colod_channel_read_line_co(coroutine, client->channel,
                                                     &CO line, &CO len, &local_errp));
         if (client->quit) {
+            if (local_errp) {
+                g_error_free(local_errp);
+            }
             g_free(CO line);
             break;
         }
@@ -485,8 +488,9 @@ error_client:
     if (!g_error_matches(local_errp, COLOD_ERROR, COLOD_ERROR_EOF)) {
         colod_syslog(LOG_WARNING, "Client connection broke: %s",
                      local_errp->message);
-        g_error_free(local_errp);
     }
+    g_error_free(local_errp);
+    local_errp = NULL;
 
     if (client->stopped_qemu) {
         co_recurse(CO result = colod_execute_co(coroutine, client->ctx->main_coroutine,

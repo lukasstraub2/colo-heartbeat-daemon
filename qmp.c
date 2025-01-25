@@ -617,6 +617,7 @@ static gboolean _qmp_event_co(Coroutine *coroutine) {
         if (!result) {
             colod_trace("%s:%u: %s\n", __func__, __LINE__, local_errp->message);
             qmp_set_error(qmpco->state, local_errp);
+            g_error_free(local_errp);
             return G_SOURCE_REMOVE;
         }
         if (!has_member(result->json_root, "event")) {
@@ -705,6 +706,10 @@ void qmp_free(ColodQmpState *state) {
 
     while (state->inflight) {
         g_main_context_iteration(g_main_context_default(), TRUE);
+    }
+
+    if (state->error) {
+        g_error_free(state->error);
     }
 
     g_io_channel_unref(state->yank_channel.channel);
