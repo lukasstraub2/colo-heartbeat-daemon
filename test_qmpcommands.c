@@ -88,9 +88,9 @@ static void test_c(gboolean filter_rewriter) {
     MyArray *array = qmp_commands_get_migration_switchover(commands);
     assert(array->size == 1);
     if (filter_rewriter) {
-        assert(!strcmp(array->array[0], "rewriter\n"));
+        assert(!strcmp(array->array[0], " rewriter\n"));
     } else {
-        assert(!strcmp(array->array[0], "no rewriter\n"));
+        assert(!strcmp(array->array[0], " no rewriter\n"));
     }
     my_array_unref(array);
 

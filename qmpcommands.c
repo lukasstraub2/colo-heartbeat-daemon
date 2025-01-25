@@ -142,9 +142,9 @@ static MyArray *qmp_commands_format(const MyArray *entry,
     char *compare_in_port = g_strdup_printf("%i", base_port + 3);
 
     for (int i = 0; i < entry->size; i++) {
-        const char *_command = entry->array[i];
-        gboolean if_rewriter = !!g_strstr_len(_command, -1, "@@IF_REWRITER@@");
-        gboolean if_not_rewriter = !!g_strstr_len(_command, -1, "@@IF_NOT_REWRITER@@");
+        const char *str = entry->array[i];
+        gboolean if_rewriter = !!g_strstr_len(str, -1, "@@IF_REWRITER@@");
+        gboolean if_not_rewriter = !!g_strstr_len(str, -1, "@@IF_NOT_REWRITER@@");
 
         if (filter_rewriter) {
             if (if_not_rewriter) {
@@ -156,13 +156,10 @@ static MyArray *qmp_commands_format(const MyArray *entry,
             }
         }
 
-        GString *command = g_string_new(_command);
+        GString *command = g_string_new(str);
 
         g_string_replace(command, "@@IF_REWRITER@@", "", 0);
         g_string_replace(command, "@@IF_NOT_REWRITER@@", "", 0);
-
-        g_strstrip(command->str);
-        command->len = strlen(command->str);
 
         g_string_replace(command, "@@ADDRESS@@", address, 0);
         g_string_replace(command, "@@LISTEN_ADDRESS@@", listen_address, 0);
