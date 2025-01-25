@@ -25,12 +25,12 @@ struct QmpCommands {
     MyArray *failover_primary, *failover_secondary;
 };
 
-static MyArray *qmp_commands_format(const MyArray *entry,
-                                    const char *base_dir,
-                                    const char *address,
-                                    const char *listen_address,
-                                    const int base_port,
-                                    gboolean filter_rewriter);
+static MyArray *_qmp_commands_format(const MyArray *entry,
+                                     const char *base_dir,
+                                     const char *address,
+                                     const char *listen_address,
+                                     const int base_port,
+                                     gboolean filter_rewriter);
 
 static int qmp_commands_set_json(MyArray **entry, JsonNode *commands, GError **errp) {
     MyArray *new = my_array_new(g_free);
@@ -63,7 +63,7 @@ static int qmp_commands_set_json(MyArray **entry, JsonNode *commands, GError **e
         my_array_append(new, g_strdup_printf("%s\n", str));
     }
 
-    MyArray *formated = qmp_commands_format(new, "", "", "", 0, FALSE);
+    MyArray *formated = _qmp_commands_format(new, "", "", "", 0, FALSE);
     if (!formated) {
         g_set_error(errp, COLOD_ERROR, COLOD_ERROR_QMP, "Invalid format");
         ret = -1;
@@ -95,7 +95,7 @@ static MyArray *qmp_commands_static(int dummy, ...) {
     }
     va_end(args);
 
-    MyArray *formated = qmp_commands_format(ret, "", "", "", 0, FALSE);
+    MyArray *formated = _qmp_commands_format(ret, "", "", "", 0, FALSE);
     assert(formated);
     my_array_unref(formated);
 
@@ -127,12 +127,12 @@ int qmp_commands_set_failover_secondary(QmpCommands *this, JsonNode *commands,
     return qmp_commands_set_json(&this->failover_secondary, commands, errp);
 }
 
-static MyArray *qmp_commands_format(const MyArray *entry,
-                                    const char *base_dir,
-                                    const char *address,
-                                    const char *listen_address,
-                                    const int base_port,
-                                    gboolean filter_rewriter) {
+static MyArray *_qmp_commands_format(const MyArray *entry,
+                                     const char *base_dir,
+                                     const char *address,
+                                     const char *listen_address,
+                                     const int base_port,
+                                     gboolean filter_rewriter) {
     MyArray *ret = my_array_new(g_free);
     char *comp_pri_sock = g_build_filename(base_dir, "comp-pri-in0.sock", NULL);
     char *comp_out_sock = g_build_filename(base_dir, "comp-out0.sock", NULL);
@@ -190,35 +190,33 @@ static MyArray *qmp_commands_format(const MyArray *entry,
     return ret;
 }
 
+static MyArray *qmp_commands_format(const QmpCommands *this,
+                                    const MyArray *entry,
+                                    const char *address) {
+    return _qmp_commands_format(entry, this->base_dir, address,
+                                this->listen_address, this->base_port,
+                                this->filter_rewriter);
+}
+
 MyArray *qmp_commands_get_prepare_secondary(QmpCommands *this) {
-    return qmp_commands_format(this->prepare_secondary, this->base_dir, "",
-                               this->listen_address, this->base_port,
-                               this->filter_rewriter);
+    return qmp_commands_format(this, this->prepare_secondary, "");
 }
 
 MyArray *qmp_commands_get_migration_start(QmpCommands *this,
                                           const char *address) {
-    return qmp_commands_format(this->migration_start, this->base_dir, address,
-                               this->listen_address, this->base_port,
-                               this->filter_rewriter);
+    return qmp_commands_format(this, this->migration_start, address);
 }
 
 MyArray *qmp_commands_get_migration_switchover(QmpCommands *this) {
-    return qmp_commands_format(this->migration_switchover, this->base_dir, "",
-                               this->listen_address, this->base_port,
-                               this->filter_rewriter);
+    return qmp_commands_format(this, this->migration_switchover, "");
 }
 
 MyArray *qmp_commands_get_failover_primary(QmpCommands *this) {
-    return qmp_commands_format(this->failover_primary, this->base_dir, "",
-                               this->listen_address, this->base_port,
-                               this->filter_rewriter);
+    return qmp_commands_format(this, this->failover_primary, "");
 }
 
 MyArray *qmp_commands_get_failover_secondary(QmpCommands *this) {
-    return qmp_commands_format(this->failover_secondary, this->base_dir, "",
-                               this->listen_address, this->base_port,
-                               this->filter_rewriter);
+    return qmp_commands_format(this, this->failover_secondary, "");
 }
 
 QmpCommands *qmp_commands_new(const char *base_dir, const char *listen_address,
