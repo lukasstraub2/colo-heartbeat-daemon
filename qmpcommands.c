@@ -25,12 +25,35 @@ struct QmpCommands {
     MyArray *failover_primary, *failover_secondary;
 };
 
-static MyArray *_qmp_commands_format(const MyArray *entry,
-                                     const char *base_dir,
-                                     const char *address,
-                                     const char *listen_address,
-                                     const int base_port,
-                                     gboolean filter_rewriter);
+typedef struct Formater {
+    const char *base_dir;
+    const char *address;
+    const char *listen_address;
+    const int base_port;
+    gboolean filter_rewriter;
+    gboolean newline;
+} Formater;
+
+static MyArray *formater_format(const Formater *this, const MyArray *entry);
+
+static int qmp_commands_format_check(MyArray *new) {
+    Formater fmt = {
+        "",
+        "",
+        "",
+        9000,
+        FALSE,
+        TRUE
+    };
+
+    MyArray *formated = formater_format(&fmt, new);
+    if (!formated) {
+        return -1;
+    }
+    my_array_unref(formated);
+
+    return 0;
+}
 
 static int qmp_commands_set_json(MyArray **entry, JsonNode *commands, GError **errp) {
     MyArray *new = my_array_new(g_free);
@@ -63,13 +86,12 @@ static int qmp_commands_set_json(MyArray **entry, JsonNode *commands, GError **e
         my_array_append(new, g_strdup_printf("%s\n", str));
     }
 
-    MyArray *formated = _qmp_commands_format(new, "", "", "", 0, FALSE);
-    if (!formated) {
+    ret = qmp_commands_format_check(new);
+    if (ret < 0) {
         g_set_error(errp, COLOD_ERROR, COLOD_ERROR_QMP, "Invalid format");
         ret = -1;
         goto out;
     }
-    my_array_unref(formated);
 
     my_array_unref(*entry);
     *entry = my_array_ref(new);
@@ -82,7 +104,7 @@ out:
 
 static MyArray *qmp_commands_static(int dummy, ...) {
     va_list args;
-    MyArray *ret = my_array_new(g_free);
+    MyArray *array = my_array_new(g_free);
 
     va_start(args, dummy);
     while (TRUE) {
@@ -91,15 +113,14 @@ static MyArray *qmp_commands_static(int dummy, ...) {
             break;
         }
 
-        my_array_append(ret, g_strdup_printf("%s\n", str));
+        my_array_append(array, g_strdup_printf("%s\n", str));
     }
     va_end(args);
 
-    MyArray *formated = _qmp_commands_format(ret, "", "", "", 0, FALSE);
-    assert(formated);
-    my_array_unref(formated);
+    int ret = qmp_commands_format_check(array);
+    assert(ret == 0);
 
-    return ret;
+    return array;
 }
 
 int qmp_commands_set_prepare_secondary(QmpCommands *this, JsonNode *commands,
@@ -127,75 +148,89 @@ int qmp_commands_set_failover_secondary(QmpCommands *this, JsonNode *commands,
     return qmp_commands_set_json(&this->failover_secondary, commands, errp);
 }
 
-static MyArray *_qmp_commands_format(const MyArray *entry,
-                                     const char *base_dir,
-                                     const char *address,
-                                     const char *listen_address,
-                                     const int base_port,
-                                     gboolean filter_rewriter) {
-    MyArray *ret = my_array_new(g_free);
-    char *comp_pri_sock = g_build_filename(base_dir, "comp-pri-in0.sock", NULL);
-    char *comp_out_sock = g_build_filename(base_dir, "comp-out0.sock", NULL);
-    char *nbd_port = g_strdup_printf("%i", base_port);
-    char *migrate_port = g_strdup_printf("%i", base_port + 1);
-    char *mirror_port = g_strdup_printf("%i", base_port + 2);
-    char *compare_in_port = g_strdup_printf("%i", base_port + 3);
+static int formater_format_one(const Formater *this, MyArray *out, const char *str) {
+    int ret = 0;
+    char *comp_pri_sock = g_build_filename(this->base_dir, "comp-pri-in0.sock", NULL);
+    char *comp_out_sock = g_build_filename(this->base_dir, "comp-out0.sock", NULL);
+    char *nbd_port = g_strdup_printf("%i", this->base_port);
+    char *migrate_port = g_strdup_printf("%i", this->base_port + 1);
+    char *mirror_port = g_strdup_printf("%i", this->base_port + 2);
+    char *compare_in_port = g_strdup_printf("%i", this->base_port + 3);
 
-    for (int i = 0; i < entry->size; i++) {
-        const char *str = entry->array[i];
-        gboolean if_rewriter = !!strstr(str, "@@IF_REWRITER@@");
-        gboolean if_not_rewriter = !!strstr(str, "@@IF_NOT_REWRITER@@");
+    gboolean if_rewriter = !!strstr(str, "@@IF_REWRITER@@");
+    gboolean if_not_rewriter = !!strstr(str, "@@IF_NOT_REWRITER@@");
 
-        if (filter_rewriter) {
-            if (if_not_rewriter) {
-                continue;
-            }
-        } else {
-            if (if_rewriter) {
-                continue;
-            }
+    if (this->filter_rewriter) {
+        if (if_not_rewriter) {
+            goto out;
         }
-
-        GString *command = g_string_new(str);
-
-        g_string_replace(command, "@@IF_REWRITER@@", "", 0);
-        g_string_replace(command, "@@IF_NOT_REWRITER@@", "", 0);
-
-        g_string_replace(command, "@@ADDRESS@@", address, 0);
-        g_string_replace(command, "@@LISTEN_ADDRESS@@", listen_address, 0);
-        g_string_replace(command, "@@COMP_PRI_SOCK@@", comp_pri_sock, 0);
-        g_string_replace(command, "@@COMP_OUT_SOCK@@", comp_out_sock, 0);
-
-        g_string_replace(command, "@@NBD_PORT@@", nbd_port, 0);
-        g_string_replace(command, "@@MIGRATE_PORT@@", migrate_port, 0);
-        g_string_replace(command, "@@MIRROR_PORT@@", mirror_port, 0);
-        g_string_replace(command, "@@COMPARE_IN_PORT@@", compare_in_port, 0);
-
-        if (strstr(command->str, "@@")) {
-            g_string_free(command, TRUE);
-            my_array_unref(ret);
-            ret = NULL;
-            break;
+    } else {
+        if (if_rewriter) {
+            goto out;
         }
-
-        my_array_append(ret, g_string_free(command, FALSE));
     }
 
+    GString *command = g_string_new(str);
+
+    g_string_replace(command, "@@IF_REWRITER@@", "", 0);
+    g_string_replace(command, "@@IF_NOT_REWRITER@@", "", 0);
+
+    g_string_replace(command, "@@ADDRESS@@", this->address, 0);
+    g_string_replace(command, "@@LISTEN_ADDRESS@@", this->listen_address, 0);
+    g_string_replace(command, "@@COMP_PRI_SOCK@@", comp_pri_sock, 0);
+    g_string_replace(command, "@@COMP_OUT_SOCK@@", comp_out_sock, 0);
+
+    g_string_replace(command, "@@NBD_PORT@@", nbd_port, 0);
+    g_string_replace(command, "@@MIGRATE_PORT@@", migrate_port, 0);
+    g_string_replace(command, "@@MIRROR_PORT@@", mirror_port, 0);
+    g_string_replace(command, "@@COMPARE_IN_PORT@@", compare_in_port, 0);
+
+    if (strstr(command->str, "@@")) {
+        g_string_free(command, TRUE);
+        ret = -1;
+        goto out;
+    }
+
+    my_array_append(out, g_string_free(command, FALSE));
+
+out:
     g_free(comp_pri_sock);
     g_free(comp_out_sock);
     g_free(nbd_port);
     g_free(migrate_port);
     g_free(mirror_port);
     g_free(compare_in_port);
+
     return ret;
+}
+
+static MyArray *formater_format(const Formater *this, const MyArray *entry) {
+    MyArray *array = my_array_new(g_free);
+
+    for (int i = 0; i < entry->size; i++) {
+        int ret = formater_format_one(this, array, entry->array[i]);
+        if (ret < 0) {
+            my_array_unref(array);
+            return NULL;
+        }
+    }
+
+    return array;
 }
 
 static MyArray *qmp_commands_format(const QmpCommands *this,
                                     const MyArray *entry,
                                     const char *address) {
-    return _qmp_commands_format(entry, this->base_dir, address,
-                                this->listen_address, this->base_port,
-                                this->filter_rewriter);
+    Formater fmt = {
+        this->base_dir,
+        address,
+        this->listen_address,
+        this->base_port,
+        this->filter_rewriter,
+        TRUE
+    };
+
+    return formater_format(&fmt, entry);
 }
 
 MyArray *qmp_commands_get_prepare_secondary(QmpCommands *this) {
