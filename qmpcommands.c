@@ -19,6 +19,7 @@ struct QmpCommands {
     char *listen_address;
     int base_port;
     gboolean filter_rewriter;
+    JsonNode *colo_comp_prop;
 
     MyArray *prepare_secondary;
     MyArray *migration_start, *migration_switchover;
@@ -29,28 +30,76 @@ typedef struct Formater {
     const char *base_dir;
     const char *address;
     const char *listen_address;
-    const int base_port;
     gboolean filter_rewriter;
     gboolean newline;
+    JsonNode *comp_prop;
+    char *decl_comp_prop;
+
+    char *comp_pri_sock;
+    char *comp_out_sock;
+    char *nbd_port;
+    char *migrate_port;
+    char *mirror_port;
+    char *compare_in_port;
 } Formater;
 
-static MyArray *formater_format(const Formater *this, const MyArray *entry);
+static JsonNode *formater_set_prop(JsonNode *prop) {
+    if (!prop) {
+        return json_from_string("{}", NULL);
+    }
+
+    assert(JSON_NODE_HOLDS_OBJECT(prop));
+    return json_node_ref(prop);
+}
+
+static Formater *formater_new(const char *base_dir, const char *address,
+                              const char *listen_address, const int base_port,
+                              gboolean filter_rewriter, JsonNode *comp_prop) {
+    Formater *this = g_new0(Formater, 1);
+
+    this->base_dir = base_dir;
+    this->address = address;
+    this->listen_address = listen_address;
+    this->filter_rewriter = filter_rewriter;
+    this->newline = TRUE;
+    this->comp_prop = formater_set_prop(comp_prop);
+
+    this->comp_pri_sock = g_build_filename(this->base_dir, "comp-pri-in0.sock", NULL);
+    this->comp_out_sock = g_build_filename(this->base_dir, "comp-out0.sock", NULL);
+    this->nbd_port = g_strdup_printf("%i", base_port);
+    this->migrate_port = g_strdup_printf("%i", base_port + 1);
+    this->mirror_port = g_strdup_printf("%i", base_port + 2);
+    this->compare_in_port = g_strdup_printf("%i", base_port + 3);
+
+    return this;
+}
+
+static void formater_free(Formater *this) {
+    json_node_unref(this->comp_prop);
+    g_free(this->decl_comp_prop);
+
+    g_free(this->comp_pri_sock);
+    g_free(this->comp_out_sock);
+    g_free(this->nbd_port);
+    g_free(this->migrate_port);
+    g_free(this->mirror_port);
+    g_free(this->compare_in_port);
+
+    g_free(this);
+}
+
+static MyArray *formater_format(Formater *this, const MyArray *entry);
 
 static int qmp_commands_format_check(MyArray *new) {
-    Formater fmt = {
-        "",
-        "",
-        "",
-        9000,
-        FALSE,
-        TRUE
-    };
+    Formater *fmt = formater_new("", "", "", 9000, FALSE, NULL);
+    MyArray *formated = formater_format(fmt, new);
 
-    MyArray *formated = formater_format(&fmt, new);
     if (!formated) {
+        formater_free(fmt);
         return -1;
     }
     my_array_unref(formated);
+    formater_free(fmt);
 
     return 0;
 }
@@ -148,25 +197,123 @@ int qmp_commands_set_failover_secondary(QmpCommands *this, JsonNode *commands,
     return qmp_commands_set_json(&this->failover_secondary, commands, errp);
 }
 
-static int formater_format_one(const Formater *this, MyArray *out, const char *str) {
-    int ret = 0;
-    char *comp_pri_sock = g_build_filename(this->base_dir, "comp-pri-in0.sock", NULL);
-    char *comp_out_sock = g_build_filename(this->base_dir, "comp-out0.sock", NULL);
-    char *nbd_port = g_strdup_printf("%i", this->base_port);
-    char *migrate_port = g_strdup_printf("%i", this->base_port + 1);
-    char *mirror_port = g_strdup_printf("%i", this->base_port + 2);
-    char *compare_in_port = g_strdup_printf("%i", this->base_port + 3);
+static const char *decl_fmts[] = {
+    "@@DECL_COMP_PROP@@"
+};
 
+static const char *prop_fmts[] = {
+    "@@COMP_PROP@@"
+};
+
+static char **props(Formater *this, int i) {
+    char **props[] = {
+        &this->decl_comp_prop
+    };
+
+    return props[i];
+};
+
+static gboolean formater_is_decl(const char *str) {
+    for (int i = 0; i < (int) (sizeof(decl_fmts)/sizeof(decl_fmts[0])); i++) {
+        const char *decl = decl_fmts[i];
+        if (strstr(str, decl)) {
+            return TRUE;
+        }
+    }
+
+    return FALSE;
+}
+
+static void formater_update(JsonObject* object G_GNUC_UNUSED,
+                     const gchar* member_name,
+                     JsonNode* member_node, gpointer user_data) {
+    JsonObject *to = user_data;
+
+    json_object_set_member(to, member_name, json_node_ref(member_node));
+};
+
+static int formater_handle_decl(Formater *this, const char *_str) {
+    JsonNode *froms[] = {
+        this->comp_prop
+    };
+
+    for (int i = 0; i < (int) (sizeof(decl_fmts)/sizeof(decl_fmts[0])); i++) {
+        const char *decl_fmt = decl_fmts[i];
+        char **prop = props(this, i);
+        JsonObject *from = json_node_get_object(froms[i]);
+
+        if (!strstr(_str, decl_fmt)) {
+            continue;
+        }
+
+        if (*prop) {
+            return -1;
+        }
+
+        GString *str = g_string_new(_str);
+
+        g_string_replace(str, decl_fmt, "", 0);
+
+        if (strstr(str->str, "@@")) {
+            g_string_free(str, TRUE);
+            return -1;
+        }
+
+        JsonNode *json = json_from_string(str->str, NULL);
+        if (!json) {
+            g_string_free(str, TRUE);
+            return -1;
+        }
+
+        if (!JSON_NODE_HOLDS_OBJECT(json)) {
+            json_node_unref(json);
+            g_string_free(str, TRUE);
+            return -1;
+        }
+
+        JsonObject *to = json_node_get_object(json);
+        json_object_foreach_member(from, formater_update, to);
+
+        *prop = json_to_string(json, FALSE);
+        json_node_unref(json);
+
+        g_string_free(str, TRUE);
+        break;
+    }
+
+    return 0;
+}
+
+static int formater_replace_props(Formater *this, GString *command) {
+    for (int i = 0; i < (int) (sizeof(prop_fmts)/sizeof(prop_fmts[0])); i++) {
+           const char *prop_fmt = prop_fmts[i];
+           char **prop = props(this, i);
+
+           guint num = g_string_replace(command, prop_fmt,
+                                        (*prop ? *prop: "{}"), 0);
+           if (num && !*prop) {
+               return -1;
+           }
+    }
+
+    return 0;
+}
+
+static int formater_format_one(Formater *this, MyArray *out, const char *str) {
     gboolean if_rewriter = !!strstr(str, "@@IF_REWRITER@@");
     gboolean if_not_rewriter = !!strstr(str, "@@IF_NOT_REWRITER@@");
 
+    if (formater_is_decl(str)) {
+        return formater_handle_decl(this, str);
+    }
+
     if (this->filter_rewriter) {
         if (if_not_rewriter) {
-            goto out;
+            return 0;
         }
     } else {
         if (if_rewriter) {
-            goto out;
+            return 0;
         }
     }
 
@@ -177,34 +324,31 @@ static int formater_format_one(const Formater *this, MyArray *out, const char *s
 
     g_string_replace(command, "@@ADDRESS@@", this->address, 0);
     g_string_replace(command, "@@LISTEN_ADDRESS@@", this->listen_address, 0);
-    g_string_replace(command, "@@COMP_PRI_SOCK@@", comp_pri_sock, 0);
-    g_string_replace(command, "@@COMP_OUT_SOCK@@", comp_out_sock, 0);
+    g_string_replace(command, "@@COMP_PRI_SOCK@@", this->comp_pri_sock, 0);
+    g_string_replace(command, "@@COMP_OUT_SOCK@@", this->comp_out_sock, 0);
 
-    g_string_replace(command, "@@NBD_PORT@@", nbd_port, 0);
-    g_string_replace(command, "@@MIGRATE_PORT@@", migrate_port, 0);
-    g_string_replace(command, "@@MIRROR_PORT@@", mirror_port, 0);
-    g_string_replace(command, "@@COMPARE_IN_PORT@@", compare_in_port, 0);
+    g_string_replace(command, "@@NBD_PORT@@", this->nbd_port, 0);
+    g_string_replace(command, "@@MIGRATE_PORT@@", this->migrate_port, 0);
+    g_string_replace(command, "@@MIRROR_PORT@@", this->mirror_port, 0);
+    g_string_replace(command, "@@COMPARE_IN_PORT@@", this->compare_in_port, 0);
+
+    int ret = formater_replace_props(this, command);
+    if (ret < 0) {
+        g_string_free(command, TRUE);
+        return -1;
+    }
 
     if (strstr(command->str, "@@")) {
         g_string_free(command, TRUE);
-        ret = -1;
-        goto out;
+        return -1;
     }
 
     my_array_append(out, g_string_free(command, FALSE));
 
-out:
-    g_free(comp_pri_sock);
-    g_free(comp_out_sock);
-    g_free(nbd_port);
-    g_free(migrate_port);
-    g_free(mirror_port);
-    g_free(compare_in_port);
-
-    return ret;
+    return 0;
 }
 
-static MyArray *formater_format(const Formater *this, const MyArray *entry) {
+static MyArray *formater_format(Formater *this, const MyArray *entry) {
     MyArray *array = my_array_new(g_free);
 
     for (int i = 0; i < entry->size; i++) {
@@ -221,16 +365,18 @@ static MyArray *formater_format(const Formater *this, const MyArray *entry) {
 static MyArray *qmp_commands_format(const QmpCommands *this,
                                     const MyArray *entry,
                                     const char *address) {
-    Formater fmt = {
+    Formater *fmt = formater_new(
         this->base_dir,
         address,
         this->listen_address,
         this->base_port,
         this->filter_rewriter,
-        TRUE
-    };
+        this->colo_comp_prop);
 
-    return formater_format(&fmt, entry);
+    MyArray *ret = formater_format(fmt, entry);
+
+    formater_free(fmt);
+    return ret;
 }
 
 MyArray *qmp_commands_get_prepare_secondary(QmpCommands *this) {
@@ -254,14 +400,31 @@ MyArray *qmp_commands_get_failover_secondary(QmpCommands *this) {
     return qmp_commands_format(this, this->failover_secondary, "");
 }
 
+static JsonNode *qmp_commands_set_prop(JsonNode *prop) {
+    if (!prop) {
+        return NULL;
+    }
+
+    assert(JSON_NODE_HOLDS_OBJECT(prop));
+    return json_node_ref(prop);
+}
+
+static void qmp_commands_prop_unref(JsonNode *prop) {
+    if (prop) {
+        json_node_unref(prop);
+    }
+}
+
 QmpCommands *qmp_commands_new(const char *base_dir, const char *listen_address,
-                              int base_port, gboolean filter_rewriter) {
+                              int base_port, gboolean filter_rewriter,
+                              JsonNode *colo_comp_prop) {
     QmpCommands *this = g_new0(QmpCommands, 1);
 
     this->base_dir = g_strdup(base_dir);
     this->listen_address = g_strdup(listen_address);
     this->base_port = base_port;
     this->filter_rewriter = filter_rewriter;
+    this->colo_comp_prop = qmp_commands_set_prop(colo_comp_prop);
 
     this->prepare_secondary = qmp_commands_static(0,
         "{'execute': 'migrate-set-capabilities', 'arguments': {'capabilities': [{'capability': 'x-colo', 'state': True}]}}",
@@ -286,7 +449,8 @@ QmpCommands *qmp_commands_new(const char *base_dir, const char *listen_address,
         "@@IF_NOT_REWRITER@@ {'execute': 'object-add', 'arguments': {'qom-type': 'filter-redirector', 'id': 'comp_out0', 'netdev': 'hn0', 'queue': 'rx', 'indev': 'comp_out0..'}}",
         "@@IF_NOT_REWRITER@@ {'execute': 'object-add', 'arguments': {'qom-type': 'filter-redirector', 'id': 'comp_pri_in0', 'status': 'off', 'netdev': 'hn0', 'queue': 'rx', 'outdev': 'comp_pri_in0..'}}",
         "{'execute': 'object-add', 'arguments': {'qom-type': 'iothread', 'id': 'iothread1'}}",
-        "{'execute': 'object-add', 'arguments': {'qom-type': 'colo-compare', 'id': 'comp0', 'primary_in': 'comp_pri_in0', 'secondary_in': 'comp_sec_in0', 'outdev': 'comp_out0', 'iothread': 'iothread1'}}",
+        "@@DECL_COMP_PROP@@ {'qom-type': 'colo-compare', 'id': 'comp0', 'primary_in': 'comp_pri_in0', 'secondary_in': 'comp_sec_in0', 'outdev': 'comp_out0', 'iothread': 'iothread1'}",
+        "{'execute': 'object-add', 'arguments': @@COMP_PROP@@}",
         "{'execute': 'migrate', 'arguments': {'uri': 'tcp:@@ADDRESS@@:@@MIGRATE_PORT@@'}}",
         NULL);
     assert(this->migration_start);
@@ -336,6 +500,7 @@ QmpCommands *qmp_commands_new(const char *base_dir, const char *listen_address,
 void qmp_commands_free(QmpCommands *this) {
     g_free(this->base_dir);
     g_free(this->listen_address);
+    qmp_commands_prop_unref(this->colo_comp_prop);
 
     my_array_unref(this->prepare_secondary);
     my_array_unref(this->migration_start);

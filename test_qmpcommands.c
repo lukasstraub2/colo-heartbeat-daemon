@@ -16,7 +16,7 @@
 static void test_a() {
     int ret;
     GError *local_errp = NULL;
-    QmpCommands *commands = qmp_commands_new("/tmp", "0.0.0.0", 9000, FALSE);
+    QmpCommands *commands = qmp_commands_new("/tmp", "0.0.0.0", 9000, FALSE, NULL);
 
     JsonNode *json = json_from_string("\"lol\"", NULL);
     assert(json);
@@ -48,9 +48,12 @@ static void test_a() {
 
 static void test_b() {
     int ret;
-    QmpCommands *commands = qmp_commands_new("/tmp", "0.0.0.0", 9000, FALSE);
+    QmpCommands *commands = qmp_commands_new("/tmp", "0.0.0.0", 9000, FALSE, NULL);
 
-    JsonNode *json = json_from_string("['some @@ADDRESS@@', 'and :@@NBD_PORT@@: then', '@@LISTEN_ADDRESS@@', 'and @@COMP_PRI_SOCK@@']", NULL);
+    JsonNode *json = json_from_string("['some @@ADDRESS@@', "
+                                      "'and :@@NBD_PORT@@: then', "
+                                      "'@@LISTEN_ADDRESS@@', "
+                                      "'and @@COMP_PRI_SOCK@@']", NULL);
     assert(json);
 
     ret = qmp_commands_set_migration_start(commands, json, NULL);
@@ -78,8 +81,9 @@ static void test_b() {
 
 static void test_c(gboolean filter_rewriter) {
     int ret;
-    QmpCommands *commands = qmp_commands_new("/tmp", "0.0.0.0", 9000, filter_rewriter);
-    JsonNode *json = json_from_string("['@@IF_REWRITER@@ rewriter', '@@IF_NOT_REWRITER@@ no rewriter']", NULL);
+    QmpCommands *commands = qmp_commands_new("/tmp", "0.0.0.0", 9000, filter_rewriter, NULL);
+    JsonNode *json = json_from_string("['@@IF_REWRITER@@ rewriter', "
+                                      "'@@IF_NOT_REWRITER@@ no rewriter']", NULL);
     assert(json);
 
     ret = qmp_commands_set_migration_switchover(commands, json, NULL);
@@ -101,7 +105,7 @@ static void test_c(gboolean filter_rewriter) {
 static void test_d() {
     int ret;
     GError *local_errp = NULL;
-    QmpCommands *commands = qmp_commands_new("/tmp", "0.0.0.0", 9000, FALSE);
+    QmpCommands *commands = qmp_commands_new("/tmp", "0.0.0.0", 9000, FALSE, NULL);
 
     JsonNode *json = json_from_string("['@@COMP_OUT_SOCK@@ @@unknown@@']", NULL);
     assert(json);
@@ -115,12 +119,62 @@ static void test_d() {
     qmp_commands_free(commands);
 }
 
+static void test_e() {
+    int ret;
+    GError *local_errp = NULL;
+    QmpCommands *commands = qmp_commands_new("/tmp", "0.0.0.0", 9000, FALSE, NULL);
+
+    JsonNode *json = json_from_string("['@@COMP_PROP@@']", NULL);
+    assert(json);
+    ret = qmp_commands_set_migration_start(commands, json, &local_errp);
+    assert(ret < 0);
+    assert(local_errp);
+    g_error_free(local_errp);
+    local_errp = NULL;
+    json_node_unref(json);
+
+    json = json_from_string("['@@DECL_COMP_PROP@@ lol']", NULL);
+    assert(json);
+    ret = qmp_commands_set_migration_start(commands, json, &local_errp);
+    assert(ret < 0);
+    assert(local_errp);
+    g_error_free(local_errp);
+    local_errp = NULL;
+    json_node_unref(json);
+
+    qmp_commands_free(commands);
+}
+
+static void test_f() {
+    int ret;
+    JsonNode *colo_comp_prop = json_from_string("{\"colo_comp_prop\":\"lol\"}", NULL);
+    assert(colo_comp_prop);
+    QmpCommands *commands = qmp_commands_new("/tmp", "0.0.0.0", 9000, FALSE, colo_comp_prop);
+    json_node_unref(colo_comp_prop);
+
+    JsonNode *json = json_from_string("['@@DECL_COMP_PROP@@ {\"test\": \"test\"}', "
+                                      "'@@COMP_PROP@@']", NULL);
+    assert(json);
+    ret = qmp_commands_set_migration_start(commands, json, NULL);
+    assert(ret == 0);
+
+    MyArray *array = qmp_commands_get_migration_start(commands, "address");
+    assert(array->size == 1);
+    assert(!strcmp(array->array[0], "{\"test\":\"test\",\"colo_comp_prop\":\"lol\"}\n"));
+    my_array_unref(array);
+
+    json_node_unref(json);
+    qmp_commands_free(commands);
+}
+
 int main(G_GNUC_UNUSED int argc, G_GNUC_UNUSED char **argv) {
     test_a();
     test_b();
     test_c(TRUE);
     test_c(FALSE);
     test_d();
+    test_e();
+    test_f();
 
     return 0;
 }

@@ -28,7 +28,9 @@ MyArray *qmp_commands_get_migration_switchover(QmpCommands *this);
 MyArray *qmp_commands_get_failover_primary(QmpCommands *this);
 MyArray *qmp_commands_get_failover_secondary(QmpCommands *this);
 
-QmpCommands *qmp_commands_new(const char *base_dir, const char *listen_address, int base_port, gboolean filter_rewriter);
+QmpCommands *qmp_commands_new(const char *base_dir, const char *listen_address,
+                              int base_port, gboolean filter_rewriter,
+                              JsonNode *colo_comp_prop);
 void qmp_commands_free(QmpCommands *this);
 
 #endif // QMPCOMMANDS_H
