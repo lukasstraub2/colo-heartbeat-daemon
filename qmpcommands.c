@@ -19,7 +19,11 @@ struct QmpCommands {
     char *listen_address;
     int base_port;
     gboolean filter_rewriter;
-    JsonNode *colo_comp_prop;
+    JsonNode *comp_prop;
+    JsonNode *mig_cap;
+    JsonNode *mig_prop;
+    JsonNode *throttle_prop;
+    JsonNode *blk_mirror_prop;
 
     MyArray *prepare_secondary;
     MyArray *migration_start, *migration_switchover;
@@ -33,7 +37,15 @@ typedef struct Formater {
     gboolean filter_rewriter;
     gboolean newline;
     JsonNode *comp_prop;
+    JsonNode *mig_prop;
+    JsonNode *throttle_prop;
+    JsonNode *blk_mirror_prop;
+
     char *decl_comp_prop;
+    char *decl_mig_cap;
+    char *decl_mig_prop;
+    char *decl_throttle_prop;
+    char *decl_blk_mirror_prop;
 
     char *comp_pri_sock;
     char *comp_out_sock;
@@ -54,7 +66,10 @@ static JsonNode *formater_set_prop(JsonNode *prop) {
 
 static Formater *formater_new(const char *base_dir, const char *address,
                               const char *listen_address, const int base_port,
-                              gboolean filter_rewriter, JsonNode *comp_prop) {
+                              gboolean filter_rewriter,
+                              JsonNode *comp_prop,
+                              JsonNode *mig_cap, JsonNode *mig_prop,
+                              JsonNode *throttle_prop, JsonNode *blk_mirror_prop) {
     Formater *this = g_new0(Formater, 1);
 
     this->base_dir = base_dir;
@@ -63,6 +78,14 @@ static Formater *formater_new(const char *base_dir, const char *address,
     this->filter_rewriter = filter_rewriter;
     this->newline = TRUE;
     this->comp_prop = formater_set_prop(comp_prop);
+    if (mig_cap) {
+        this->decl_mig_cap = json_to_string(mig_cap, FALSE);
+    } else {
+        this->decl_mig_cap = g_strdup("[]");
+    }
+    this->mig_prop = formater_set_prop(mig_prop);
+    this->throttle_prop = formater_set_prop(throttle_prop);
+    this->blk_mirror_prop = formater_set_prop(blk_mirror_prop);
 
     this->comp_pri_sock = g_build_filename(this->base_dir, "comp-pri-in0.sock", NULL);
     this->comp_out_sock = g_build_filename(this->base_dir, "comp-out0.sock", NULL);
@@ -76,7 +99,15 @@ static Formater *formater_new(const char *base_dir, const char *address,
 
 static void formater_free(Formater *this) {
     json_node_unref(this->comp_prop);
+    json_node_unref(this->mig_prop);
+    json_node_unref(this->throttle_prop);
+    json_node_unref(this->blk_mirror_prop);
+
     g_free(this->decl_comp_prop);
+    g_free(this->decl_mig_cap);
+    g_free(this->decl_mig_prop);
+    g_free(this->decl_throttle_prop);
+    g_free(this->decl_blk_mirror_prop);
 
     g_free(this->comp_pri_sock);
     g_free(this->comp_out_sock);
@@ -91,7 +122,8 @@ static void formater_free(Formater *this) {
 static MyArray *formater_format(Formater *this, const MyArray *entry);
 
 static int qmp_commands_format_check(MyArray *new) {
-    Formater *fmt = formater_new("", "", "", 9000, FALSE, NULL);
+    Formater *fmt = formater_new("", "", "", 9000, FALSE, NULL, NULL,
+                                 NULL, NULL, NULL);
     MyArray *formated = formater_format(fmt, new);
 
     if (!formated) {
@@ -198,16 +230,25 @@ int qmp_commands_set_failover_secondary(QmpCommands *this, JsonNode *commands,
 }
 
 static const char *decl_fmts[] = {
-    "@@DECL_COMP_PROP@@"
+    "@@DECL_COMP_PROP@@",
+    "@@DECL_MIG_PROP@@",
+    "@@DECL_THROTTLE_PROP@@",
+    "@@DECL_BLK_MIRROR_PROP@@"
 };
 
 static const char *prop_fmts[] = {
-    "@@COMP_PROP@@"
+    "@@COMP_PROP@@",
+    "@@MIG_PROP@@",
+    "@@THROTTLE_PROP@@",
+    "@@BLK_MIRROR_PROP@@"
 };
 
 static char **props(Formater *this, int i) {
     char **props[] = {
-        &this->decl_comp_prop
+        &this->decl_comp_prop,
+        &this->decl_mig_prop,
+        &this->decl_throttle_prop,
+        &this->decl_blk_mirror_prop
     };
 
     return props[i];
@@ -216,6 +257,7 @@ static char **props(Formater *this, int i) {
 static gboolean formater_is_decl(const char *str) {
     for (int i = 0; i < (int) (sizeof(decl_fmts)/sizeof(decl_fmts[0])); i++) {
         const char *decl = decl_fmts[i];
+
         if (strstr(str, decl)) {
             return TRUE;
         }
@@ -234,7 +276,10 @@ static void formater_update(JsonObject* object G_GNUC_UNUSED,
 
 static int formater_handle_decl(Formater *this, const char *_str) {
     JsonNode *froms[] = {
-        this->comp_prop
+        this->comp_prop,
+        this->mig_prop,
+        this->throttle_prop,
+        this->blk_mirror_prop
     };
 
     for (int i = 0; i < (int) (sizeof(decl_fmts)/sizeof(decl_fmts[0])); i++) {
@@ -332,6 +377,8 @@ static int formater_format_one(Formater *this, MyArray *out, const char *str) {
     g_string_replace(command, "@@MIRROR_PORT@@", this->mirror_port, 0);
     g_string_replace(command, "@@COMPARE_IN_PORT@@", this->compare_in_port, 0);
 
+    g_string_replace(command, "@@MIG_CAP@@", this->decl_mig_cap, 0);
+
     int ret = formater_replace_props(this, command);
     if (ret < 0) {
         g_string_free(command, TRUE);
@@ -366,12 +413,16 @@ static MyArray *qmp_commands_format(const QmpCommands *this,
                                     const MyArray *entry,
                                     const char *address) {
     Formater *fmt = formater_new(
-        this->base_dir,
-        address,
-        this->listen_address,
-        this->base_port,
-        this->filter_rewriter,
-        this->colo_comp_prop);
+                this->base_dir,
+                address,
+                this->listen_address,
+                this->base_port,
+                this->filter_rewriter,
+                this->comp_prop,
+                this->mig_cap,
+                this->mig_prop,
+                this->throttle_prop,
+                this->blk_mirror_prop);
 
     MyArray *ret = formater_format(fmt, entry);
 
@@ -409,25 +460,63 @@ static JsonNode *qmp_commands_set_prop(JsonNode *prop) {
     return json_node_ref(prop);
 }
 
-static void qmp_commands_prop_unref(JsonNode *prop) {
+static JsonNode *qmp_commands_set_array(JsonNode *prop) {
+    if (!prop) {
+        return NULL;
+    }
+
+    assert(JSON_NODE_HOLDS_ARRAY(prop));
+    return json_node_ref(prop);
+}
+
+static void qmp_commands_node_unref(JsonNode *prop) {
     if (prop) {
         json_node_unref(prop);
     }
 }
 
+void qmp_commands_set_filter_rewriter(QmpCommands *this, gboolean filter_rewriter) {
+    this->filter_rewriter = filter_rewriter;
+}
+
+void qmp_commands_set_comp_prop(QmpCommands *this, JsonNode *prop) {
+    qmp_commands_node_unref(this->comp_prop);
+    this->comp_prop = qmp_commands_set_prop(prop);
+}
+
+void qmp_commands_set_mig_cap(QmpCommands *this, JsonNode *prop) {
+    qmp_commands_node_unref(this->mig_cap);
+    this->mig_cap = qmp_commands_set_array(prop);
+}
+
+void qmp_commands_set_mig_prop(QmpCommands *this, JsonNode *prop) {
+    qmp_commands_node_unref(this->mig_prop);
+    this->mig_prop = qmp_commands_set_prop(prop);
+}
+
+void qmp_commands_set_throttle_prop(QmpCommands *this, JsonNode *prop) {
+    qmp_commands_node_unref(this->throttle_prop);
+    this->throttle_prop = qmp_commands_set_prop(prop);
+}
+
+void qmp_commands_set_blk_mirror_prop(QmpCommands *this, JsonNode *prop) {
+    qmp_commands_node_unref(this->blk_mirror_prop);
+    this->blk_mirror_prop = qmp_commands_set_prop(prop);
+}
+
 QmpCommands *qmp_commands_new(const char *base_dir, const char *listen_address,
-                              int base_port, gboolean filter_rewriter,
-                              JsonNode *colo_comp_prop) {
+                              int base_port) {
     QmpCommands *this = g_new0(QmpCommands, 1);
 
     this->base_dir = g_strdup(base_dir);
     this->listen_address = g_strdup(listen_address);
     this->base_port = base_port;
-    this->filter_rewriter = filter_rewriter;
-    this->colo_comp_prop = qmp_commands_set_prop(colo_comp_prop);
 
     this->prepare_secondary = qmp_commands_static(0,
         "{'execute': 'migrate-set-capabilities', 'arguments': {'capabilities': [{'capability': 'x-colo', 'state': True}]}}",
+        "{'execute': 'migrate-set-capabilities', 'arguments': {'capabilities': @@MIG_CAP@@}}",
+        "@@DECL_MIG_PROP@@ {}",
+        "{'execute': 'migrate-set-parameters', 'arguments': @@MIG_PROP@@}",
         "{'execute': 'nbd-server-start', 'arguments': {'addr': {'type': 'inet', 'data': {'host': '@@LISTEN_ADDRESS@@', 'port': '@@NBD_PORT@@'}}}}",
         "{'execute': 'nbd-server-add', 'arguments': {'device': 'parent0', 'writable': True}}",
         "{'execute': 'migrate-incoming', 'arguments': {'uri': 'tcp:@@LISTEN_ADDRESS@@:@@MIGRATE_PORT@@'}}",
@@ -500,7 +589,11 @@ QmpCommands *qmp_commands_new(const char *base_dir, const char *listen_address,
 void qmp_commands_free(QmpCommands *this) {
     g_free(this->base_dir);
     g_free(this->listen_address);
-    qmp_commands_prop_unref(this->colo_comp_prop);
+    qmp_commands_node_unref(this->comp_prop);
+    qmp_commands_node_unref(this->mig_cap);
+    qmp_commands_node_unref(this->mig_prop);
+    qmp_commands_node_unref(this->throttle_prop);
+    qmp_commands_node_unref(this->blk_mirror_prop);
 
     my_array_unref(this->prepare_secondary);
     my_array_unref(this->migration_start);

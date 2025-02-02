@@ -28,9 +28,15 @@ MyArray *qmp_commands_get_migration_switchover(QmpCommands *this);
 MyArray *qmp_commands_get_failover_primary(QmpCommands *this);
 MyArray *qmp_commands_get_failover_secondary(QmpCommands *this);
 
+void qmp_commands_set_filter_rewriter(QmpCommands *this, gboolean filter_rewriter);
+void qmp_commands_set_comp_prop(QmpCommands *this, JsonNode *prop);
+void qmp_commands_set_mig_cap(QmpCommands *this, JsonNode *prop);
+void qmp_commands_set_mig_prop(QmpCommands *this, JsonNode *prop);
+void qmp_commands_set_throttle_prop(QmpCommands *this, JsonNode *prop);
+void qmp_commands_set_blk_mirror_prop(QmpCommands *this, JsonNode *prop);
+
 QmpCommands *qmp_commands_new(const char *base_dir, const char *listen_address,
-                              int base_port, gboolean filter_rewriter,
-                              JsonNode *colo_comp_prop);
+                              int base_port);
 void qmp_commands_free(QmpCommands *this);
 
 #endif // QMPCOMMANDS_H
