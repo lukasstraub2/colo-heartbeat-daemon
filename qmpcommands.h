@@ -23,6 +23,7 @@ int qmp_commands_set_migration_switchover(QmpCommands *this, JsonNode *commands,
 int qmp_commands_set_failover_primary(QmpCommands *this, JsonNode *commands, GError **errp);
 int qmp_commands_set_failover_secondary(QmpCommands *this, JsonNode *commands, GError **errp);
 
+MyArray *qmp_commands_adhoc(QmpCommands *this, ...);
 MyArray *qmp_commands_get_prepare_primary(QmpCommands *this);
 MyArray *qmp_commands_get_prepare_secondary(QmpCommands *this);
 MyArray *qmp_commands_get_migration_start(QmpCommands *this, const char *address);

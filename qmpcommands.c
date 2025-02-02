@@ -165,6 +165,26 @@ static MyArray *qmp_commands_format(const QmpCommands *this,
     return ret;
 }
 
+MyArray *qmp_commands_adhoc(QmpCommands *this, ...) {
+    va_list args;
+    MyArray *array = my_array_new(g_free);
+
+    va_start(args, this);
+    while (TRUE) {
+        const char *str = va_arg(args, const char *);
+        if (!str) {
+            break;
+        }
+
+        my_array_append(array, g_strdup_printf("%s\n", str));
+    }
+    va_end(args);
+
+    MyArray *ret = qmp_commands_format(this, array, "");
+    my_array_unref(array);
+    return ret;
+}
+
 MyArray *qmp_commands_get_prepare_primary(QmpCommands *this) {
     return qmp_commands_format(this, this->prepare_primary, "");
 }

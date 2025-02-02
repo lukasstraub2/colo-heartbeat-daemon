@@ -191,6 +191,24 @@ static void test_g() {
     qmp_commands_free(commands);
 }
 
+static void test_h() {
+    JsonNode *blk_mirror_prop = json_from_string("{\"blk_prop\":\"lol\"}", NULL);
+    assert(blk_mirror_prop);
+    QmpCommands *commands = qmp_commands_new("/tmp", "0.0.0.0", 9000);
+    qmp_commands_set_blk_mirror_prop(commands, blk_mirror_prop);
+    json_node_unref(blk_mirror_prop);
+
+    MyArray *array = qmp_commands_adhoc(commands,
+        "@@DECL_BLK_MIRROR_PROP@@ {\"test\": \"test\"}",
+        "{'execute': 'blockdev-mirror', 'arguments': @@BLK_MIRROR_PROP@@}",
+        NULL);
+    assert(array->size == 1);
+    assert(!strcmp(array->array[0], "{'execute': 'blockdev-mirror', 'arguments': {\"test\":\"test\",\"blk_prop\":\"lol\"}}\n"));
+    my_array_unref(array);
+
+    qmp_commands_free(commands);
+}
+
 int main(G_GNUC_UNUSED int argc, G_GNUC_UNUSED char **argv) {
     test_a();
     test_b();
@@ -200,6 +218,7 @@ int main(G_GNUC_UNUSED int argc, G_GNUC_UNUSED char **argv) {
     test_e();
     test_f();
     test_g();
+    test_h();
 
     return 0;
 }
