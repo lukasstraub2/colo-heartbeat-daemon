@@ -3,5 +3,6 @@ QemuLauncher -> stubable
 - Optionals
 - Keep MainCo as a function
   -> returns FAILED, REBOOT, SHUTDOWN, DEMOTED
+- put resync in it's own file -> reusable for HA
 - Command Event
 - qmp templates as singleton with custom printf format
