@@ -26,7 +26,7 @@ struct QmpCommands {
     JsonNode *throttle_prop;
     JsonNode *blk_mirror_prop;
 
-    MyArray *prepare_secondary;
+    MyArray *prepare_primary, *prepare_secondary;
     MyArray *migration_start, *migration_switchover;
     MyArray *failover_primary, *failover_secondary;
 };
@@ -114,6 +114,11 @@ static MyArray *qmp_commands_static(int dummy, ...) {
     return array;
 }
 
+int qmp_commands_set_prepare_primary(QmpCommands *this, JsonNode *commands,
+                                     GError **errp) {
+    return qmp_commands_set_json(&this->prepare_primary, commands, errp);
+}
+
 int qmp_commands_set_prepare_secondary(QmpCommands *this, JsonNode *commands,
                                        GError **errp) {
     return qmp_commands_set_json(&this->prepare_secondary, commands, errp);
@@ -158,6 +163,10 @@ static MyArray *qmp_commands_format(const QmpCommands *this,
 
     formater_free(fmt);
     return ret;
+}
+
+MyArray *qmp_commands_get_prepare_primary(QmpCommands *this) {
+    return qmp_commands_format(this, this->prepare_primary, "");
 }
 
 MyArray *qmp_commands_get_prepare_secondary(QmpCommands *this) {
@@ -242,7 +251,14 @@ QmpCommands *qmp_commands_new(const char *base_dir, const char *listen_address,
     this->listen_address = g_strdup(listen_address);
     this->base_port = base_port;
 
+    this->prepare_primary = qmp_commands_static(0,
+        "@@DECL_THROTTLE_PROP@@ {}",
+        "{'execute': 'qom-set', 'arguments': {'path': '/objects/throttle0', 'property': 'limits', 'value': @@THROTTLE_PROP@@}}",
+        NULL);
+
     this->prepare_secondary = qmp_commands_static(0,
+        "@@DECL_THROTTLE_PROP@@ {}",
+        "{'execute': 'qom-set', 'arguments': {'path': '/objects/throttle0', 'property': 'limits', 'value': @@THROTTLE_PROP@@}}",
         "{'execute': 'migrate-set-capabilities', 'arguments': {'capabilities': [{'capability': 'x-colo', 'state': True}]}}",
         "{'execute': 'migrate-set-capabilities', 'arguments': {'capabilities': @@MIG_CAP@@}}",
         "@@DECL_MIG_PROP@@ {}",
@@ -251,7 +267,6 @@ QmpCommands *qmp_commands_new(const char *base_dir, const char *listen_address,
         "{'execute': 'nbd-server-add', 'arguments': {'device': 'parent0', 'writable': True}}",
         "{'execute': 'migrate-incoming', 'arguments': {'uri': 'tcp:@@LISTEN_ADDRESS@@:@@MIGRATE_PORT@@'}}",
         NULL);
-    assert(this->prepare_secondary);
 
     this->migration_start = qmp_commands_static(0,
         "{'execute': 'migrate-set-capabilities', 'arguments': {'capabilities': [{'capability': 'x-colo', 'state': True}]}}",
@@ -272,13 +287,11 @@ QmpCommands *qmp_commands_new(const char *base_dir, const char *listen_address,
         "{'execute': 'object-add', 'arguments': @@COMP_PROP@@}",
         "{'execute': 'migrate', 'arguments': {'uri': 'tcp:@@ADDRESS@@:@@MIGRATE_PORT@@'}}",
         NULL);
-    assert(this->migration_start);
 
     this->migration_switchover = qmp_commands_static(0,
         "{'execute': 'qom-set', 'arguments': {'path': '/objects/mirror0', 'property': 'status', 'value': 'on'}}"
         "{'execute': 'qom-set', 'arguments': {'path': '/objects/comp_pri_in0', 'property': 'status', 'value': 'on'}}",
         NULL);
-    assert(this->migration_switchover);
 
     this->failover_primary = qmp_commands_static(0,
         "{'execute': 'qom-set', 'arguments': {'path': '/objects/mirror0', 'property': 'status', 'value': 'off'}}",
@@ -298,7 +311,6 @@ QmpCommands *qmp_commands_new(const char *base_dir, const char *listen_address,
         "{'execute': 'chardev-remove', 'arguments': {'id': 'comp_out0..'}}",
         "{'execute': 'chardev-remove', 'arguments': {'id': 'comp_out0'}}",
         NULL);
-    assert(this->failover_primary);
 
     this->failover_secondary = qmp_commands_static(0,
         "{'execute': 'qom-set', 'arguments': {'path': '/objects/drop0', 'property': 'status', 'value': 'off'}}",
@@ -311,7 +323,6 @@ QmpCommands *qmp_commands_new(const char *base_dir, const char *listen_address,
         "{'execute': 'chardev-remove', 'arguments': {'id': 'mirror0'}}",
         "{'execute': 'chardev-remove', 'arguments': {'id': 'comp_sec_in0'}}",
         NULL);
-    assert(this->failover_secondary);
 
     return this;
 }
@@ -325,6 +336,7 @@ void qmp_commands_free(QmpCommands *this) {
     qmp_commands_node_unref(this->throttle_prop);
     qmp_commands_node_unref(this->blk_mirror_prop);
 
+    my_array_unref(this->prepare_primary);
     my_array_unref(this->prepare_secondary);
     my_array_unref(this->migration_start);
     my_array_unref(this->migration_switchover);
