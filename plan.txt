@@ -1,8 +1,27 @@
+daemon loop:
+- set up mngmt, cpg and qmpcommands
+- starts qemu with QemuLauncher -> qmp
+- starts resync with ResyncManager
+- sets up mainco
+- calls mainco
+- saves state
+- deletes mainco
+- loop
+
 QemuLauncher -> stubable
 - returns qmp
+- qemu dead callback
 - Optionals
 - Keep MainCo as a function
   -> returns FAILED, REBOOT, SHUTDOWN, DEMOTED
+  - put watchdog in mainco
 - put resync in it's own file -> reusable for HA
 - Command Event
-- qmp templates as singleton with custom printf format
+- mngmt and cpg:
+  - event-triggering calls into mainco use one callback
+  - non-event calls go direct
+  - all calls go to daemon loop, forwards either to itself or ignores if inside mainco or if inside resync
+    - co_recurse() can set flag while looping in function
+  - daemon loop, mainco and resync manager register themselves for callbacks
+  - make everything into callback for decoupling
+- qmp templates as singleton with custom printf format X
