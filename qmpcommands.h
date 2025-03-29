@@ -23,6 +23,8 @@ int qmp_commands_set_migration_switchover(QmpCommands *this, JsonNode *commands,
 int qmp_commands_set_failover_primary(QmpCommands *this, JsonNode *commands, GError **errp);
 int qmp_commands_set_failover_secondary(QmpCommands *this, JsonNode *commands, GError **errp);
 
+MyArray *qmp_commands_cmdline(QmpCommands *this, const char *address,
+                              const char *disk_size, ...);
 MyArray *qmp_commands_adhoc(QmpCommands *this, ...);
 MyArray *qmp_commands_get_prepare_primary(QmpCommands *this);
 MyArray *qmp_commands_get_prepare_secondary(QmpCommands *this);
@@ -38,7 +40,11 @@ void qmp_commands_set_mig_prop(QmpCommands *this, JsonNode *prop);
 void qmp_commands_set_throttle_prop(QmpCommands *this, JsonNode *prop);
 void qmp_commands_set_blk_mirror_prop(QmpCommands *this, JsonNode *prop);
 
-QmpCommands *qmp_commands_new(const char *base_dir, const char *listen_address,
+QmpCommands *qmp_commands_new(const char *instance_name, const char *base_dir,
+                              const char *active_hidden_dir,
+                              const char *listen_address,
+                              const char *qemu_binary,
+                              const char *qemu_img_binary,
                               int base_port);
 void qmp_commands_free(QmpCommands *this);
 

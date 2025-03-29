@@ -13,10 +13,15 @@
 
 #include "qmpcommands.h"
 
+static QmpCommands *test_qmp_commands_new() {
+    return qmp_commands_new("colo-test", "/tmp", "/dev/shm", "0.0.0.0",
+                            "/opt/qemu-colo/bin/qemu", "/usr/bin/qemu", 9000);
+}
+
 static void test_a() {
     int ret;
     GError *local_errp = NULL;
-    QmpCommands *commands = qmp_commands_new("/tmp", "0.0.0.0", 9000);
+    QmpCommands *commands = test_qmp_commands_new();
 
     JsonNode *json = json_from_string("\"lol\"", NULL);
     assert(json);
@@ -48,7 +53,7 @@ static void test_a() {
 
 static void test_b() {
     int ret;
-    QmpCommands *commands = qmp_commands_new("/tmp", "0.0.0.0", 9000);
+    QmpCommands *commands = test_qmp_commands_new();
 
     JsonNode *json = json_from_string("['some @@ADDRESS@@', "
                                       "'and :@@NBD_PORT@@: then', "
@@ -81,7 +86,7 @@ static void test_b() {
 
 static void test_c(gboolean filter_rewriter) {
     int ret;
-    QmpCommands *commands = qmp_commands_new("/tmp", "0.0.0.0", 9000);
+    QmpCommands *commands = test_qmp_commands_new();
     qmp_commands_set_filter_rewriter(commands, filter_rewriter);
     JsonNode *json = json_from_string("['@@IF_REWRITER@@ rewriter', "
                                       "'@@IF_NOT_REWRITER@@ no rewriter']", NULL);
@@ -106,7 +111,7 @@ static void test_c(gboolean filter_rewriter) {
 static void test_d() {
     int ret;
     GError *local_errp = NULL;
-    QmpCommands *commands = qmp_commands_new("/tmp", "0.0.0.0", 9000);
+    QmpCommands *commands = test_qmp_commands_new();
 
     JsonNode *json = json_from_string("['@@COMP_OUT_SOCK@@ @@unknown@@']", NULL);
     assert(json);
@@ -123,7 +128,7 @@ static void test_d() {
 static void test_e() {
     int ret;
     GError *local_errp = NULL;
-    QmpCommands *commands = qmp_commands_new("/tmp", "0.0.0.0", 9000);
+    QmpCommands *commands = test_qmp_commands_new();
 
     JsonNode *json = json_from_string("['@@COMP_PROP@@']", NULL);
     assert(json);
@@ -150,7 +155,7 @@ static void test_f() {
     int ret;
     JsonNode *colo_comp_prop = json_from_string("{\"colo_comp_prop\":\"lol\"}", NULL);
     assert(colo_comp_prop);
-    QmpCommands *commands = qmp_commands_new("/tmp", "0.0.0.0", 9000);
+    QmpCommands *commands = test_qmp_commands_new();
     qmp_commands_set_comp_prop(commands, colo_comp_prop);
     json_node_unref(colo_comp_prop);
 
@@ -173,7 +178,7 @@ static void test_g() {
     int ret;
     JsonNode *mig_cap = json_from_string("[{\"colo_comp_prop\":\"lol\"}]", NULL);
     assert(mig_cap);
-    QmpCommands *commands = qmp_commands_new("/tmp", "0.0.0.0", 9000);
+    QmpCommands *commands = test_qmp_commands_new();
     qmp_commands_set_mig_cap(commands, mig_cap);
     json_node_unref(mig_cap);
 
@@ -194,7 +199,7 @@ static void test_g() {
 static void test_h() {
     JsonNode *blk_mirror_prop = json_from_string("{\"blk_prop\":\"lol\"}", NULL);
     assert(blk_mirror_prop);
-    QmpCommands *commands = qmp_commands_new("/tmp", "0.0.0.0", 9000);
+    QmpCommands *commands = test_qmp_commands_new();
     qmp_commands_set_blk_mirror_prop(commands, blk_mirror_prop);
     json_node_unref(blk_mirror_prop);
 
@@ -204,6 +209,25 @@ static void test_h() {
         NULL);
     assert(array->size == 1);
     assert(!strcmp(array->array[0], "{'execute': 'blockdev-mirror', 'arguments': {\"test\":\"test\",\"blk_prop\":\"lol\"}}\n"));
+    my_array_unref(array);
+
+    qmp_commands_free(commands);
+}
+
+static void test_i() {
+    QmpCommands *commands = test_qmp_commands_new();
+    MyArray *array = qmp_commands_cmdline(commands, NULL, NULL,
+                                          "@@QEMU_BINARY@@",
+                                          "@@IF_REWRITER@@-rewriter",
+                                          "-disk",
+                                          "@@ACTIVE_IMAGE@@",
+                                          NULL);
+
+    assert(array->size == 4);
+    assert(!strcmp(array->array[0], "/opt/qemu-colo/bin/qemu"));
+    assert(!strcmp(array->array[1], "-disk"));
+    assert(!strcmp(array->array[2], "/dev/shm/colo-test-active.qcow2"));
+    assert(array->array[3] == NULL);
     my_array_unref(array);
 
     qmp_commands_free(commands);
@@ -219,6 +243,7 @@ int main(G_GNUC_UNUSED int argc, G_GNUC_UNUSED char **argv) {
     test_f();
     test_g();
     test_h();
+    test_i();
 
     return 0;
 }

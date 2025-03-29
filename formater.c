@@ -15,9 +15,14 @@
 #include "util.h"
 
 struct Formater {
+    const char *instance_name;
     const char *base_dir;
+    const char *active_hidden_dir;
     const char *address;
     const char *listen_address;
+    const char *qemu_binary;
+    const char *qemu_img_binary;
+    const char *disk_size;
     gboolean filter_rewriter;
     gboolean newline;
     JsonNode *comp_prop;
@@ -31,6 +36,10 @@ struct Formater {
     char *decl_throttle_prop;
     char *decl_blk_mirror_prop;
 
+    char *active_image;
+    char *hidden_image;
+    char *qmp_sock;
+    char *qmp_yank_sock;
     char *comp_pri_sock;
     char *comp_out_sock;
     char *nbd_port;
@@ -179,6 +188,14 @@ static int formater_format_one(Formater *this, MyArray *out, const char *str) {
 
     g_string_replace(command, "@@ADDRESS@@", this->address, 0);
     g_string_replace(command, "@@LISTEN_ADDRESS@@", this->listen_address, 0);
+    g_string_replace(command, "@@QEMU_BINARY@@", this->qemu_binary, 0);
+    g_string_replace(command, "@@QEMU_IMG_BINARY@@", this->qemu_img_binary, 0);
+    g_string_replace(command, "@@DISK_SIZE", this->disk_size, 0);
+
+    g_string_replace(command, "@@ACTIVE_IMAGE@@", this->active_image, 0);
+    g_string_replace(command, "@@HIDDEN_IMAGE@@", this->hidden_image, 0);
+    g_string_replace(command, "@@QMP_SOCK@@", this->qmp_sock, 0);
+    g_string_replace(command, "@@QMP_YANK_SOCK@@", this->qmp_yank_sock, 0);
     g_string_replace(command, "@@COMP_PRI_SOCK@@", this->comp_pri_sock, 0);
     g_string_replace(command, "@@COMP_OUT_SOCK@@", this->comp_out_sock, 0);
 
@@ -200,7 +217,9 @@ static int formater_format_one(Formater *this, MyArray *out, const char *str) {
         return -1;
     }
 
-    g_string_append_c(command, '\n');
+    if (this->newline) {
+        g_string_append_c(command, '\n');
+    }
 
     my_array_append(out, g_string_free(command, FALSE));
 
@@ -230,19 +249,44 @@ static JsonNode *formater_set_prop(JsonNode *prop) {
     return json_node_ref(prop);
 }
 
-Formater *formater_new(const char *base_dir, const char *address,
-                       const char *listen_address, const int base_port,
-                       gboolean filter_rewriter,
+static const char *formater_set_string(const char *str) {
+    if (!str) {
+        return "";
+    }
+
+    return str;
+}
+
+char *formater_qmp_sock(const char *base_dir) {
+    return g_build_filename(base_dir, "qmp.sock", NULL);
+}
+
+char *formater_qmp_yank_sock(const char *base_dir) {
+    return g_build_filename(base_dir, "qmp-yank.sock", NULL);
+}
+
+Formater *formater_new(const char *instance_name, const char *base_dir,
+                       const char *active_hidden_dir, const char *address,
+                       const char *listen_address, const char *qemu_binary,
+                       const char *qemu_img_binary, const char *disk_size,
+                       gboolean filter_rewriter, gboolean newline,
                        JsonNode *comp_prop,
                        JsonNode *mig_cap, JsonNode *mig_prop,
-                       JsonNode *throttle_prop, JsonNode *blk_mirror_prop) {
+                       JsonNode *throttle_prop, JsonNode *blk_mirror_prop,
+                       const int base_port) {
     Formater *this = g_new0(Formater, 1);
 
-    this->base_dir = base_dir;
-    this->address = address;
-    this->listen_address = listen_address;
+    this->instance_name = formater_set_string(instance_name);
+    this->base_dir = formater_set_string(base_dir);
+    this->active_hidden_dir = formater_set_string(active_hidden_dir);
+    this->address = formater_set_string(address);
+    this->listen_address = formater_set_string(listen_address);
+    this->qemu_binary = formater_set_string(qemu_binary);
+    this->qemu_img_binary = formater_set_string(qemu_img_binary);
+    this->disk_size = formater_set_string(disk_size);
     this->filter_rewriter = filter_rewriter;
-    this->newline = TRUE;
+    this->newline = newline;
+
     this->comp_prop = formater_set_prop(comp_prop);
     if (mig_cap) {
         this->decl_mig_cap = json_to_string(mig_cap, FALSE);
@@ -253,6 +297,14 @@ Formater *formater_new(const char *base_dir, const char *address,
     this->throttle_prop = formater_set_prop(throttle_prop);
     this->blk_mirror_prop = formater_set_prop(blk_mirror_prop);
 
+    char *tmp = g_strdup_printf("%s-active.qcow2", this->instance_name);
+    this->active_image = g_build_filename(this->active_hidden_dir, tmp, NULL);
+    g_free(tmp);
+    tmp = g_strdup_printf("%s-hidden.qcow2", this->instance_name);
+    this->hidden_image = g_build_filename(this->active_hidden_dir, tmp, NULL);
+    g_free(tmp);
+    this->qmp_sock = formater_qmp_sock(this->base_dir);
+    this->qmp_yank_sock = formater_qmp_yank_sock(this->base_dir);
     this->comp_pri_sock = g_build_filename(this->base_dir, "comp-pri-in0.sock", NULL);
     this->comp_out_sock = g_build_filename(this->base_dir, "comp-out0.sock", NULL);
     this->nbd_port = g_strdup_printf("%i", base_port);
@@ -275,6 +327,10 @@ void formater_free(Formater *this) {
     g_free(this->decl_throttle_prop);
     g_free(this->decl_blk_mirror_prop);
 
+    g_free(this->active_image);
+    g_free(this->hidden_image);
+    g_free(this->qmp_sock);
+    g_free(this->qmp_yank_sock);
     g_free(this->comp_pri_sock);
     g_free(this->comp_out_sock);
     g_free(this->nbd_port);

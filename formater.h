@@ -17,10 +17,16 @@
 
 MyArray *formater_format(Formater *this, const MyArray *entry);
 
-Formater *formater_new(const char *base_dir, const char *address,
-                       const char *listen_address, const int base_port,
-                       gboolean filter_rewriter,
+char *formater_qmp_sock(const char *base_dir);
+char *formater_qmp_yank_sock(const char *base_dir);
+
+Formater *formater_new(const char *instance_name, const char *base_dir,
+                       const char *active_hidden_dir, const char *address,
+                       const char *listen_address, const char *qemu_binary,
+                       const char *qemu_img_binary, const char *disk_size,
+                       gboolean filter_rewriter, gboolean newline,
                        JsonNode *comp_prop,
                        JsonNode *mig_cap, JsonNode *mig_prop,
-                       JsonNode *throttle_prop, JsonNode *blk_mirror_prop);
+                       JsonNode *throttle_prop, JsonNode *blk_mirror_prop,
+                       const int base_port);
 void formater_free(Formater *this);

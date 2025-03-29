@@ -16,8 +16,12 @@
 #include "formater.h"
 
 struct QmpCommands {
+    char *instance_name;
     char *base_dir;
+    char *active_hidden_dir;
     char *listen_address;
+    char *qemu_binary;
+    char *qemu_img_binary;
     int base_port;
     gboolean filter_rewriter;
     JsonNode *comp_prop;
@@ -32,8 +36,8 @@ struct QmpCommands {
 };
 
 static int qmp_commands_format_check(MyArray *new) {
-    Formater *fmt = formater_new("", "", "", 9000, FALSE, NULL, NULL,
-                                 NULL, NULL, NULL);
+    Formater *fmt = formater_new(NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+                                 FALSE, TRUE, NULL, NULL, NULL, NULL, NULL, 9000);
     MyArray *formated = formater_format(fmt, new);
 
     if (!formated) {
@@ -144,24 +148,62 @@ int qmp_commands_set_failover_secondary(QmpCommands *this, JsonNode *commands,
     return qmp_commands_set_json(&this->failover_secondary, commands, errp);
 }
 
-static MyArray *qmp_commands_format(const QmpCommands *this,
-                                    const MyArray *entry,
-                                    const char *address) {
+static MyArray *_qmp_commands_format(const QmpCommands *this,
+                                     gboolean newline,
+                                     const MyArray *entry,
+                                     const char *address,
+                                     const char *disk_size) {
     Formater *fmt = formater_new(
+                this->instance_name,
                 this->base_dir,
+                this->active_hidden_dir,
                 address,
                 this->listen_address,
-                this->base_port,
+                this->qemu_binary,
+                this->qemu_img_binary,
+                disk_size,
                 this->filter_rewriter,
+                newline,
                 this->comp_prop,
                 this->mig_cap,
                 this->mig_prop,
                 this->throttle_prop,
-                this->blk_mirror_prop);
+                this->blk_mirror_prop,
+                this->base_port);
 
     MyArray *ret = formater_format(fmt, entry);
 
     formater_free(fmt);
+    return ret;
+}
+
+static MyArray *qmp_commands_format(const QmpCommands *this,
+                                    const MyArray *entry,
+                                    const char *address,
+                                    const char *disk_size) {
+    return _qmp_commands_format(this, TRUE, entry, address, disk_size);
+}
+
+MyArray *qmp_commands_cmdline(QmpCommands *this, const char *address,
+                              const char *disk_size, ...) {
+    va_list args;
+    MyArray *array = my_array_new(g_free);
+
+    va_start(args, disk_size);
+    while (TRUE) {
+        const char *str = va_arg(args, const char *);
+        if (!str) {
+            break;
+        }
+
+        my_array_append(array, g_strdup(str));
+    }
+    va_end(args);
+
+    MyArray *ret = _qmp_commands_format(this, FALSE, array, address, disk_size);
+    my_array_unref(array);
+
+    my_array_append(ret, NULL);
     return ret;
 }
 
@@ -180,34 +222,34 @@ MyArray *qmp_commands_adhoc(QmpCommands *this, ...) {
     }
     va_end(args);
 
-    MyArray *ret = qmp_commands_format(this, array, "");
+    MyArray *ret = qmp_commands_format(this, array, NULL, NULL);
     my_array_unref(array);
     return ret;
 }
 
 MyArray *qmp_commands_get_prepare_primary(QmpCommands *this) {
-    return qmp_commands_format(this, this->prepare_primary, "");
+    return qmp_commands_format(this, this->prepare_primary, NULL, NULL);
 }
 
 MyArray *qmp_commands_get_prepare_secondary(QmpCommands *this) {
-    return qmp_commands_format(this, this->prepare_secondary, "");
+    return qmp_commands_format(this, this->prepare_secondary, NULL, NULL);
 }
 
 MyArray *qmp_commands_get_migration_start(QmpCommands *this,
                                           const char *address) {
-    return qmp_commands_format(this, this->migration_start, address);
+    return qmp_commands_format(this, this->migration_start, address, NULL);
 }
 
 MyArray *qmp_commands_get_migration_switchover(QmpCommands *this) {
-    return qmp_commands_format(this, this->migration_switchover, "");
+    return qmp_commands_format(this, this->migration_switchover, NULL, NULL);
 }
 
 MyArray *qmp_commands_get_failover_primary(QmpCommands *this) {
-    return qmp_commands_format(this, this->failover_primary, "");
+    return qmp_commands_format(this, this->failover_primary, NULL, NULL);
 }
 
 MyArray *qmp_commands_get_failover_secondary(QmpCommands *this) {
-    return qmp_commands_format(this, this->failover_secondary, "");
+    return qmp_commands_format(this, this->failover_secondary, NULL, NULL);
 }
 
 static JsonNode *qmp_commands_set_prop(JsonNode *prop) {
@@ -263,12 +305,20 @@ void qmp_commands_set_blk_mirror_prop(QmpCommands *this, JsonNode *prop) {
     this->blk_mirror_prop = qmp_commands_set_prop(prop);
 }
 
-QmpCommands *qmp_commands_new(const char *base_dir, const char *listen_address,
+QmpCommands *qmp_commands_new(const char *instance_name, const char *base_dir,
+                              const char *active_hidden_dir,
+                              const char *listen_address,
+                              const char *qemu_binary,
+                              const char *qemu_img_binary,
                               int base_port) {
     QmpCommands *this = g_new0(QmpCommands, 1);
 
+    this->instance_name = g_strdup(instance_name);
     this->base_dir = g_strdup(base_dir);
+    this->active_hidden_dir = g_strdup(active_hidden_dir);
     this->listen_address = g_strdup(listen_address);
+    this->qemu_binary = g_strdup(qemu_binary);
+    this->qemu_img_binary = g_strdup(qemu_img_binary);
     this->base_port = base_port;
 
     this->prepare_primary = qmp_commands_static(0,
@@ -348,8 +398,12 @@ QmpCommands *qmp_commands_new(const char *base_dir, const char *listen_address,
 }
 
 void qmp_commands_free(QmpCommands *this) {
+    g_free(this->instance_name);
     g_free(this->base_dir);
+    g_free(this->active_hidden_dir);
     g_free(this->listen_address);
+    g_free(this->qemu_binary);
+    g_free(this->qemu_img_binary);
     qmp_commands_node_unref(this->comp_prop);
     qmp_commands_node_unref(this->mig_cap);
     qmp_commands_node_unref(this->mig_prop);
