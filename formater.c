@@ -200,6 +200,8 @@ static int formater_format_one(Formater *this, MyArray *out, const char *str) {
         return -1;
     }
 
+    g_string_append_c(command, '\n');
+
     my_array_append(out, g_string_free(command, FALSE));
 
     return 0;

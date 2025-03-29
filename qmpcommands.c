@@ -74,7 +74,7 @@ static int qmp_commands_set_json(MyArray **entry, JsonNode *commands, GError **e
             goto out;
         }
 
-        my_array_append(new, g_strdup_printf("%s\n", str));
+        my_array_append(new, g_strdup(str));
     }
 
     ret = qmp_commands_format_check(new);
@@ -104,7 +104,7 @@ static MyArray *qmp_commands_static(int dummy, ...) {
             break;
         }
 
-        my_array_append(array, g_strdup_printf("%s\n", str));
+        my_array_append(array, g_strdup(str));
     }
     va_end(args);
 
@@ -176,7 +176,7 @@ MyArray *qmp_commands_adhoc(QmpCommands *this, ...) {
             break;
         }
 
-        my_array_append(array, g_strdup_printf("%s\n", str));
+        my_array_append(array, g_strdup(str));
     }
     va_end(args);
 
