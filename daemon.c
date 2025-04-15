@@ -148,7 +148,7 @@ void daemon_mainloop(ColodContext *mctx) {
 
     colod_query_status(main_coroutine, &mctx->last_state);
     colod_main_unref(main_coroutine);
-    qmp_free(ctx->qmp);
+    qmp_unref(ctx->qmp);
     client_listener_free(ctx->listener);
     cpg_free(ctx->cpg);
     qmp_commands_free(ctx->commands);

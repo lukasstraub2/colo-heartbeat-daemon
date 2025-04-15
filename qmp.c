@@ -692,7 +692,8 @@ void qmp_set_timeout(ColodQmpState *state, guint timeout) {
     state->timeout = timeout;
 }
 
-void qmp_free(ColodQmpState *state) {
+static void qmp_free(gpointer _this) {
+    ColodQmpState *state = _this;
     if (state->hup_source_id) {
         g_source_remove(state->hup_source_id);
     }
@@ -714,13 +715,12 @@ void qmp_free(ColodQmpState *state) {
 
     g_io_channel_unref(state->yank_channel.channel);
     g_io_channel_unref(state->channel.channel);
-    g_free(state);
 }
 
 ColodQmpState *qmp_new(int fd, int yank_fd, guint timeout, GError **errp) {
     ColodQmpState *state;
 
-    state = g_new0(ColodQmpState, 1);
+    state = g_rc_box_new0(ColodQmpState);
     state->timeout = timeout;
     state->channel.channel = colod_create_channel(fd, errp);
     if (!state->channel.channel) {
@@ -745,4 +745,12 @@ ColodQmpState *qmp_new(int fd, int yank_fd, guint timeout, GError **errp) {
                                           qmp_hup_cb, state);
 
     return state;
+}
+
+ColodQmpState *qmp_ref(ColodQmpState *this) {
+    return g_rc_box_acquire(this);
+}
+
+void qmp_unref(ColodQmpState *this) {
+    g_rc_box_release_full(this, qmp_free);
 }

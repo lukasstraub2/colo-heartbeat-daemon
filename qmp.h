@@ -33,7 +33,8 @@ void qmp_result_free(ColodQmpResult *result);
 ColodQmpResult *qmp_parse_result(gchar *line, gsize len, GError **errp);
 
 ColodQmpState *qmp_new(int fd, int yank_fd, guint timeout, GError **errp);
-void qmp_free(ColodQmpState *state);
+ColodQmpState *qmp_ref(ColodQmpState *state);
+void qmp_unref(ColodQmpState *state);
 
 #define qmp_execute_co(...) \
     co_wrap(_qmp_execute_co(__VA_ARGS__))
