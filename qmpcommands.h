@@ -16,6 +16,8 @@
 #include "base_types.h"
 #include "util.h"
 
+int qmp_commands_set_qemu_primary(QmpCommands *this, JsonNode *commands, GError **errp);
+int qmp_commands_set_qemu_secondary(QmpCommands *this, JsonNode *commands, GError **errp);
 int qmp_commands_set_prepare_primary(QmpCommands *this, JsonNode *commands, GError **errp);
 int qmp_commands_set_prepare_secondary(QmpCommands *this, JsonNode *commands, GError **errp);
 int qmp_commands_set_migration_start(QmpCommands *this, JsonNode *commands, GError **errp);
@@ -26,6 +28,9 @@ int qmp_commands_set_failover_secondary(QmpCommands *this, JsonNode *commands, G
 MyArray *qmp_commands_cmdline(QmpCommands *this, const char *address,
                               const char *disk_size, ...);
 MyArray *qmp_commands_adhoc(QmpCommands *this, ...);
+MyArray *qmp_commands_get_qemu_primary(QmpCommands *this);
+MyArray *qmp_commands_get_qemu_secondary(QmpCommands *this);
+MyArray *qmp_commands_get_qemu_dummy(QmpCommands *this);
 MyArray *qmp_commands_get_prepare_primary(QmpCommands *this);
 MyArray *qmp_commands_get_prepare_secondary(QmpCommands *this);
 MyArray *qmp_commands_get_migration_start(QmpCommands *this, const char *address);
@@ -39,6 +44,7 @@ void qmp_commands_set_mig_cap(QmpCommands *this, JsonNode *prop);
 void qmp_commands_set_mig_prop(QmpCommands *this, JsonNode *prop);
 void qmp_commands_set_throttle_prop(QmpCommands *this, JsonNode *prop);
 void qmp_commands_set_blk_mirror_prop(QmpCommands *this, JsonNode *prop);
+void qmp_commands_set_qemu_options(QmpCommands *this, JsonNode *prop);
 
 QmpCommands *qmp_commands_new(const char *instance_name, const char *base_dir,
                               const char *active_hidden_dir,

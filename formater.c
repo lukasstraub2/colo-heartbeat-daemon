@@ -29,6 +29,7 @@ struct Formater {
     JsonNode *mig_prop;
     JsonNode *throttle_prop;
     JsonNode *blk_mirror_prop;
+    JsonNode *qemu_options;
 
     char *decl_comp_prop;
     char *decl_mig_cap;
@@ -163,9 +164,26 @@ static int formater_replace_props(Formater *this, GString *command) {
     return 0;
 }
 
+static int formater_qemu_options(Formater *this, MyArray *out) {
+    JsonArray *array = json_node_get_array(this->qemu_options);
+
+    int len = json_array_get_length(array);
+    for (int i = 0; i < len; i++) {
+        JsonNode *node = json_array_get_element(array, i);
+        my_array_append(out, g_strdup(json_node_get_string(node)));
+    }
+
+    return 0;
+}
+
 static int formater_format_one(Formater *this, MyArray *out, const char *str) {
     gboolean if_rewriter = !!strstr(str, "@@IF_REWRITER@@");
     gboolean if_not_rewriter = !!strstr(str, "@@IF_NOT_REWRITER@@");
+    gboolean qemu_options = !!strstr(str, "@@QEMU_OPTIONS@@");
+
+    if (qemu_options) {
+        return formater_qemu_options(this, out);
+    }
 
     if (formater_is_decl(str)) {
         return formater_handle_decl(this, str);
@@ -249,6 +267,15 @@ static JsonNode *formater_set_prop(JsonNode *prop) {
     return json_node_ref(prop);
 }
 
+static JsonNode *formater_set_array(JsonNode *prop) {
+    if (!prop) {
+        return json_from_string("[]", NULL);
+    }
+
+    assert(JSON_NODE_HOLDS_ARRAY(prop));
+    return json_node_ref(prop);
+}
+
 static const char *formater_set_string(const char *str) {
     if (!str) {
         return "";
@@ -273,7 +300,7 @@ Formater *formater_new(const char *instance_name, const char *base_dir,
                        JsonNode *comp_prop,
                        JsonNode *mig_cap, JsonNode *mig_prop,
                        JsonNode *throttle_prop, JsonNode *blk_mirror_prop,
-                       const int base_port) {
+                       JsonNode *qemu_options, const int base_port) {
     Formater *this = g_new0(Formater, 1);
 
     this->instance_name = formater_set_string(instance_name);
@@ -296,6 +323,7 @@ Formater *formater_new(const char *instance_name, const char *base_dir,
     this->mig_prop = formater_set_prop(mig_prop);
     this->throttle_prop = formater_set_prop(throttle_prop);
     this->blk_mirror_prop = formater_set_prop(blk_mirror_prop);
+    this->qemu_options = formater_set_array(qemu_options);
 
     char *tmp = g_strdup_printf("%s-active.qcow2", this->instance_name);
     this->active_image = g_build_filename(this->active_hidden_dir, tmp, NULL);
@@ -320,6 +348,7 @@ void formater_free(Formater *this) {
     json_node_unref(this->mig_prop);
     json_node_unref(this->throttle_prop);
     json_node_unref(this->blk_mirror_prop);
+    json_node_unref(this->qemu_options);
 
     g_free(this->decl_comp_prop);
     g_free(this->decl_mig_cap);

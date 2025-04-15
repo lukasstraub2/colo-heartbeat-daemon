@@ -28,5 +28,5 @@ Formater *formater_new(const char *instance_name, const char *base_dir,
                        JsonNode *comp_prop,
                        JsonNode *mig_cap, JsonNode *mig_prop,
                        JsonNode *throttle_prop, JsonNode *blk_mirror_prop,
-                       const int base_port);
+                       JsonNode *qemu_options, const int base_port);
 void formater_free(Formater *this);

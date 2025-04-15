@@ -29,6 +29,10 @@ struct QmpCommands {
     JsonNode *mig_prop;
     JsonNode *throttle_prop;
     JsonNode *blk_mirror_prop;
+    JsonNode *qemu_options;
+
+    MyArray *qemu_primary, *qemu_secondary;
+    MyArray *qemu_dummy;
 
     MyArray *prepare_primary, *prepare_secondary;
     MyArray *migration_start, *migration_switchover;
@@ -37,7 +41,8 @@ struct QmpCommands {
 
 static int qmp_commands_format_check(MyArray *new) {
     Formater *fmt = formater_new(NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
-                                 FALSE, TRUE, NULL, NULL, NULL, NULL, NULL, 9000);
+                                 FALSE, TRUE, NULL, NULL, NULL, NULL, NULL, NULL,
+                                 9000);
     MyArray *formated = formater_format(fmt, new);
 
     if (!formated) {
@@ -118,6 +123,16 @@ static MyArray *qmp_commands_static(int dummy, ...) {
     return array;
 }
 
+int qmp_commands_set_qemu_primary(QmpCommands *this, JsonNode *commands,
+                                  GError **errp) {
+    return qmp_commands_set_json(&this->qemu_primary, commands, errp);
+}
+
+int qmp_commands_set_qemu_secondary(QmpCommands *this, JsonNode *commands,
+                                    GError **errp) {
+    return qmp_commands_set_json(&this->qemu_secondary, commands, errp);
+}
+
 int qmp_commands_set_prepare_primary(QmpCommands *this, JsonNode *commands,
                                      GError **errp) {
     return qmp_commands_set_json(&this->prepare_primary, commands, errp);
@@ -169,6 +184,7 @@ static MyArray *_qmp_commands_format(const QmpCommands *this,
                 this->mig_prop,
                 this->throttle_prop,
                 this->blk_mirror_prop,
+                this->qemu_options,
                 this->base_port);
 
     MyArray *ret = formater_format(fmt, entry);
@@ -182,6 +198,13 @@ static MyArray *qmp_commands_format(const QmpCommands *this,
                                     const char *address,
                                     const char *disk_size) {
     return _qmp_commands_format(this, TRUE, entry, address, disk_size);
+}
+
+static MyArray *qmp_commands_format_cmdline(const QmpCommands *this,
+                                            const MyArray *entry,
+                                            const char *address,
+                                            const char *disk_size) {
+    return _qmp_commands_format(this, FALSE, entry, address, disk_size);
 }
 
 MyArray *qmp_commands_cmdline(QmpCommands *this, const char *address,
@@ -200,7 +223,7 @@ MyArray *qmp_commands_cmdline(QmpCommands *this, const char *address,
     }
     va_end(args);
 
-    MyArray *ret = _qmp_commands_format(this, FALSE, array, address, disk_size);
+    MyArray *ret = qmp_commands_format_cmdline(this, array, address, disk_size);
     my_array_unref(array);
 
     my_array_append(ret, NULL);
@@ -225,6 +248,18 @@ MyArray *qmp_commands_adhoc(QmpCommands *this, ...) {
     MyArray *ret = qmp_commands_format(this, array, NULL, NULL);
     my_array_unref(array);
     return ret;
+}
+
+MyArray *qmp_commands_get_qemu_primary(QmpCommands *this) {
+    return qmp_commands_format_cmdline(this, this->qemu_primary, NULL, NULL);
+}
+
+MyArray *qmp_commands_get_qemu_secondary(QmpCommands *this) {
+    return qmp_commands_format_cmdline(this, this->qemu_secondary, NULL, NULL);
+}
+
+MyArray *qmp_commands_get_qemu_dummy(QmpCommands *this) {
+    return qmp_commands_format_cmdline(this, this->qemu_dummy, NULL, NULL);
 }
 
 MyArray *qmp_commands_get_prepare_primary(QmpCommands *this) {
@@ -305,6 +340,11 @@ void qmp_commands_set_blk_mirror_prop(QmpCommands *this, JsonNode *prop) {
     this->blk_mirror_prop = qmp_commands_set_prop(prop);
 }
 
+void qmp_commands_set_qemu_options(QmpCommands *this, JsonNode *prop) {
+    qmp_commands_node_unref(this->qemu_options);
+    this->qemu_options = qmp_commands_set_array(prop);
+}
+
 QmpCommands *qmp_commands_new(const char *instance_name, const char *base_dir,
                               const char *active_hidden_dir,
                               const char *listen_address,
@@ -320,6 +360,48 @@ QmpCommands *qmp_commands_new(const char *instance_name, const char *base_dir,
     this->qemu_binary = g_strdup(qemu_binary);
     this->qemu_img_binary = g_strdup(qemu_img_binary);
     this->base_port = base_port;
+
+    this->qemu_primary = qmp_commands_static(0,
+        "@@QEMU_BINARY@@",
+        "@@QEMU_OPTIONS@@",
+        "-drive if=none,node-name=quorum0,driver=quorum,read-pattern=fifo,vote-threshold=1,children.0=parent0",
+        "-drive if=none,node-name=colo-disk0,driver=throttle,throttle-group=throttle0,file.driver=raw,file.file=quorum0",
+        "-no-shutdown",
+        "-no-reboot",
+        "-qmp unix:@@QMP_SOCK@@,server=on,wait=off",
+        "-qmp unix:@@QMP_YANK_SOCK@@,server=on,wait=off",
+        "-object throttle-group,id=throttle0",
+        NULL);
+
+    this->qemu_secondary = qmp_commands_static(0,
+        "@@QEMU_BINARY@@",
+        "@@QEMU_OPTIONS@@",
+        "-chardev socket,id=mirror0,host=@@LISTEN_ADDRESS@@,port=@@MIRROR_PORT@@,server=on,wait=off,nodelay=on",
+        "-chardev socket,id=comp_sec_in0,host=@@LISTEN_ADDRESS@@,port=@@COMPARE_IN_PORT@@,server=on,wait=off,nodelay=on",
+        "-object filter-redirector,id=mirror0,netdev=hn0,queue=tx,indev=mirror0",
+        "-object filter-drop,id=drop0,netdev=hn0,queue=rx",
+        "-object filter-redirector,id=comp_sec_in0,netdev=hn0,queue=rx,outdev=comp_sec_in0",
+        "@@IF_REWRITER@@-object filter-rewriter,id=rew0,netdev=hn0,queue=all",
+        "-drive if=none,node-name=childs0,top-id=colo-disk0,driver=replication,mode=secondary,file.driver=qcow2,file.file.filename=@@ACTIVE_IMAGE@@,"
+        "file.backing.driver=qcow2,file.backing.file.filename=@@HIDDEN_IMAGE@@,file.backing.backing=parent0",
+        "-drive if=none,node-name=quorum0,driver=quorum,read-pattern=fifo,vote-threshold=1,children.0=childs0",
+        "-drive if=none,node-name=colo-disk0,driver=throttle,throttle-group=throttle0,file.driver=raw,file.file=quorum0",
+        "-incoming defer",
+        "-no-shutdown",
+        "-no-reboot",
+        "-qmp unix:@@QMP_SOCK@@,server=on,wait=off",
+        "-qmp unix:@@QMP_YANK_SOCK@@,server=on,wait=off",
+        "-object throttle-group,id=throttle0",
+        NULL);
+
+    this->qemu_dummy = qmp_commands_static(0,
+        "@@QEMU_BINARY@@",
+        "@@QEMU_OPTIONS@@",
+        "-drive if=none,node-name=colo-disk0,driver=null-co",
+        "-S",
+        "-qmp unix:@@QMP_SOCK@@,server=on,wait=off",
+        "-qmp unix:@@QMP_YANK_SOCK@@,server=on,wait=off",
+        NULL);
 
     this->prepare_primary = qmp_commands_static(0,
         "@@DECL_THROTTLE_PROP@@ {}",
@@ -409,7 +491,11 @@ void qmp_commands_free(QmpCommands *this) {
     qmp_commands_node_unref(this->mig_prop);
     qmp_commands_node_unref(this->throttle_prop);
     qmp_commands_node_unref(this->blk_mirror_prop);
+    qmp_commands_node_unref(this->qemu_options);
 
+    my_array_unref(this->qemu_primary);
+    my_array_unref(this->qemu_secondary);
+    my_array_unref(this->qemu_dummy);
     my_array_unref(this->prepare_primary);
     my_array_unref(this->prepare_secondary);
     my_array_unref(this->migration_start);

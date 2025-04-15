@@ -233,6 +233,24 @@ static void test_i() {
     qmp_commands_free(commands);
 }
 
+static void test_j() {
+    JsonNode *qemu_options = json_from_string("[\"a\", \"b\"]", NULL);
+    assert(qemu_options);
+    QmpCommands *commands = test_qmp_commands_new();
+    qmp_commands_set_qemu_options(commands, qemu_options);
+    json_node_unref(qemu_options);
+
+    MyArray *array = qmp_commands_cmdline(commands, NULL, NULL,
+                                          "@@QEMU_OPTIONS@@", NULL);
+    assert(array->size == 3);
+    assert(!strcmp(array->array[0], "a"));
+    assert(!strcmp(array->array[1], "b"));
+    assert(array->array[2] == NULL);
+    my_array_unref(array);
+
+    qmp_commands_free(commands);
+}
+
 int main(G_GNUC_UNUSED int argc, G_GNUC_UNUSED char **argv) {
     test_a();
     test_b();
@@ -244,6 +262,7 @@ int main(G_GNUC_UNUSED int argc, G_GNUC_UNUSED char **argv) {
     test_g();
     test_h();
     test_i();
+    test_j();
 
     return 0;
 }
