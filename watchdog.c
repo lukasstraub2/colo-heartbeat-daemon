@@ -10,7 +10,6 @@
 #include <glib-2.0/glib.h>
 
 #include "watchdog.h"
-#include "main_coroutine.h"
 
 typedef struct ColodWatchdog {
     Coroutine coroutine;
@@ -18,6 +17,8 @@ typedef struct ColodWatchdog {
     guint interval;
     guint timer_id;
     gboolean quit;
+    WatchdogCheckHealth cb;
+    gpointer cb_data;
 } ColodWatchdog;
 
 void colod_watchdog_refresh(ColodWatchdog *state) {
@@ -58,6 +59,12 @@ static gboolean colod_watchdog_co_wrap(
     return colod_watchdog_co(data);
 }
 
+#define check_health_co(...) \
+    co_wrap(_check_health_co(__VA_ARGS__))
+static int _check_health_co(Coroutine *coroutine, ColodWatchdog *this, GError **errp) {
+    return this->cb(coroutine, this->cb_data, errp);
+}
+
 static gboolean _colod_watchdog_co(Coroutine *coroutine) {
     ColodWatchdog *state = (ColodWatchdog *) coroutine;
     int ret;
@@ -76,8 +83,7 @@ static gboolean _colod_watchdog_co(Coroutine *coroutine) {
         }
         state->timer_id = 0;
 
-        co_recurse(ret = colod_check_health_co(coroutine, state->ctx->main_coroutine,
-                                               &local_errp));
+        co_recurse(ret = check_health_co(coroutine, state, &local_errp));
         if (ret < 0) {
             log_error_fmt("colod check health: %s", local_errp->message);
             g_error_free(local_errp);
@@ -91,7 +97,7 @@ static gboolean _colod_watchdog_co(Coroutine *coroutine) {
     return G_SOURCE_REMOVE;
 }
 
-void colo_watchdog_free(ColodWatchdog *state) {
+void colod_watchdog_free(ColodWatchdog *state) {
 
     if (!state->interval) {
         g_free(state);
@@ -115,7 +121,8 @@ void colo_watchdog_free(ColodWatchdog *state) {
     g_free(state);
 }
 
-ColodWatchdog *colod_watchdog_new(const ColodContext *ctx) {
+ColodWatchdog *colod_watchdog_new(const ColodContext *ctx,
+                                  WatchdogCheckHealth cb, gpointer data) {
     ColodWatchdog *state;
     Coroutine *coroutine;
 
@@ -123,8 +130,9 @@ ColodWatchdog *colod_watchdog_new(const ColodContext *ctx) {
     coroutine = &state->coroutine;
     coroutine->cb.plain = colod_watchdog_co;
     coroutine->cb.iofunc = colod_watchdog_co_wrap;
-    state->ctx = ctx;
     state->interval = ctx->watchdog_interval;
+    state->cb = cb;
+    state->cb_data = data;
 
     if (state->interval) {
         g_idle_add(colod_watchdog_co, coroutine);

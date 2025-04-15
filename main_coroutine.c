@@ -48,6 +48,7 @@ struct ColodMainCoroutine {
     ColodQmpState *qmp;
     ColodRaiseCoroutine *raise_timeout_coroutine;
     YellowCoroutine *yellow_co;
+    ColodWatchdog *watchdog;
 
     MainState state;
     gboolean transitioning;
@@ -76,6 +77,7 @@ static void _colod_trace_source(gpointer data, const gchar *func,
 }
 
 void colod_query_status(ColodMainCoroutine *this, ColodState *ret) {
+    ret->running = TRUE;
     ret->primary = this->primary;
     ret->replication = this->replication;
     ret->failed = this->failed;
@@ -83,24 +85,40 @@ void colod_query_status(ColodMainCoroutine *this, ColodState *ret) {
     ret->peer_failed = this->peer_failed;
 }
 
-void colod_peer_failed(ColodMainCoroutine *this) {
+static void __colod_query_status(gpointer data, ColodState *ret) {
+    return colod_query_status(data, ret);
+}
+
+static void colod_peer_failed(ColodMainCoroutine *this) {
     this->peer_failed = TRUE;
 }
 
-void colod_set_peer(ColodMainCoroutine *this, const gchar *peer) {
+static void colod_set_peer(ColodMainCoroutine *this, const gchar *peer) {
     g_free(this->peer);
     this->peer = g_strdup(peer);
     this->peer_failed = FALSE;
     this->peer_yellow = FALSE;
 }
 
-const gchar *colod_get_peer(ColodMainCoroutine *this) {
+static void __colod_set_peer(gpointer data, const gchar *peer) {
+    return colod_set_peer(data, peer);
+}
+
+static const gchar *colod_get_peer(ColodMainCoroutine *this) {
     return this->peer;
 }
 
-void colod_clear_peer(ColodMainCoroutine *this) {
+static const gchar *__colod_get_peer(gpointer data) {
+    return colod_get_peer(data);
+}
+
+static void colod_clear_peer(ColodMainCoroutine *this) {
     g_free(this->peer);
     this->peer = g_strdup("");
+}
+
+static void __colod_clear_peer(gpointer data) {
+    return colod_clear_peer(data);
 }
 
 static const gchar *event_str(ColodEvent event) {
@@ -264,7 +282,9 @@ static int _colod_qmp_event_wait_co(Coroutine *coroutine,
     return ret;
 }
 
-int _colod_yank_co(Coroutine *coroutine, ColodMainCoroutine *this, GError **errp) {
+#define colod_yank(...) \
+    co_wrap(_colod_yank_co(__VA_ARGS__))
+static int _colod_yank_co(Coroutine *coroutine, ColodMainCoroutine *this, GError **errp) {
     int ret;
     GError *local_errp = NULL;
 
@@ -283,15 +303,32 @@ int _colod_yank_co(Coroutine *coroutine, ColodMainCoroutine *this, GError **errp
     return ret;
 }
 
-ColodQmpResult *_colod_execute_nocheck_co(Coroutine *coroutine,
-                                          ColodMainCoroutine *this,
-                                          GError **errp,
-                                          const gchar *command) {
+static int __colod_yank_co(Coroutine *coroutine, gpointer data, GError **errp) {
+    ColodMainCoroutine *this = data;
+    int ret;
+
+    co_begin(int, -1);
+
+    colod_main_ref(this);
+    co_recurse(ret = colod_yank(coroutine, this, errp));
+
+    co_end;
+
+    colod_main_unref(this);
+    return ret;
+}
+
+#define colod_execute_nocheck_co(...) \
+    co_wrap(_colod_execute_nocheck_co(__VA_ARGS__))
+static ColodQmpResult *_colod_execute_nocheck_co(Coroutine *coroutine,
+                                                 ColodMainCoroutine *this,
+                                                 GError **errp,
+                                                 const gchar *command) {
     ColodQmpResult *result;
     int ret;
     GError *local_errp = NULL;
 
-    colod_watchdog_refresh(this->ctx->watchdog);
+    colod_watchdog_refresh(this->watchdog);
 
     result = _qmp_execute_nocheck_co(coroutine, this->qmp, &local_errp, command);
     if (coroutine->yield) {
@@ -319,10 +356,30 @@ ColodQmpResult *_colod_execute_nocheck_co(Coroutine *coroutine,
     return result;
 }
 
-ColodQmpResult *_colod_execute_co(Coroutine *coroutine,
-                                  ColodMainCoroutine *this,
-                                  GError **errp,
-                                  const gchar *command) {
+static ColodQmpResult *__colod_execute_nocheck_co(Coroutine *coroutine,
+                                                  gpointer data,
+                                                  GError **errp,
+                                                  const gchar *command) {
+    ColodMainCoroutine *this = data;
+    ColodQmpResult * ret;
+
+    co_begin(ColodQmpResult *, NULL);
+
+    colod_main_ref(this);
+    co_recurse(ret = colod_execute_nocheck_co(coroutine, this, errp, command));
+
+    co_end;
+
+    colod_main_unref(this);
+    return ret;
+}
+
+#define colod_execute_co(...) \
+    co_wrap(_colod_execute_co(__VA_ARGS__))
+static ColodQmpResult *_colod_execute_co(Coroutine *coroutine,
+                                         ColodMainCoroutine *this,
+                                         GError **errp,
+                                         const gchar *command) {
     ColodQmpResult *result;
 
     result = _colod_execute_nocheck_co(coroutine, this, errp, command);
@@ -343,6 +400,23 @@ ColodQmpResult *_colod_execute_co(Coroutine *coroutine,
     return result;
 }
 
+static ColodQmpResult *__colod_execute_co(Coroutine *coroutine,
+                                          gpointer data,
+                                          GError **errp,
+                                          const gchar *command) {
+    ColodMainCoroutine *this = data;
+    ColodQmpResult * ret;
+
+    co_begin(ColodQmpResult *, NULL);
+
+    colod_main_ref(this);
+    co_recurse(ret = colod_execute_co(coroutine, this, errp, command));
+
+    co_end;
+
+    colod_main_unref(this);
+    return ret;
+}
 
 #define colod_execute_array_co(...) \
     co_wrap(_colod_execute_array_co(__VA_ARGS__))
@@ -464,8 +538,10 @@ static int _qemu_query_status_co(Coroutine *coroutine, ColodMainCoroutine *this,
     return 0;
 }
 
-int _colod_check_health_co(Coroutine *coroutine, ColodMainCoroutine *this,
-                           GError **errp) {
+#define colod_check_health_co(...) \
+    co_wrap(_colod_check_health_co(__VA_ARGS__))
+static int _colod_check_health_co(Coroutine *coroutine, ColodMainCoroutine *this,
+                                  GError **errp) {
     gboolean primary;
     gboolean replication;
     int ret;
@@ -498,7 +574,23 @@ int _colod_check_health_co(Coroutine *coroutine, ColodMainCoroutine *this,
     return 0;
 }
 
-int colod_start_migration(ColodMainCoroutine *this) {
+static int __colod_check_health_co(Coroutine *coroutine, gpointer data,
+                                   GError **errp) {
+    ColodMainCoroutine *this = data;
+    int ret;
+
+    co_begin(int, -1);
+
+    colod_main_ref(this);
+    co_recurse(ret = colod_check_health_co(coroutine, this, errp));
+
+    co_end;
+
+    colod_main_unref(this);
+    return ret;
+}
+
+static int colod_start_migration(ColodMainCoroutine *this) {
     if (this->state != STATE_PRIMARY_WAIT) {
         return -1;
     }
@@ -507,12 +599,24 @@ int colod_start_migration(ColodMainCoroutine *this) {
     return 0;
 }
 
-void colod_autoquit(ColodMainCoroutine *this) {
+static int __colod_start_migration(gpointer data) {
+    return colod_start_migration(data);
+}
+
+static void colod_autoquit(ColodMainCoroutine *this) {
     colod_event_queue(this, EVENT_AUTOQUIT, "client request");
 }
 
-void colod_qemu_failed(ColodMainCoroutine *this) {
-    colod_event_queue(this, EVENT_FAILED, "?");
+static void __colod_autoquit(gpointer data) {
+    colod_autoquit(data);
+}
+
+static void colod_client_cont_failed(ColodMainCoroutine *this) {
+	colod_event_queue(this, EVENT_FAILED, "client cont failed after client died");
+}
+
+static void __colod_client_cont_failed(gpointer data) {
+    colod_client_cont_failed(data);
 }
 
 #define colod_stop_co(...) \
@@ -902,8 +1006,12 @@ failover:
     return STATE_FAILED;
 }
 
-void colod_quit(ColodMainCoroutine *this) {
+static void colod_quit(ColodMainCoroutine *this) {
     g_main_loop_quit(this->ctx->mainloop);
+}
+
+static void __colod_quit(gpointer data) {
+    colod_quit(data);
 }
 
 static void do_autoquit(ColodMainCoroutine *this) {
@@ -1149,13 +1257,36 @@ static void colod_yellow_event_cb(gpointer data, ColodEvent event) {
     }
 }
 
+const ClientCallbacks colod_client_callbacks = {
+    __colod_check_health_co,
+    __colod_query_status,
+    __colod_set_peer,
+    __colod_get_peer,
+    __colod_clear_peer,
+    __colod_start_migration,
+    __colod_autoquit,
+    __colod_quit,
+    __colod_client_cont_failed,
+    __colod_yank_co,
+    __colod_execute_nocheck_co,
+    __colod_execute_co
+};
+
+void colod_client_register(ColodMainCoroutine *this) {
+    colod_main_ref(this);
+    client_register(this->ctx->listener, &colod_client_callbacks, this);
+}
+
+void colod_client_unregister(ColodMainCoroutine *this) {
+    client_unregister(this->ctx->listener, &colod_client_callbacks, this);
+    colod_main_unref(this);
+}
+
 ColodMainCoroutine *colod_main_new(const ColodContext *ctx, GError **errp) {
     ColodMainCoroutine *this;
     Coroutine *coroutine;
 
-    assert(!ctx->main_coroutine);
-
-    this = g_new0(ColodMainCoroutine, 1);
+    this = g_rc_box_new0(ColodMainCoroutine);
     coroutine = &this->coroutine;
     coroutine->cb.plain = colod_main_co;
     coroutine->cb.iofunc = colod_main_co_wrap;
@@ -1179,11 +1310,15 @@ ColodMainCoroutine *colod_main_new(const ColodContext *ctx, GError **errp) {
 
     yellow_add_notify(this->yellow_co, colod_yellow_event_cb, this);
 
+    this->watchdog = colod_watchdog_new(ctx, __colod_check_health_co, this);
+
     g_idle_add(colod_main_co, this);
     return this;
 }
 
-void colod_main_free(ColodMainCoroutine *this) {
+static void colod_main_free(gpointer _this) {
+    ColodMainCoroutine *this = _this;
+
     colod_event_queue(this, EVENT_QUIT, "teardown");
 
     yellow_del_notify(this->yellow_co, colod_yellow_event_cb, this);
@@ -1199,7 +1334,16 @@ void colod_main_free(ColodMainCoroutine *this) {
         g_main_context_iteration(g_main_context_default(), TRUE);
     }
 
+    colod_watchdog_free(this->watchdog);
+
     eventqueue_free(this->queue);
     g_free(this->peer);
-    g_free(this);
+}
+
+ColodMainCoroutine *colod_main_ref(ColodMainCoroutine *this) {
+    return g_rc_box_acquire(this);
+}
+
+void colod_main_unref(ColodMainCoroutine *this) {
+    g_rc_box_release_full(this, colod_main_free);
 }

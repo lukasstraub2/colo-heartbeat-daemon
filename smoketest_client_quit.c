@@ -59,7 +59,7 @@ static gboolean _testcase_co(Coroutine *coroutine, SmokeTestcase *this) {
 
     g_assert_false(logged);
 
-    colod_quit(this->sctx->cctx.main_coroutine);
+    g_main_loop_quit(this->sctx->cctx.mainloop);
 
     assert(!this->do_quit);
     while (!this->do_quit) {

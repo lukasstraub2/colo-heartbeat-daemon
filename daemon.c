@@ -38,6 +38,68 @@
 FILE *trace = NULL;
 gboolean do_syslog = FALSE;
 
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-parameter"
+int _daemon_check_health_co(Coroutine *coroutine, gpointer data, GError **errp) {
+    colod_error_set(errp, "Not running");
+    return -1;
+}
+
+void daemon_query_status(gpointer data, ColodState *ret) {
+    ColodContext *ctx = data;
+    *ret = ctx->last_state;
+    ret->running = FALSE;
+}
+
+void daemon_set_peer(gpointer data, const gchar *peer) {}
+
+const gchar *daemon_get_peer(gpointer data) {
+    return NULL;
+}
+
+void daemon_clear_peer(gpointer data) {}
+
+int daemon_start_migration(gpointer data) {
+    return -1;
+}
+
+void daemon_autoquit(gpointer data) {}
+void daemon_quit(gpointer data) {}
+void daemon_client_cont_failed(gpointer data) {}
+
+int _daemon_yank_co(Coroutine *coroutine, gpointer data, GError **errp) {
+    colod_error_set(errp, "Not running");
+    return -1;
+}
+
+ColodQmpResult *_daemon_execute_nocheck_co(Coroutine *coroutine, gpointer data,
+                                           GError **errp, const gchar *command) {
+    colod_error_set(errp, "Not running");
+    return NULL;
+}
+
+ColodQmpResult *_daemon_execute_co(Coroutine *coroutine, gpointer data,
+                                   GError **errp, const gchar *command) {
+    colod_error_set(errp, "Not running");
+    return NULL;
+}
+#pragma GCC diagnostic pop
+
+const ClientCallbacks daemon_client_callbacks = {
+    _daemon_check_health_co,
+    daemon_query_status,
+    daemon_set_peer,
+    daemon_get_peer,
+    daemon_clear_peer,
+    daemon_start_migration,
+    daemon_autoquit,
+    daemon_quit,
+    daemon_client_cont_failed,
+    _daemon_yank_co,
+    _daemon_execute_nocheck_co,
+    _daemon_execute_co
+};
+
 void daemon_mainloop(ColodContext *mctx) {
     const ColodContext *ctx = mctx;
     GError *local_errp = NULL;
@@ -45,6 +107,19 @@ void daemon_mainloop(ColodContext *mctx) {
     // g_main_context_default creates the global context on demand
     GMainContext *main_context = g_main_context_default();
     mctx->mainloop = g_main_loop_new(main_context, FALSE);
+
+    mctx->commands = qmp_commands_new(ctx->instance_name, ctx->base_dir, "",
+                                      "", "", "", 9000);
+
+    mctx->cpg = cpg_new(ctx->cpg, &local_errp);
+    if (!ctx->cpg) {
+        colod_syslog(LOG_ERR, "Failed to initialize cpg: %s",
+                     local_errp->message);
+        g_error_free(local_errp);
+        exit(EXIT_FAILURE);
+    }
+
+    mctx->listener = client_listener_new(ctx->mngmt_listen_fd, ctx);
 
     mctx->qmp = qmp_new(ctx->qmp_fd, ctx->qmp_yank_fd, ctx->qmp_timeout_low,
                         &local_errp);
@@ -55,36 +130,28 @@ void daemon_mainloop(ColodContext *mctx) {
         exit(EXIT_FAILURE);
     }
 
-    mctx->cpg = cpg_new(ctx->cpg, &local_errp);
-    if (!ctx->cpg) {
-        colod_syslog(LOG_ERR, "Failed to initialize cpg: %s",
-                     local_errp->message);
-        g_error_free(local_errp);
-        exit(EXIT_FAILURE);
-    }
-
-    mctx->commands = qmp_commands_new(ctx->instance_name, ctx->base_dir, "",
-                                      "", "", "", 9000);
-    mctx->main_coroutine = colod_main_new(ctx, &local_errp);
-    if (!ctx->main_coroutine) {
+    ColodMainCoroutine *main_coroutine = colod_main_new(ctx, &local_errp);
+    if (!main_coroutine) {
         colod_syslog(LOG_ERR, "Failed to initialize main coroutine: %s",
                      local_errp->message);
         g_error_free(local_errp);
         exit(EXIT_FAILURE);
     }
-    mctx->listener = client_listener_new(ctx->mngmt_listen_fd, ctx);
-    mctx->watchdog = colod_watchdog_new(ctx);
+    colod_client_register(main_coroutine);
 
     g_main_loop_run(ctx->mainloop);
     g_main_loop_unref(ctx->mainloop);
     mctx->mainloop = NULL;
 
-    colod_main_free(ctx->main_coroutine);
-    cpg_free(ctx->cpg);
-    colo_watchdog_free(ctx->watchdog);
-    client_listener_free(ctx->listener);
-    qmp_commands_free(ctx->commands);
+    colod_client_unregister(main_coroutine);
+    client_register(ctx->listener, &daemon_client_callbacks, mctx);
+
+    colod_query_status(main_coroutine, &mctx->last_state);
+    colod_main_unref(main_coroutine);
     qmp_free(ctx->qmp);
+    client_listener_free(ctx->listener);
+    cpg_free(ctx->cpg);
+    qmp_commands_free(ctx->commands);
 }
 
 static int daemon_open_mngmt(ColodContext *ctx, GError **errp) {

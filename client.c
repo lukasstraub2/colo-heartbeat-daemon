@@ -29,8 +29,8 @@ typedef struct ColodClient {
     struct Coroutine coroutine;
     QLIST_ENTRY(ColodClient) next;
     const ColodContext *ctx;
+    ColodClientListener *parent;
     GIOChannel *channel;
-    JsonNode **store;
     gboolean stopped_qemu;
     gboolean quit;
     gboolean busy;
@@ -43,7 +43,140 @@ struct ColodClientListener {
     guint listen_source_id;
     struct ColodClientHead head;
     JsonNode *store;
+
+    const ClientCallbacks *cb;
+    gpointer cb_data;
 };
+
+void client_register(ColodClientListener *this, const ClientCallbacks *cb, gpointer data) {
+    assert(!this->cb && !this->cb_data);
+    this->cb = cb;
+    this->cb_data = data;
+}
+
+void client_unregister(ColodClientListener *this, const ClientCallbacks *cb, gpointer data) {
+    assert(this->cb == cb && this->cb_data == data);
+    this->cb = NULL;
+    this->cb_data = NULL;
+}
+
+#define check_health_co(...) \
+    co_wrap(_check_health_co(__VA_ARGS__))
+static int _check_health_co(Coroutine *coroutine, ColodClientListener *this, GError **errp) {
+    struct {
+        const ClientCallbacks *cb;
+        gpointer data;
+    } *co;
+    int ret;
+
+    co_frame(co, sizeof(*co));
+    co_begin(int, -1);
+
+    CO cb = this->cb;
+    CO data = this->cb_data;
+    co_recurse(((void)__use_co_recurse, ret = CO cb->_check_health_co(coroutine, CO data, errp)));
+
+    co_end;
+
+    return ret;
+}
+
+static void query_status(ColodClientListener *this, ColodState *ret) {
+    this->cb->query_status(this->cb_data, ret);
+}
+
+static void set_peer(ColodClientListener *this, const gchar *peer) {
+    this->cb->set_peer(this->cb_data, peer);
+}
+
+static const gchar *get_peer(ColodClientListener *this) {
+    return this->cb->get_peer(this->cb_data);
+}
+
+static void clear_peer(ColodClientListener *this) {
+    this->cb->clear_peer(this->cb_data);
+}
+
+static int start_migration(ColodClientListener *this) {
+    return this->cb->start_migration(this->cb_data);
+}
+
+static void autoquit(ColodClientListener *this) {
+    this->cb->autoquit(this->cb_data);
+}
+
+static void quit(ColodClientListener *this) {
+    this->cb->quit(this->cb_data);
+}
+
+static void client_cont_failed(ColodClientListener *this){
+    this->cb->client_cont_failed(this->cb_data);
+}
+
+#define yank(...) \
+    co_wrap(_yank_co(__VA_ARGS__))
+static int _yank_co(Coroutine *coroutine, ColodClientListener *this, GError **errp){
+    struct {
+        const ClientCallbacks *cb;
+        gpointer data;
+    } *co;
+    int ret;
+
+    co_frame(co, sizeof(*co));
+    co_begin(int, -1);
+
+    CO cb = this->cb;
+    CO data = this->cb_data;
+    co_recurse(((void)__use_co_recurse, ret = CO cb->_yank_co(coroutine, CO data, errp)));
+
+    co_end;
+
+    return ret;
+}
+
+#define execute_nocheck_co(...) \
+    co_wrap(_execute_nocheck_co(__VA_ARGS__))
+static ColodQmpResult *_execute_nocheck_co(Coroutine *coroutine, ColodClientListener *this,
+                                           GError **errp, const gchar *command){
+    struct {
+        const ClientCallbacks *cb;
+        gpointer data;
+    } *co;
+    ColodQmpResult *ret;
+
+    co_frame(co, sizeof(*co));
+    co_begin(ColodQmpResult *, NULL);
+
+    CO cb = this->cb;
+    CO data = this->cb_data;
+    co_recurse(((void)__use_co_recurse, ret = CO cb->_execute_nocheck_co(coroutine, CO data, errp, command)));
+
+    co_end;
+
+    return ret;
+}
+
+#define execute_co(...) \
+    co_wrap(_execute_co(__VA_ARGS__))
+static ColodQmpResult *_execute_co(Coroutine *coroutine, ColodClientListener *this,
+                                   GError **errp, const gchar *command){
+    struct {
+        const ClientCallbacks *cb;
+        gpointer data;
+    } *co;
+    ColodQmpResult *ret;
+
+    co_frame(co, sizeof(*co));
+    co_begin(ColodQmpResult *, NULL);
+
+    CO cb = this->cb;
+    CO data = this->cb_data;
+    co_recurse(((void)__use_co_recurse, ret = CO cb->_execute_co(coroutine, CO data, errp, command)));
+
+    co_end;
+
+    return ret;
+}
 
 static ColodQmpResult *create_reply(const gchar *member) {
     ColodQmpResult *result;
@@ -68,7 +201,7 @@ static ColodQmpResult *create_error_reply(const gchar *message) {
 #define handle_query_status_co(...) \
     co_wrap(_handle_query_status_co(__VA_ARGS__))
 static ColodQmpResult *_handle_query_status_co(Coroutine *coroutine,
-                                               const ColodContext *ctx) {
+                                               ColodClientListener *this) {
     int ret;
     ColodQmpResult *result;
     ColodState state;
@@ -77,7 +210,7 @@ static ColodQmpResult *_handle_query_status_co(Coroutine *coroutine,
 
     co_begin(ColodQmpResult*, NULL);
 
-    co_recurse(ret = colod_check_health_co(coroutine, ctx->main_coroutine, &local_errp));
+    co_recurse(ret = check_health_co(coroutine, this, &local_errp));
     if (coroutine->yield) {
         return NULL;
     }
@@ -91,7 +224,7 @@ static ColodQmpResult *_handle_query_status_co(Coroutine *coroutine,
     co_end;
 
 
-    colod_query_status(ctx->main_coroutine, &state);
+    query_status(this, &state);
     gchar *reply;
     reply = g_strdup_printf("{\"return\": "
                             "{\"primary\": %s, \"replication\": %s,"
@@ -111,7 +244,7 @@ static ColodQmpResult *_handle_query_status_co(Coroutine *coroutine,
 static ColodQmpResult *handle_query_store(ColodClient *client) {
     ColodQmpResult *result;
     gchar *store_str;
-    JsonNode *store = *client->store;
+    JsonNode *store = client->parent->store;
 
     if (store) {
         store_str = json_to_string(store, FALSE);
@@ -134,30 +267,30 @@ static ColodQmpResult *handle_set_store(ColodQmpResult *request,
 
     store = get_member_node(request->json_root, "store");
 
-    if (*client->store) {
-        json_node_unref(*client->store);
+    if (client->parent->store) {
+        json_node_unref(client->parent->store);
     }
-    *client->store = json_node_ref(store);
+    client->parent->store = json_node_ref(store);
 
     return create_reply("{}");
 }
 
-static ColodQmpResult *handle_quit(const ColodContext *ctx) {
-    colod_quit(ctx->main_coroutine);
+static ColodQmpResult *handle_quit(ColodClientListener *this) {
+    quit(this);
 
     return create_reply("{}");
 }
 
-static ColodQmpResult *handle_autoquit(const ColodContext *ctx) {
-    colod_autoquit(ctx->main_coroutine);
+static ColodQmpResult *handle_autoquit(ColodClientListener *this) {
+    autoquit(this);
 
     return create_reply("{}");
 }
 
-static ColodQmpResult *handle_start_migration(const ColodContext *ctx) {
+static ColodQmpResult *handle_start_migration(ColodClientListener *this) {
     int ret;
 
-    ret = colod_start_migration(ctx->main_coroutine);
+    ret = start_migration(this);
     if (ret < 0) {
         return create_error_reply("Pending actions");
     }
@@ -252,12 +385,12 @@ static ColodQmpResult *handle_set_yank(ColodQmpResult *request,
 #define handle_yank_co(...) \
     co_wrap(_handle_yank_co(__VA_ARGS__))
 static ColodQmpResult *_handle_yank_co(Coroutine *coroutine,
-                                       const ColodContext *ctx) {
+                                       ColodClientListener *this) {
     ColodQmpResult *result;
     int ret;
     GError *local_errp = NULL;
 
-    ret = _colod_yank_co(coroutine, ctx->main_coroutine, &local_errp);
+    ret = _yank_co(coroutine, this, &local_errp);
     if (coroutine->yield) {
         return NULL;
     }
@@ -277,7 +410,7 @@ static ColodQmpResult *_handle_stop_co(Coroutine *coroutine,
     ColodQmpResult *result;
     GError *local_errp = NULL;
 
-    result = _colod_execute_co(coroutine, client->ctx->main_coroutine, &local_errp,
+    result = _execute_co(coroutine, client->parent, &local_errp,
                                "{'execute': 'stop'}\n");
     if (coroutine->yield) {
         return NULL;
@@ -299,7 +432,7 @@ static ColodQmpResult *_handle_cont_co(Coroutine *coroutine,
     ColodQmpResult *result;
     GError *local_errp = NULL;
 
-    result = _colod_execute_co(coroutine, client->ctx->main_coroutine, &local_errp,
+    result = _execute_co(coroutine, client->parent, &local_errp,
                                "{'execute': 'cont'}\n");
     if (coroutine->yield) {
         return NULL;
@@ -315,7 +448,7 @@ static ColodQmpResult *_handle_cont_co(Coroutine *coroutine,
 }
 
 static ColodQmpResult *handle_set_peer(ColodQmpResult *request,
-                                       const ColodContext *ctx) {
+                                       ColodClientListener *this) {
     const gchar *peer;
 
     if (!has_member(request->json_root, "peer")) {
@@ -323,17 +456,17 @@ static ColodQmpResult *handle_set_peer(ColodQmpResult *request,
     }
 
     peer = get_member_str(request->json_root, "peer");
-    colod_set_peer(ctx->main_coroutine, peer);
+    set_peer(this, peer);
 
     return create_reply("{}");
 }
 
-static ColodQmpResult *handle_query_peer(const ColodContext *ctx) {
+static ColodQmpResult *handle_query_peer(ColodClientListener *this) {
     ColodQmpResult *result;
     gchar *reply;
     reply = g_strdup_printf("{\"return\": "
                             "{\"peer\": \"%s\"}}\n",
-                            colod_get_peer(ctx->main_coroutine));
+                            get_peer(this));
 
     result = qmp_parse_result(reply, strlen(reply), NULL);
     assert(result);
@@ -351,6 +484,8 @@ static gboolean colod_client_co(gpointer data) {
     ColodClient *client = data;
     Coroutine *coroutine = &client->coroutine;
     gboolean ret;
+
+    assert(client->parent->cb && client->parent->cb_data);
 
     co_enter(coroutine, ret = _colod_client_co(coroutine));
     if (coroutine->yield) {
@@ -411,15 +546,15 @@ static gboolean _colod_client_co(Coroutine *coroutine) {
                 CO result = create_error_reply("Could not get exec-colod "
                                                "member");
             } else if (!strcmp(command, "query-status")) {
-                co_recurse(CO result = handle_query_status_co(coroutine, client->ctx));
+                co_recurse(CO result = handle_query_status_co(coroutine, client->parent));
             } else if (!strcmp(command, "query-store")) {
                 CO result = handle_query_store(client);
             } else if (!strcmp(command, "set-store")) {
                 CO result = handle_set_store(CO request, client);
             } else if (!strcmp(command, "quit")) {
-                CO result = handle_quit(client->ctx);
+                CO result = handle_quit(client->parent);
             } else if (!strcmp(command, "autoquit")) {
-                CO result = handle_autoquit(client->ctx);
+                CO result = handle_autoquit(client->parent);
             } else if (!strcmp(command, "set-prepare-secondary")) {
                 CO result = handle_set_prepare_secondary(CO request,
                                                          client->ctx);
@@ -430,7 +565,7 @@ static gboolean _colod_client_co(Coroutine *coroutine) {
                 CO result = handle_set_migration_switchover(CO request,
                                                             client->ctx);
             } else if (!strcmp(command, "start-migration")) {
-                CO result = handle_start_migration(client->ctx);
+                CO result = handle_start_migration(client->parent);
             } else if (!strcmp(command, "set-primary-failover")) {
                 CO result = handle_set_primary_failover(CO request,
                                                         client->ctx);
@@ -440,26 +575,26 @@ static gboolean _colod_client_co(Coroutine *coroutine) {
             } else if (!strcmp(command, "set-yank")) {
                 CO result = handle_set_yank(CO request, client->ctx);
             } else if (!strcmp(command, "yank")) {
-                co_recurse(CO result = handle_yank_co(coroutine, client->ctx));
+                co_recurse(CO result = handle_yank_co(coroutine, client->parent));
             } else if (!strcmp(command, "stop")) {
                 co_recurse(CO result = handle_stop_co(coroutine, client));
             } else if (!strcmp(command, "cont")) {
                 co_recurse(CO result = handle_cont_co(coroutine, client));
             } else if (!strcmp(command, "set-peer")) {
-                CO result = handle_set_peer(CO request, client->ctx);
+                CO result = handle_set_peer(CO request, client->parent);
             } else if (!strcmp(command, "query-peer")) {
-                CO result = handle_query_peer(client->ctx);
+                CO result = handle_query_peer(client->parent);
             } else if (!strcmp(command, "clear-peer")) {
-                colod_clear_peer(client->ctx->main_coroutine);
+                clear_peer(client->parent);
                 CO result = create_reply("{}");
             } else {
                 CO result = create_error_reply("Unknown command");
             }
         } else {
-            co_recurse(CO result = colod_execute_nocheck_co(coroutine,
-                                                            client->ctx->main_coroutine,
-                                                            &local_errp,
-                                                            CO request->line));
+            co_recurse(CO result = execute_nocheck_co(coroutine,
+                                                      client->parent,
+                                                      &local_errp,
+                                                      CO request->line));
             if (!CO result) {
                 CO result = create_error_reply(local_errp->message);
                 g_error_free(local_errp);
@@ -493,13 +628,12 @@ error_client:
     local_errp = NULL;
 
     if (client->stopped_qemu) {
-        co_recurse(CO result = colod_execute_co(coroutine, client->ctx->main_coroutine,
-                                                &local_errp,
-                                                "{'execute': 'cont'}\n"));
+        co_recurse(CO result = execute_co(coroutine, client->parent,
+                                          &local_errp, "{'execute': 'cont'}\n"));
         if (!CO result) {
             log_error(local_errp->message);
             g_error_free(local_errp);
-            colod_qemu_failed(client->ctx->main_coroutine);
+            client_cont_failed(client->parent);
         }
         qmp_result_free(CO result);
     }
@@ -524,8 +658,8 @@ static int client_new(ColodClientListener *listener, int fd, GError **errp) {
     coroutine->cb.plain = colod_client_co;
     coroutine->cb.iofunc = colod_client_co_wrap;
     client->ctx = listener->ctx;
+    client->parent = listener;
     client->channel = channel;
-    client->store = &listener->store;
     QLIST_INSERT_HEAD(&listener->head, client, next);
 
     g_io_add_watch(channel, G_IO_IN | G_IO_HUP, colod_client_co_wrap, client);

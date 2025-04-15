@@ -23,5 +23,5 @@ QemuLauncher -> stubable
   - all calls go to daemon loop, forwards either to itself or ignores if inside mainco or if inside resync
     - co_recurse() can set flag while looping in function
   - daemon loop, mainco and resync manager register themselves for callbacks
-  - make everything into callback for decoupling
+  - make everything into callback for decoupling X
 - qmp templates as singleton with custom printf format X

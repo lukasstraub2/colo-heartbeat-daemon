@@ -263,7 +263,7 @@ void _colod_assert_remove_one_source(gpointer data, const gchar *func,
 
 MyArray *my_array_new(GDestroyNotify destroy_func) {
     const unsigned alloc = 128;
-	MyArray *ret = g_atomic_rc_box_new0(MyArray);
+    MyArray *ret = g_rc_box_new0(MyArray);
     ret->array = (void **) calloc(alloc, sizeof(void **));
 	assert(ret->array);
     ret->destroy_func = destroy_func;
@@ -295,9 +295,9 @@ static void my_array_free(gpointer data) {
 }
 
 MyArray *my_array_ref(MyArray *this) {
-    return g_atomic_rc_box_acquire(this);
+    return g_rc_box_acquire(this);
 }
 
 void my_array_unref(MyArray *this) {
-    g_atomic_rc_box_release_full(this, my_array_free);
+    g_rc_box_release_full(this, my_array_free);
 }

@@ -10,6 +10,15 @@
 #ifndef BASE_TYPES_H
 #define BASE_TYPES_H
 
+#include <glib-2.0/glib.h>
+
+struct ColodState {
+    gboolean running;
+    gboolean primary;
+    gboolean replication, failed, peer_failover, peer_failed;
+};
+
+typedef struct ColodState ColodState;
 typedef struct Formater Formater;
 typedef struct QmpCommands QmpCommands;
 typedef struct ColodMainCoroutine ColodMainCoroutine;
