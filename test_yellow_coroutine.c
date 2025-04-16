@@ -53,57 +53,57 @@ int _test_co(Coroutine *coroutine, TestCoroutine *this, ColodEvent event) {
     co_frame(co, sizeof(*co));
     co_begin(int, 0);
 
-    CO source_id = g_timeout_add(160, coroutine->cb.plain, this);
+    CO source_id = g_timeout_add(160, coroutine->cb, this);
     netlink_stub_notify("eth0", FALSE);
 
     co_yield(0);
     assert(event == EVENT_YELLOW);
     g_source_remove(CO source_id);
 
-    CO source_id = g_idle_add(coroutine->cb.plain, this);
+    CO source_id = g_idle_add(coroutine->cb, this);
     co_yield(0);
     assert(!event);
 
-    CO source_id = g_timeout_add(160, coroutine->cb.plain, this);
+    CO source_id = g_timeout_add(160, coroutine->cb, this);
     netlink_stub_notify("eth0", TRUE);
 
     co_yield(0);
     assert(event == EVENT_UNYELLOW);
     g_source_remove(CO source_id);
 
-    CO source_id = g_idle_add(coroutine->cb.plain, this);
+    CO source_id = g_idle_add(coroutine->cb, this);
     co_yield(0);
     assert(!event);
 
 
 
-    CO source_id = g_timeout_add(10, coroutine->cb.plain, this);
+    CO source_id = g_timeout_add(10, coroutine->cb, this);
     netlink_stub_notify("eth0", FALSE);
 
     co_yield(0);
     assert(!event);
 
-    CO source_id = g_timeout_add(160, coroutine->cb.plain, this);
+    CO source_id = g_timeout_add(160, coroutine->cb, this);
     netlink_stub_notify("eth0", TRUE);
 
     co_yield(0);
     assert(!event);
 
-    CO source_id = g_timeout_add(160, coroutine->cb.plain, this);
+    CO source_id = g_timeout_add(160, coroutine->cb, this);
     netlink_stub_notify("eth0", FALSE);
 
     co_yield(0);
     assert(event == EVENT_YELLOW);
     g_source_remove(CO source_id);
 
-    CO source_id = g_idle_add(coroutine->cb.plain, this);
+    CO source_id = g_idle_add(coroutine->cb, this);
     co_yield(0);
     assert(!event);
 
 
 
     yellow_shutdown(this->yellow_co);
-    CO source_id = g_timeout_add(160, coroutine->cb.plain, this);
+    CO source_id = g_timeout_add(160, coroutine->cb, this);
     netlink_stub_notify("eth0", TRUE);
 
     co_yield(0);
@@ -121,13 +121,6 @@ static gboolean test_co(gpointer data) {
 
     co_enter(coroutine, _test_co(coroutine, this, 0));
     return G_SOURCE_REMOVE;
-}
-
-static gboolean test_co_wrap(
-        G_GNUC_UNUSED GIOChannel *channel,
-        G_GNUC_UNUSED GIOCondition revents,
-        gpointer data) {
-    return test_co(data);
 }
 
 static void _test_queue_event(TestCoroutine *this, ColodEvent event) {
@@ -148,8 +141,7 @@ int main(G_GNUC_UNUSED int argc, G_GNUC_UNUSED char **argv) {
     TestCoroutine _this = {0};
     TestCoroutine *this = &_this;
     Coroutine *coroutine = &this->coroutine;
-    coroutine->cb.iofunc = test_co_wrap;
-    coroutine->cb.plain = test_co;
+    coroutine->cb = test_co;
 
     this->mainloop = g_main_loop_new(g_main_context_default(), FALSE);
 
@@ -164,7 +156,7 @@ int main(G_GNUC_UNUSED int argc, G_GNUC_UNUSED char **argv) {
         return -1;
     }
 
-    g_idle_add(coroutine->cb.plain, this);
+    g_idle_add(coroutine->cb, this);
     yellow_add_notify(this->yellow_co, test_queue_event, this);
 
     g_main_loop_run(this->mainloop);

@@ -27,7 +27,7 @@ typedef struct CoroutineLock {
             break; \
         } \
         while ((lock).holder) { \
-            progress_source_add(coroutine->cb.plain, coroutine); \
+            progress_source_add(coroutine->cb, coroutine); \
             co_yield_int(G_SOURCE_REMOVE); \
         } \
         assert((lock).count == 0); \

@@ -49,7 +49,7 @@ static gboolean _testcase_co(Coroutine *coroutine, SmokeTestcase *this) {
     g_free(line);
 
     if (this->config->autoquit && !this->config->qemu_quit) {
-        g_timeout_add(500, coroutine->cb.plain, this);
+        g_timeout_add(500, coroutine->cb, this);
         co_yield_int(G_SOURCE_REMOVE);
 
         colod_shutdown_channel(sctx->qmp_ch);
@@ -58,7 +58,7 @@ static gboolean _testcase_co(Coroutine *coroutine, SmokeTestcase *this) {
 
     assert(!this->do_quit);
     while (!this->do_quit) {
-        progress_source_add(coroutine->cb.plain, this);
+        progress_source_add(coroutine->cb, this);
         co_yield_int(G_SOURCE_REMOVE);
     }
     this->quit = TRUE;
@@ -81,13 +81,6 @@ static gboolean testcase_co(gpointer data) {
     return ret;
 }
 
-static gboolean testcase_co_wrap(
-        G_GNUC_UNUSED GIOChannel *channel,
-        G_GNUC_UNUSED GIOCondition revents,
-        gpointer data) {
-    return testcase_co(data);
-}
-
 static SmokeTestcase *testcase_new(SmokeColodContext *sctx,
                                    const QuitEarlyConfig *config) {
     SmokeTestcase *this;
@@ -95,8 +88,7 @@ static SmokeTestcase *testcase_new(SmokeColodContext *sctx,
 
     this = g_new0(SmokeTestcase, 1);
     coroutine = &this->coroutine;
-    coroutine->cb.plain = testcase_co;
-    coroutine->cb.iofunc = testcase_co_wrap;
+    coroutine->cb = testcase_co;
     this->sctx = sctx;
     this->config = config;
 

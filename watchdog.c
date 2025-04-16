@@ -26,7 +26,7 @@ void colod_watchdog_refresh(ColodWatchdog *state) {
         g_source_remove(state->timer_id);
         state->timer_id = g_timeout_add_full(G_PRIORITY_LOW,
                                              state->interval,
-                                             state->coroutine.cb.plain,
+                                             state->coroutine.cb,
                                              &state->coroutine, NULL);
     }
 }
@@ -52,13 +52,6 @@ static gboolean colod_watchdog_co(gpointer data) {
     return ret;
 }
 
-static gboolean colod_watchdog_co_wrap(
-        G_GNUC_UNUSED GIOChannel *channel,
-        G_GNUC_UNUSED GIOCondition revents,
-        gpointer data) {
-    return colod_watchdog_co(data);
-}
-
 #define check_health_co(...) \
     co_wrap(_check_health_co(__VA_ARGS__))
 static int _check_health_co(Coroutine *coroutine, ColodWatchdog *this, GError **errp) {
@@ -75,7 +68,7 @@ static gboolean _colod_watchdog_co(Coroutine *coroutine) {
     while (!state->quit) {
         state->timer_id = g_timeout_add_full(G_PRIORITY_LOW,
                                              state->interval,
-                                             coroutine->cb.plain,
+                                             coroutine->cb,
                                              coroutine, NULL);
         co_yield_int(G_SOURCE_REMOVE);
         if (state->quit) {
@@ -128,8 +121,7 @@ ColodWatchdog *colod_watchdog_new(const ColodContext *ctx,
 
     state = g_new0(ColodWatchdog, 1);
     coroutine = &state->coroutine;
-    coroutine->cb.plain = colod_watchdog_co;
-    coroutine->cb.iofunc = colod_watchdog_co_wrap;
+    coroutine->cb = colod_watchdog_co;
     state->interval = ctx->watchdog_interval;
     state->cb = cb;
     state->cb_data = data;

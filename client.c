@@ -26,7 +26,7 @@
 
 
 typedef struct ColodClient {
-    struct Coroutine coroutine;
+    Coroutine coroutine;
     QLIST_ENTRY(ColodClient) next;
     const ColodContext *ctx;
     ColodClientListener *parent;
@@ -496,11 +496,6 @@ static gboolean colod_client_co(gpointer data) {
     client_free(client);
     return ret;
 }
-static gboolean colod_client_co_wrap(G_GNUC_UNUSED GIOChannel *channel,
-                                     G_GNUC_UNUSED GIOCondition revents,
-                                     gpointer data) {
-    return colod_client_co(data);
-}
 
 static gboolean _colod_client_co(Coroutine *coroutine) {
     ColodClient *client = (ColodClient *) coroutine;
@@ -655,14 +650,13 @@ static int client_new(ColodClientListener *listener, int fd, GError **errp) {
 
     client = g_new0(ColodClient, 1);
     coroutine = &client->coroutine;
-    coroutine->cb.plain = colod_client_co;
-    coroutine->cb.iofunc = colod_client_co_wrap;
+    coroutine->cb = colod_client_co;
     client->ctx = listener->ctx;
     client->parent = listener;
     client->channel = channel;
     QLIST_INSERT_HEAD(&listener->head, client, next);
 
-    g_io_add_watch(channel, G_IO_IN | G_IO_HUP, colod_client_co_wrap, client);
+    g_io_add_watch(channel, G_IO_IN | G_IO_HUP, coroutine_giofunc_cb, client);
     return 0;
 }
 

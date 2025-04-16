@@ -23,19 +23,22 @@ typedef struct CoroutineFrame {
     unsigned int line;
 } CoroutineFrame;
 
-typedef struct CoroutineCallback {
-    GSourceFunc plain;
-    GIOFunc iofunc;
-} CoroutineCallback;
-
 typedef struct Coroutine {
     int quit;
     int yield;
     void *yield_value;
     CoroutineFrame *frame;
     CoroutineFrame stack[COROUTINE_STACK_SIZE];
-    CoroutineCallback cb;
+    GSourceFunc cb;
 } Coroutine;
+
+static __attribute__((unused)) int coroutine_giofunc_cb(GIOChannel *ch, GIOCondition cond, gpointer data) {
+    (void) ch;
+    (void) cond;
+    Coroutine *coroutine = data;
+
+    return coroutine->cb(data);
+}
 
 #define co_frame(co, size) \
     do { \

@@ -205,7 +205,7 @@ static void _colod_event_queue(ColodMainCoroutine *this, ColodEvent event,
                 || eventqueue_event_interrupting(this->queue, event)) {
             colod_trace("%s:%u: Waking main coroutine\n", __func__, __LINE__);
             this->wake_source_id = g_idle_add_full(G_PRIORITY_DEFAULT_IDLE,
-                                                   this->coroutine.cb.plain, this,
+                                                   this->coroutine.cb, this,
                                                    event_wake_source_destroy_cb);
             g_source_set_name_by_id(this->wake_source_id, "wake for event");
         }
@@ -811,7 +811,7 @@ static MainState _colod_colo_running_co(Coroutine *coroutine,
             goto handle_event;
         }
 
-        CO source_id = g_timeout_add(10000, coroutine->cb.plain, coroutine);
+        CO source_id = g_timeout_add(10000, coroutine->cb, coroutine);
         g_source_set_name_by_id(CO source_id, "Waiting before failing to yellow");
         co_yield_int(G_SOURCE_REMOVE);
 
@@ -1032,13 +1032,6 @@ static gboolean colod_main_co(gpointer data) {
     colod_assert_remove_one_source(this);
     this->quit = TRUE;
     return ret;
-}
-
-static gboolean colod_main_co_wrap(
-        G_GNUC_UNUSED GIOChannel *channel,
-        G_GNUC_UNUSED GIOCondition revents,
-        gpointer data) {
-    return colod_main_co(data);
 }
 
 static gboolean _colod_main_co(Coroutine *coroutine, ColodMainCoroutine *this) {
@@ -1288,8 +1281,7 @@ ColodMainCoroutine *colod_main_new(const ColodContext *ctx, GError **errp) {
 
     this = g_rc_box_new0(ColodMainCoroutine);
     coroutine = &this->coroutine;
-    coroutine->cb.plain = colod_main_co;
-    coroutine->cb.iofunc = colod_main_co_wrap;
+    coroutine->cb = colod_main_co;
     this->ctx = ctx;
     this->qmp = ctx->qmp;
 

@@ -79,7 +79,7 @@ static int _yellow_delay_co(Coroutine *coroutine, YellowCoroutine *this,
         }
         assert(event == target_event);
 
-        CO source_id = g_timeout_add(this->timeout1, coroutine->cb.plain, this);
+        CO source_id = g_timeout_add(this->timeout1, coroutine->cb, this);
         co_yield(0);
 
         while (event == target_event) {
@@ -92,7 +92,7 @@ static int _yellow_delay_co(Coroutine *coroutine, YellowCoroutine *this,
         // No event
         yellow_send_target_message(this->cpg, target_event);
 
-        CO source_id = g_timeout_add(this->timeout2, coroutine->cb.plain, this);
+        CO source_id = g_timeout_add(this->timeout2, coroutine->cb, this);
         co_yield(0);
 
         while (event == target_event) {
@@ -146,13 +146,6 @@ static gboolean yellow_co(gpointer data) {
     return G_SOURCE_REMOVE;
 }
 
-static gboolean yellow_co_wrap(
-        G_GNUC_UNUSED GIOChannel *channel,
-        G_GNUC_UNUSED GIOCondition revents,
-        gpointer data) {
-    return yellow_co(data);
-}
-
 static void yellow_queue_event(YellowCoroutine *this, ColodEvent event) {
     Coroutine *coroutine = &this->coroutine;
 
@@ -191,8 +184,7 @@ YellowCoroutine *yellow_coroutine_new(Cpg *cpg, const ColodContext *ctx,
 
     this = g_new0(YellowCoroutine, 1);
     coroutine = &this->coroutine;
-    coroutine->cb.iofunc = yellow_co_wrap;
-    coroutine->cb.plain = yellow_co;
+    coroutine->cb = yellow_co;
     this->cpg = cpg;
     this->ctx = ctx;
     this->timeout1 = timeout1;

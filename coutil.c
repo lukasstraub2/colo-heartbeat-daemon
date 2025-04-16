@@ -29,7 +29,7 @@ int _colod_channel_read_line_timeout_co(Coroutine *coroutine,
     co_begin(int, 0);
 
     if (timeout) {
-        CO timeout_source_id = g_timeout_add(timeout, coroutine->cb.plain,
+        CO timeout_source_id = g_timeout_add(timeout, coroutine->cb,
                                              coroutine);
         g_source_set_name_by_id(CO timeout_source_id, "channel read timeout");
     }
@@ -41,7 +41,7 @@ int _colod_channel_read_line_timeout_co(Coroutine *coroutine,
                 ret == G_IO_STATUS_AGAIN) {
             CO io_source_id = g_io_add_watch(channel,
                                              G_IO_IN | G_IO_HUP,
-                                             coroutine->cb.iofunc,
+                                             coroutine_giofunc_cb,
                                              coroutine);
             g_source_set_name_by_id(CO io_source_id, "channel read io watch");
             co_yield_int(G_SOURCE_REMOVE);
@@ -105,7 +105,7 @@ int _colod_channel_write_timeout_co(Coroutine *coroutine,
     co_begin(int, 0);
 
     if (timeout) {
-        CO timeout_source_id = g_timeout_add(timeout, coroutine->cb.plain,
+        CO timeout_source_id = g_timeout_add(timeout, coroutine->cb,
                                              coroutine);
         g_source_set_name_by_id(CO timeout_source_id, "channel write timeout");
     }
@@ -121,7 +121,7 @@ int _colod_channel_write_timeout_co(Coroutine *coroutine,
         if (ret == G_IO_STATUS_NORMAL || ret == G_IO_STATUS_AGAIN) {
             if (write_len == 0) {
                 CO io_source_id = g_io_add_watch(channel, G_IO_OUT | G_IO_HUP,
-                                                 coroutine->cb.iofunc,
+                                                 coroutine_giofunc_cb,
                                                  coroutine);
                 g_source_set_name_by_id(CO io_source_id, "channel write io watch");
                 co_yield_int(G_SOURCE_REMOVE);
@@ -151,7 +151,7 @@ int _colod_channel_write_timeout_co(Coroutine *coroutine,
 
         if (ret == G_IO_STATUS_AGAIN) {
             CO io_source_id = g_io_add_watch(channel, G_IO_OUT | G_IO_HUP,
-                                             coroutine->cb.iofunc,
+                                             coroutine_giofunc_cb,
                                              coroutine);
             g_source_set_name_by_id(CO io_source_id, "channel flush io watch");
             co_yield_int(G_SOURCE_REMOVE);

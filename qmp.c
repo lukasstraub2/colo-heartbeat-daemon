@@ -225,7 +225,7 @@ static ColodQmpResult *_qmp_read_line_co(Coroutine *coroutine,
             }
             qmp_result_free(result);
             if (!channel->discard_events) {
-                g_idle_add(coroutine->cb.plain, coroutine);
+                g_idle_add(coroutine->cb, coroutine);
                 co_yield_int(G_SOURCE_REMOVE);
             }
             continue;
@@ -424,13 +424,6 @@ static gboolean qmp_handshake_readable_co(gpointer data) {
     return ret;
 }
 
-static gboolean qmp_handshake_readable_co_wrap(
-        G_GNUC_UNUSED GIOChannel *channel,
-        G_GNUC_UNUSED GIOCondition revents,
-        gpointer data) {
-    return qmp_handshake_readable_co(data);
-}
-
 static gboolean _qmp_handshake_readable_co(Coroutine *coroutine) {
     QmpCoroutine *qmpco = (QmpCoroutine *) coroutine;
     ColodQmpState *qmp = qmpco->state;
@@ -483,8 +476,7 @@ static Coroutine *qmp_handshake_coroutine(ColodQmpState *state,
 
     qmpco = g_new0(QmpCoroutine, 1);
     coroutine = &qmpco->coroutine;
-    coroutine->cb.plain = qmp_handshake_readable_co;
-    coroutine->cb.iofunc = qmp_handshake_readable_co_wrap;
+    coroutine->cb = qmp_handshake_readable_co;
     qmpco->state = state;
     qmpco->channel = channel;
 
@@ -510,7 +502,7 @@ static void qmp_wait_event_cb(gpointer data, ColodQmpResult *result) {
 
     if (object_matches(result->json_root, state->match)) {
         state->fired = TRUE;
-        g_idle_add_full(G_PRIORITY_HIGH, state->coroutine->cb.plain,
+        g_idle_add_full(G_PRIORITY_HIGH, state->coroutine->cb,
                         state->coroutine, NULL);
         qmp_del_notify_event(state->state, qmp_wait_event_cb, state);
     }
@@ -538,7 +530,7 @@ int _qmp_wait_event_co(Coroutine *coroutine, ColodQmpState *state,
     qmp_add_notify_event(state, qmp_wait_event_cb, CO wait_state);
     CO timeout_source_id = 0;
     if (timeout) {
-        CO timeout_source_id = g_timeout_add(timeout, coroutine->cb.plain,
+        CO timeout_source_id = g_timeout_add(timeout, coroutine->cb,
                                              coroutine);
     }
 
@@ -585,13 +577,6 @@ static gboolean qmp_event_co(gpointer data) {
     return ret;
 }
 
-static gboolean qmp_event_co_wrap(
-        G_GNUC_UNUSED GIOChannel *channel,
-        G_GNUC_UNUSED GIOCondition revents,
-        gpointer data) {
-    return qmp_event_co(data);
-}
-
 static gboolean _qmp_event_co(Coroutine *coroutine) {
     QmpCoroutine *qmpco = (QmpCoroutine *) coroutine;
     QmpChannel *channel = qmpco->channel;
@@ -602,7 +587,7 @@ static gboolean _qmp_event_co(Coroutine *coroutine) {
 
     while (TRUE) {
         g_io_add_watch_full(channel->channel, G_PRIORITY_DEFAULT_IDLE,
-                            G_IO_IN | G_IO_HUP, qmp_event_co_wrap, coroutine,
+                            G_IO_IN | G_IO_HUP, coroutine_giofunc_cb, coroutine,
                             NULL);
         co_yield_int(G_SOURCE_REMOVE);
 
@@ -660,13 +645,12 @@ static Coroutine *qmp_event_coroutine(ColodQmpState *state,
 
     qmpco = g_new0(QmpCoroutine, 1);
     coroutine = &qmpco->coroutine;
-    coroutine->cb.plain = qmp_event_co;
-    coroutine->cb.iofunc = qmp_event_co_wrap;
+    coroutine->cb = qmp_event_co;
     qmpco->state = state;
     qmpco->channel = channel;
 
     g_io_add_watch_full(channel->channel, G_PRIORITY_DEFAULT_IDLE,
-                        G_IO_IN | G_IO_HUP, qmp_event_co_wrap, coroutine,
+                        G_IO_IN | G_IO_HUP, coroutine_giofunc_cb, coroutine,
                         NULL);
 
     state->inflight++;

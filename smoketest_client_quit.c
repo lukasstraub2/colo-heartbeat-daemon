@@ -44,7 +44,7 @@ static gboolean _testcase_co(Coroutine *coroutine, SmokeTestcase *this) {
 
     co_begin(gboolean, G_SOURCE_CONTINUE);
 
-    g_timeout_add(200, coroutine->cb.plain, this);
+    g_timeout_add(200, coroutine->cb, this);
     co_yield_int(G_SOURCE_REMOVE);
 
     logged = FALSE;
@@ -54,7 +54,7 @@ static gboolean _testcase_co(Coroutine *coroutine, SmokeTestcase *this) {
         g_io_channel_shutdown(sctx->client_ch, FALSE, NULL);
     }
 
-    g_timeout_add(10, coroutine->cb.plain, this);
+    g_timeout_add(10, coroutine->cb, this);
     co_yield_int(G_SOURCE_REMOVE);
 
     g_assert_false(logged);
@@ -63,7 +63,7 @@ static gboolean _testcase_co(Coroutine *coroutine, SmokeTestcase *this) {
 
     assert(!this->do_quit);
     while (!this->do_quit) {
-        progress_source_add(coroutine->cb.plain, this);
+        progress_source_add(coroutine->cb, this);
         co_yield_int(G_SOURCE_REMOVE);
     }
     this->quit = TRUE;
@@ -86,13 +86,6 @@ static gboolean testcase_co(gpointer data) {
     return ret;
 }
 
-static gboolean testcase_co_wrap(
-        G_GNUC_UNUSED GIOChannel *channel,
-        G_GNUC_UNUSED GIOCondition revents,
-        gpointer data) {
-    return testcase_co(data);
-}
-
 static SmokeTestcase *testcase_new(SmokeColodContext *sctx,
                                    const QuitEarlyConfig *config) {
     SmokeTestcase *this;
@@ -100,8 +93,7 @@ static SmokeTestcase *testcase_new(SmokeColodContext *sctx,
 
     this = g_new0(SmokeTestcase, 1);
     coroutine = &this->coroutine;
-    coroutine->cb.plain = testcase_co;
-    coroutine->cb.iofunc = testcase_co_wrap;
+    coroutine->cb = testcase_co;
     this->sctx = sctx;
     this->config = config;
 

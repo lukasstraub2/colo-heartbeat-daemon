@@ -58,13 +58,6 @@ static gboolean colod_raise_timeout_co(gpointer data) {
     return ret;
 }
 
-static gboolean colod_raise_timeout_co_wrap(
-        G_GNUC_UNUSED GIOChannel *channel,
-        G_GNUC_UNUSED GIOCondition revents,
-        gpointer data) {
-    return colod_raise_timeout_co(data);
-}
-
 void colod_raise_timeout_coroutine_free(ColodRaiseCoroutine **ptr) {
     if (!*ptr) {
         return;
@@ -91,8 +84,7 @@ void colod_raise_timeout_coroutine(ColodRaiseCoroutine **ptr,
 
     this = g_new0(ColodRaiseCoroutine, 1);
     coroutine = &this->coroutine;
-    coroutine->cb.plain = colod_raise_timeout_co;
-    coroutine->cb.iofunc = colod_raise_timeout_co_wrap;
+    coroutine->cb = colod_raise_timeout_co;
     this->qmp = qmp;
     this->ctx = ctx;
     this->ptr = ptr;
