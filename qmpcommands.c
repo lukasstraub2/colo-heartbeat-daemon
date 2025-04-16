@@ -204,7 +204,9 @@ static MyArray *qmp_commands_format_cmdline(const QmpCommands *this,
                                             const MyArray *entry,
                                             const char *address,
                                             const char *disk_size) {
-    return _qmp_commands_format(this, FALSE, entry, address, disk_size);
+    MyArray *ret = _qmp_commands_format(this, FALSE, entry, address, disk_size);
+    my_array_append(ret, NULL);
+    return ret;
 }
 
 MyArray *qmp_commands_cmdline(QmpCommands *this, const char *address,
@@ -226,7 +228,6 @@ MyArray *qmp_commands_cmdline(QmpCommands *this, const char *address,
     MyArray *ret = qmp_commands_format_cmdline(this, array, address, disk_size);
     my_array_unref(array);
 
-    my_array_append(ret, NULL);
     return ret;
 }
 
