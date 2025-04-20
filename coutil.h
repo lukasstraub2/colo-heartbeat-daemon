@@ -13,6 +13,7 @@
 #include <glib-2.0/glib.h>
 
 #include "coroutine.h"
+#include "util.h"
 
 typedef struct CoroutineLock {
     Coroutine *holder;
@@ -43,6 +44,22 @@ typedef struct CoroutineLock {
             (lock).holder = NULL; \
         } \
     } while(0)
+
+#define colod_wait_co(...) \
+    co_wrap(_colod_wait_co(__VA_ARGS__))
+
+#define colod_execute_sync_timeout_co(...) \
+    co_wrap(_colod_execute_sync_timeout_co(__VA_ARGS__))
+
+#define colod_execute_sync_co(...) \
+    co_wrap(_colod_execute_sync_co(__VA_ARGS__))
+
+int _colod_wait_co(Coroutine *coroutine, GPid pid, guint timeout, GError **errp);
+
+int _colod_execute_sync_timeout_co(Coroutine *coroutine, MyArray *argv,
+                                   guint timeout, GError **errp);
+
+int _colod_execute_sync_co(Coroutine *coroutine, MyArray *argv, GError **errp);
 
 #define colod_channel_read_line_timeout_co(...) \
     co_wrap(_colod_channel_read_line_timeout_co(__VA_ARGS__))

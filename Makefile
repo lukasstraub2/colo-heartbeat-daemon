@@ -10,7 +10,7 @@ common_objects=util.o qemu_util.o json_util.o coutil.o qmp.o client.o netlink.o 
 
 all: colod check
 
-colod: $(common_objects) cpg.o colod.o
+colod: $(common_objects) native_qemulauncher.o cpg.o colod.o
 	$(CC) -o $@ $^ $(CFLAGS) $(CPG_LDFLAGS) $(LDFLAGS)
 
 smoketest_quit_early: $(common_objects) stub_cpg.o smoke_util.o smoketest_quit_early.o smoketest.o
@@ -31,6 +31,9 @@ test_myarray: util.o test_myarray.o
 test_qmpcommands: util.o formater.o qmpcommands.o test_qmpcommands.o
 	$(CC) -o $@ $^ $(CFLAGS) $(LDFLAGS)
 
+test_native_qemulauncher: util.o formater.o qmpcommands.o json_util.o coutil.o qmp.o native_qemulauncher.o test_native_qemulauncher.o
+	$(CC) -o $@ $^ $(CFLAGS) $(LDFLAGS)
+
 io_watch_test: util.o io_watch_test.o
 	$(CC) -o $@ $^ $(CFLAGS) $(LDFLAGS)
 
@@ -39,8 +42,8 @@ netlink_test: util.o netlink.o netlink_test.o
 
 .PHONY: clean check
 
-check: smoketest_quit_early smoketest_client_quit test_eventqueue test_yellow_coroutine netlink_test test_myarray test_qmpcommands
+check: smoketest_quit_early smoketest_client_quit test_eventqueue test_yellow_coroutine netlink_test test_myarray test_qmpcommands test_native_qemulauncher
 	$(foreach EXEC,$^, echo "./${EXEC}"; G_DEBUG=fatal-warnings ./${EXEC} || exit 1;)
 
 clean:
-	rm -f *.o colod smoketest_quit_early smoketest_client_quit test_eventqueue io_watch_test netlink_test test_myarray test_qmpcommands
+	rm -f *.o colod smoketest_quit_early smoketest_client_quit test_eventqueue io_watch_test netlink_test test_myarray test_qmpcommands test_native_qemulauncher

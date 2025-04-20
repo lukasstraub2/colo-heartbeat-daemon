@@ -18,6 +18,7 @@ struct ColodState {
     gboolean replication, failed, peer_failover, peer_failed;
 };
 
+typedef struct QemuLauncher QemuLauncher;
 typedef struct ColodState ColodState;
 typedef struct Formater Formater;
 typedef struct QmpCommands QmpCommands;

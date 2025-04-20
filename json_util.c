@@ -56,6 +56,16 @@ const gchar *get_member_member_str(JsonNode *node, const gchar *member1,
     return json_object_get_string_member(object, member2);
 }
 
+long get_member_member_int(JsonNode *node, const gchar *member1,
+                           const gchar *member2) {
+    JsonObject *object;
+
+    assert(JSON_NODE_HOLDS_OBJECT(node));
+    object = json_node_get_object(node);
+    object = json_object_get_object_member(object, member1);
+    return json_object_get_int_member(object, member2);
+}
+
 gboolean object_matches(JsonNode *node, JsonNode *match) {
     JsonObject *object, *match_object;
     JsonObjectIter iter;

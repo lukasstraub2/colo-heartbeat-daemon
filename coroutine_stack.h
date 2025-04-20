@@ -40,6 +40,15 @@ static __attribute__((unused)) int coroutine_giofunc_cb(GIOChannel *ch, GIOCondi
     return coroutine->cb(data);
 }
 
+static __attribute__((unused)) void coroutine_wait_cb(GPid pid, gint status, gpointer data) {
+	(void) pid;
+	(void) status;
+	Coroutine *coroutine = data;
+
+	coroutine->cb(data);
+	g_spawn_close_pid(pid);
+}
+
 #define co_frame(co, size) \
     do { \
         _Static_assert((size) <= COROUTINE_FRAME_SIZE, "size <= COROUTINE_FRAME_SIZE failed"); \

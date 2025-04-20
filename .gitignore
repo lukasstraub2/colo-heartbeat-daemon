@@ -7,4 +7,5 @@ test_eventqueue
 test_yellow_coroutine
 test_myarray
 test_qmpcommands
+test_native_qemulauncher
 *.o

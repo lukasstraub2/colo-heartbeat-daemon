@@ -197,7 +197,6 @@ int os_daemonize(void)
         exit(EXIT_FAILURE);
     }
 
-    signal(SIGCHLD, SIG_IGN);
     signal(SIGHUP, SIG_IGN);
 
     pid = fork();
