@@ -8,13 +8,13 @@ daemon loop:
 - deletes mainco
 - loop
 
-QemuLauncher -> stubable
-- returns qmp
+QemuLauncher -> stubable X
+- returns qmp X
 - qemu dead callback
 - Optionals
 - Keep MainCo as a function
-  -> returns FAILED, REBOOT, SHUTDOWN, DEMOTED
-  - put watchdog in mainco
+  -> returns FAILED, REBOOT, SHUTDOWN, DEMOTED, PROMOTE
+  - put watchdog in mainco X
 - put resync in it's own file -> reusable for HA
 - Command Event
 - mngmt and cpg:
