@@ -16,7 +16,7 @@
 #include <glib-2.0/glib.h>
 
 #define COROUTINE_FRAME_SIZE (7*8)
-#define COROUTINE_STACK_SIZE 16
+#define COROUTINE_STACK_SIZE 32
 
 typedef struct CoroutineFrame {
     char data[COROUTINE_FRAME_SIZE];

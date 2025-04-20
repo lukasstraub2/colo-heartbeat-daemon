@@ -208,7 +208,7 @@ static int formater_format_one(Formater *this, MyArray *out, const char *str) {
     g_string_replace(command, "@@LISTEN_ADDRESS@@", this->listen_address, 0);
     g_string_replace(command, "@@QEMU_BINARY@@", this->qemu_binary, 0);
     g_string_replace(command, "@@QEMU_IMG_BINARY@@", this->qemu_img_binary, 0);
-    g_string_replace(command, "@@DISK_SIZE", this->disk_size, 0);
+    g_string_replace(command, "@@DISK_SIZE@@", this->disk_size, 0);
 
     g_string_replace(command, "@@ACTIVE_IMAGE@@", this->active_image, 0);
     g_string_replace(command, "@@HIDDEN_IMAGE@@", this->hidden_image, 0);
