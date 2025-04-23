@@ -45,6 +45,9 @@ void qmp_commands_set_mig_prop(QmpCommands *this, JsonNode *prop);
 void qmp_commands_set_throttle_prop(QmpCommands *this, JsonNode *prop);
 void qmp_commands_set_blk_mirror_prop(QmpCommands *this, JsonNode *prop);
 void qmp_commands_set_qemu_options(QmpCommands *this, JsonNode *prop);
+int qmp_commands_set_qemu_options_str(QmpCommands *this, const char *_qemu_options, GError **errp);
+
+int qmp_commands_read_config(QmpCommands *this, const char *config_str, const char *qemu_options, GError **errp);
 
 QmpCommands *qmp_commands_new(const char *instance_name, const char *base_dir,
                               const char *active_hidden_dir,

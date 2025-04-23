@@ -1,0 +1,6 @@
+{
+	"qemu-options-str": ["a ", "b", " a", "b"],
+	"colo-compare-options": {"someprop": "this will be overwritten"},
+	"migration-capabilities": [{"colo_comp_prop": "lol"}],
+	"blockdev-mirror-arguments": {"blk_prop":"lol"}
+}

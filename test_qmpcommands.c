@@ -251,6 +251,52 @@ static void test_j() {
     qmp_commands_free(commands);
 }
 
+static void test_k() {
+    QmpCommands *commands = test_qmp_commands_new();
+    int ret = qmp_commands_set_qemu_options_str(commands, "a b", NULL);
+    assert(ret == 0);
+
+    MyArray *array = qmp_commands_cmdline(commands, NULL, NULL,
+                                          "@@QEMU_OPTIONS@@", NULL);
+    assert(array->size == 3);
+    assert(!strcmp(array->array[0], "a"));
+    assert(!strcmp(array->array[1], "b"));
+    assert(array->array[2] == NULL);
+    my_array_unref(array);
+
+    qmp_commands_free(commands);
+}
+
+static void test_l() {
+    QmpCommands *commands = test_qmp_commands_new();
+    int ret;
+
+    ret = qmp_commands_read_config(commands,
+                                   "{'include': 'test/include.json', "
+                                   "'colo-compare-options': {'colo_comp_prop': 'lol'}}",
+                                   "override this", NULL);
+    assert(ret == 0);
+
+    MyArray *array = qmp_commands_adhoc(commands,
+        "@@DECL_COMP_PROP@@ {\"test\": \"test\"}",
+        "@@COMP_PROP@@",
+        "@@MIG_CAP@@",
+        "@@DECL_BLK_MIRROR_PROP@@ {\"test\": \"test\"}",
+        "{'execute': 'blockdev-mirror', 'arguments': @@BLK_MIRROR_PROP@@}",
+        "@@QEMU_OPTIONS@@",
+        NULL);
+    assert(array->size == 6);
+    assert(!strcmp(array->array[0], "{\"test\":\"test\",\"colo_comp_prop\":\"lol\"}\n"));
+    assert(!strcmp(array->array[1], "[{\"colo_comp_prop\":\"lol\"}]\n"));
+    assert(!strcmp(array->array[2], "{'execute': 'blockdev-mirror', 'arguments': {\"test\":\"test\",\"blk_prop\":\"lol\"}}\n"));
+    assert(!strcmp(array->array[3], "a"));
+    assert(!strcmp(array->array[4], "b"));
+    assert(!strcmp(array->array[5], "ab"));
+    my_array_unref(array);
+
+    qmp_commands_free(commands);
+}
+
 int main(G_GNUC_UNUSED int argc, G_GNUC_UNUSED char **argv) {
     test_a();
     test_b();
@@ -263,6 +309,8 @@ int main(G_GNUC_UNUSED int argc, G_GNUC_UNUSED char **argv) {
     test_h();
     test_i();
     test_j();
+    test_k();
+    test_l();
 
     return 0;
 }

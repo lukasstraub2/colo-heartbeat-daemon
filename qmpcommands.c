@@ -350,6 +350,229 @@ void qmp_commands_set_qemu_options(QmpCommands *this, JsonNode *prop) {
     this->qemu_options = qmp_commands_set_array(prop);
 }
 
+static void _json_object_update(JsonObject* object G_GNUC_UNUSED,
+                                const gchar* member_name,
+                                JsonNode* member_node, gpointer user_data) {
+    JsonObject *to = user_data;
+
+    json_object_set_member(to, member_name, json_node_ref(member_node));
+};
+
+static void json_object_update(JsonObject *to, JsonObject *from) {
+    json_object_foreach_member(from, _json_object_update, to);
+}
+
+static JsonNode* _parse_config(const char* config_str, GError** errp) {
+    JsonObject* object = NULL;
+
+    JsonNode* node = json_from_string(config_str, errp);
+    if (!node) {
+        return NULL;
+    }
+
+    if (!JSON_NODE_HOLDS_OBJECT(node)) {
+        json_node_unref(node);
+        colod_error_set(errp, "not an object")
+        return NULL;
+    }
+
+    object = json_node_get_object(node);
+    if (json_object_has_member(object, "include")) {
+        JsonNode* include_node = json_object_get_member(object, "include");
+
+        if (!JSON_NODE_HOLDS_VALUE(include_node) || json_node_get_value_type(include_node) != G_TYPE_STRING) {
+            json_node_unref(node);
+            colod_error_set(errp, "invalid include member")
+            return NULL;
+        }
+
+        const char* include_path = json_node_get_string(include_node);
+        gchar* include_str_content = NULL;
+
+        int ret = g_file_get_contents(include_path, &include_str_content, NULL, errp);
+        if (!ret) {
+            json_node_unref(node);
+            return NULL;
+        }
+
+        JsonNode* included_node = _parse_config(include_str_content, errp);
+        g_free(include_str_content);
+        if (!included_node) {
+            json_node_unref(node);
+            return NULL;
+        }
+
+        assert(JSON_NODE_HOLDS_OBJECT(included_node));
+
+        JsonObject* included_object = json_node_get_object(included_node);
+        json_object_update(included_object, object);
+
+        json_object_remove_member(included_object, "include");
+
+        json_node_unref(node);
+        node = included_node;
+    }
+
+    return node;
+}
+
+static JsonNode* parse_config(const char* config_str, const char* qemu_options, GError** errp) {
+    JsonObject* config = json_object_new();
+
+    json_object_set_string_member(config, "qemu-options-str", qemu_options);
+    json_object_set_boolean_member(config, "vnet-hdr", FALSE);
+    json_object_set_boolean_member(config, "filter-rewriter", TRUE);
+    json_object_set_object_member(config, "colo-compare-options", json_object_new());
+    json_object_set_object_member(config, "migration-parameters", json_object_new());
+    json_object_set_array_member(config, "migration-capabilities", json_array_new());
+    json_object_set_object_member(config, "throttle-limits", json_object_new());
+    json_object_set_object_member(config, "blockdev-mirror-arguments", json_object_new());
+
+    JsonNode* parsed_node = _parse_config(config_str, errp);
+    if (!parsed_node) {
+        json_object_unref(config);
+        return NULL;
+    }
+
+    assert(JSON_NODE_HOLDS_OBJECT(parsed_node));
+    JsonObject* parsed_object = json_node_get_object(parsed_node);
+    json_object_update(config, parsed_object);
+    json_node_unref(parsed_node);
+
+    if (json_object_has_member(config, "qemu-options-str")) {
+        JsonNode* qemu_options_node = json_object_get_member(config, "qemu-options-str");
+        if (JSON_NODE_HOLDS_ARRAY(qemu_options_node)) {
+            JsonArray* qemu_options_array = json_node_get_array(qemu_options_node);
+            GString* joined_string = g_string_new("");
+            guint len = json_array_get_length(qemu_options_array);
+            for (guint i = 0; i < len; i++) {
+                JsonNode* element_node = json_array_get_element(qemu_options_array, i);
+                if (JSON_NODE_HOLDS_VALUE(element_node) && json_node_get_value_type(element_node) == G_TYPE_STRING) {
+                    g_string_append(joined_string, json_node_get_string(element_node));
+                }
+            }
+            json_object_set_string_member(config, "qemu-options-str", joined_string->str);
+            g_string_free(joined_string, TRUE);
+        }
+    }
+
+    JsonNode *ret = json_node_alloc();
+    return json_node_init_object(ret, config);
+}
+
+int qmp_commands_set_qemu_options_str(QmpCommands *this, const char *_qemu_options, GError **errp) {
+    int len;
+    char **argv;
+    int ret;
+
+    ret = g_shell_parse_argv(_qemu_options, &len, &argv, errp);
+    if (!ret) {
+        return -1;
+    }
+
+    JsonNode *qemu_options = json_node_alloc();
+    JsonArray *array = json_array_sized_new(len);
+    json_node_init_array(qemu_options, array);
+
+    for (int i = 0; i < len; i++) {
+        json_array_add_string_element(array, argv[i]);
+    }
+
+    qmp_commands_set_qemu_options(this, qemu_options);
+    json_node_unref(qemu_options);
+
+    g_strfreev(argv);
+    return 0;
+}
+
+static int check_config(JsonNode *config, GError **errp) {
+    if (!JSON_NODE_HOLDS_OBJECT(config)) {
+        colod_error_set(errp, "config must be an object");
+        return -1;
+    }
+
+    JsonObject *object = json_node_get_object(config);
+    JsonNode *node;
+
+    node = json_object_get_member(object, "qemu-options-str");
+    if (json_node_get_value_type(node) != G_TYPE_STRING) {
+        colod_error_set(errp, "qemu-options-str must be a string");
+        return -1;
+    }
+
+    node = json_object_get_member(object, "filter-rewriter");
+    if (json_node_get_value_type(node) != G_TYPE_BOOLEAN) {
+        colod_error_set(errp, "filter-rewriter must be a boolean");
+        return -1;
+    }
+
+    node = json_object_get_member(object, "colo-compare-options");
+    if (!JSON_NODE_HOLDS_OBJECT(node)) {
+        colod_error_set(errp, "colo-compare-options must be an object");
+        return -1;
+    }
+
+    node = json_object_get_member(object, "migration-parameters");
+    if (!JSON_NODE_HOLDS_OBJECT(node)) {
+        colod_error_set(errp, "migration-parameters must be an object");
+        return -1;
+    }
+
+    node = json_object_get_member(object, "migration-capabilities");
+    if (!JSON_NODE_HOLDS_ARRAY(node)) {
+        colod_error_set(errp, "migration-capabilities must be a list");
+        return -1;
+    }
+
+    node = json_object_get_member(object, "throttle-limits");
+    if (!JSON_NODE_HOLDS_OBJECT(node)) {
+        colod_error_set(errp, "throttle-limits must be an object");
+        return -1;
+    }
+
+    node = json_object_get_member(object, "blockdev-mirror-arguments");
+    if (!JSON_NODE_HOLDS_OBJECT(node)) {
+        colod_error_set(errp, "blockdev-mirror-arguments must be an object");
+        return -1;
+    }
+
+    return 0;
+}
+
+int qmp_commands_read_config(QmpCommands *this, const char *config_str, const char *qemu_options, GError **errp) {
+    int ret;
+    JsonNode *config = parse_config(config_str, qemu_options, errp);
+    if (!config) {
+        return -1;
+    }
+
+    ret = check_config(config, errp);
+    if (ret < 0) {
+        json_node_unref(config);
+        return -1;
+    }
+
+    JsonObject *object = json_node_get_object(config);
+
+    this->filter_rewriter = json_object_get_boolean_member(object, "filter-rewriter");
+
+    ret = qmp_commands_set_qemu_options_str(this, json_object_get_string_member(object, "qemu-options-str"),
+                                                errp);
+    if (ret < 0) {
+        json_node_unref(config);
+        return -1;
+    }
+
+    qmp_commands_set_comp_prop(this, json_object_get_member(object, "colo-compare-options"));
+    qmp_commands_set_mig_cap(this, json_object_get_member(object, "migration-capabilities"));
+    qmp_commands_set_mig_prop(this, json_object_get_member(object, "migration-parameters"));
+    qmp_commands_set_throttle_prop(this, json_object_get_member(object, "throttle-limits"));
+    qmp_commands_set_blk_mirror_prop(this, json_object_get_member(object, "blockdev-mirror-arguments"));
+
+    json_node_unref(config);
+    return 0;
+}
+
 QmpCommands *qmp_commands_new(const char *instance_name, const char *base_dir,
                               const char *active_hidden_dir,
                               const char *listen_address,
