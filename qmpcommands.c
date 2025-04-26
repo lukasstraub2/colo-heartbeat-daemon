@@ -30,6 +30,7 @@ struct QmpCommands {
     JsonNode *throttle_prop;
     JsonNode *blk_mirror_prop;
     JsonNode *qemu_options;
+    JsonNode *yank_instances;
 
     MyArray *qemu_primary, *qemu_secondary;
     MyArray *qemu_dummy;
@@ -348,6 +349,15 @@ void qmp_commands_set_blk_mirror_prop(QmpCommands *this, JsonNode *prop) {
 void qmp_commands_set_qemu_options(QmpCommands *this, JsonNode *prop) {
     qmp_commands_node_unref(this->qemu_options);
     this->qemu_options = qmp_commands_set_array(prop);
+}
+
+void qmp_commands_set_yank_instances(QmpCommands *this, JsonNode *prop) {
+    qmp_commands_node_unref(this->yank_instances);
+    this->yank_instances = qmp_commands_set_array(prop);
+}
+
+JsonNode *qmp_commands_get_yank_instances(QmpCommands *this) {
+    return json_node_ref(this->yank_instances);
 }
 
 static void _json_object_update(JsonObject* object G_GNUC_UNUSED,
@@ -703,6 +713,13 @@ QmpCommands *qmp_commands_new(const char *instance_name, const char *base_dir,
         "{'execute': 'chardev-remove', 'arguments': {'id': 'mirror0'}}",
         "{'execute': 'chardev-remove', 'arguments': {'id': 'comp_sec_in0'}}",
         NULL);
+
+    this->yank_instances = json_from_string(
+                "[{'type': 'block-node', 'node-name': 'nbd0'}, "
+                "{'type': 'chardev', 'id': 'mirror0'}, "
+                "{'type': 'chardev', 'id': 'comp_sec_in0'}, "
+                "{'type': 'migration'}]", NULL);
+    assert(this->yank_instances);
 
     return this;
 }

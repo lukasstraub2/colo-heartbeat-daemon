@@ -146,6 +146,10 @@ static ColodQmpState *_qemu_launcher_launch_co(Coroutine *coroutine, QemuLaunche
             return NULL;
         }
 
+        JsonNode *yank_instances = qmp_commands_get_yank_instances(this->commands);
+        qmp_set_yank_instances(qmp, yank_instances);
+        json_node_unref(yank_instances);
+
         return qmp;
     }
 

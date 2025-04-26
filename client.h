@@ -16,20 +16,32 @@
 #include "daemon.h"
 #include "main_coroutine.h"
 
+typedef struct MyTimeout MyTimeout;
+
+guint my_timeout_remaining_ms(MyTimeout *this);
+guint my_timeout_remaining_minus_ms(MyTimeout *this, guint minus);
+MyTimeout *my_timeout_new(guint timeout_ms);
+void my_timeout_free(gpointer data);
+MyTimeout *my_timeout_ref(MyTimeout *this);
+void my_timeout_unref(MyTimeout *this);
+
 typedef struct ClientCallbacks ClientCallbacks;
 
 struct ClientCallbacks {
-    int (*_check_health_co)(Coroutine *coroutine, gpointer data, GError **errp);
     void (*query_status)(gpointer data, ColodState *ret);
+    int (*_check_health_co)(Coroutine *coroutine, gpointer data, GError **errp);
 
-    void (*set_peer)(gpointer data, const gchar *peer);
-    const gchar *(*get_peer)(gpointer data);
-    void (*clear_peer)(gpointer data);
+    int (*_set_peer_co)(Coroutine *coroutine, gpointer data, const gchar *peer);
+    const gchar *(*_get_peer_co)(Coroutine *coroutine, gpointer data);
+    int (*_clear_peer_co)(Coroutine *coroutine, gpointer data);
 
-    int (*start_migration)(gpointer data);
-    void (*autoquit)(gpointer data);
-    void (*quit)(gpointer data);
-    void (*client_cont_failed)(gpointer data);
+    int (*_start_co)(Coroutine *coroutine, gpointer data);
+    int (*_promote_co)(Coroutine *coroutine, gpointer data);
+    int (*_start_migration_co)(Coroutine *coroutine, gpointer data);
+    int (*_reboot_co)(Coroutine *coroutine, gpointer data);
+    int (*_shutdown_co)(Coroutine *coroutine, gpointer data, MyTimeout *timeout);
+    int (*_demote_co)(Coroutine *coroutine, gpointer data, MyTimeout *timeout);
+    int (*_quit_co)(Coroutine *coroutine, gpointer data, MyTimeout *timeout);
 
     int (*_yank_co)(Coroutine *coroutine, gpointer data, GError **errp);
 
@@ -44,6 +56,6 @@ void client_register(ColodClientListener *this, const ClientCallbacks *cb, gpoin
 void client_unregister(ColodClientListener *this, const ClientCallbacks *cb, gpointer data);
 
 void client_listener_free(ColodClientListener *listener);
-ColodClientListener *client_listener_new(int socket, const ColodContext *ctx);
+ColodClientListener *client_listener_new(int socket, QmpCommands *commands);
 
 #endif // CLIENT_H

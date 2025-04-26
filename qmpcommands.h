@@ -46,6 +46,8 @@ void qmp_commands_set_throttle_prop(QmpCommands *this, JsonNode *prop);
 void qmp_commands_set_blk_mirror_prop(QmpCommands *this, JsonNode *prop);
 void qmp_commands_set_qemu_options(QmpCommands *this, JsonNode *prop);
 int qmp_commands_set_qemu_options_str(QmpCommands *this, const char *_qemu_options, GError **errp);
+void qmp_commands_set_yank_instances(QmpCommands *this, JsonNode *prop);
+JsonNode *qmp_commands_get_yank_instances(QmpCommands *this);
 
 int qmp_commands_read_config(QmpCommands *this, const char *config_str, const char *qemu_options, GError **errp);
 

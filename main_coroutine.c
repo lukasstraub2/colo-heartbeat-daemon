@@ -100,15 +100,18 @@ static void colod_set_peer(ColodMainCoroutine *this, const gchar *peer) {
     this->peer_yellow = FALSE;
 }
 
-static void __colod_set_peer(gpointer data, const gchar *peer) {
-    return colod_set_peer(data, peer);
+static int __colod_set_peer(Coroutine *coroutine, gpointer data, const gchar *peer) {
+    (void) coroutine;
+    colod_set_peer(data, peer);
+    return 0;
 }
 
 static const gchar *colod_get_peer(ColodMainCoroutine *this) {
     return this->peer;
 }
 
-static const gchar *__colod_get_peer(gpointer data) {
+static const gchar *__colod_get_peer(Coroutine *coroutine, gpointer data) {
+    (void) coroutine;
     return colod_get_peer(data);
 }
 
@@ -117,8 +120,10 @@ static void colod_clear_peer(ColodMainCoroutine *this) {
     this->peer = g_strdup("");
 }
 
-static void __colod_clear_peer(gpointer data) {
-    return colod_clear_peer(data);
+static int __colod_clear_peer(Coroutine *coroutine, gpointer data) {
+    (void) coroutine;
+    colod_clear_peer(data);
+    return 0;
 }
 
 static const gchar *event_str(ColodEvent event) {
@@ -599,24 +604,8 @@ static int colod_start_migration(ColodMainCoroutine *this) {
     return 0;
 }
 
-static int __colod_start_migration(gpointer data) {
+static int __colod_start_migration(Coroutine *coroutine, gpointer data) {
     return colod_start_migration(data);
-}
-
-static void colod_autoquit(ColodMainCoroutine *this) {
-    colod_event_queue(this, EVENT_AUTOQUIT, "client request");
-}
-
-static void __colod_autoquit(gpointer data) {
-    colod_autoquit(data);
-}
-
-static void colod_client_cont_failed(ColodMainCoroutine *this) {
-	colod_event_queue(this, EVENT_FAILED, "client cont failed after client died");
-}
-
-static void __colod_client_cont_failed(gpointer data) {
-    colod_client_cont_failed(data);
 }
 
 #define colod_stop_co(...) \
@@ -1007,15 +996,11 @@ failover:
 }
 
 static void colod_quit(ColodMainCoroutine *this) {
-    g_main_loop_quit(this->ctx->mainloop);
+    colod_event_queue(this, EVENT_QUIT, "client request");
 }
 
-static void __colod_quit(gpointer data) {
+static int __colod_quit(Coroutine *coroutine, gpointer data, MyTimeout *timeout) {
     colod_quit(data);
-}
-
-static void do_autoquit(ColodMainCoroutine *this) {
-    g_main_loop_quit(this->ctx->mainloop);
 }
 
 static gboolean _colod_main_co(Coroutine *coroutine, ColodMainCoroutine *this);
@@ -1029,8 +1014,10 @@ static gboolean colod_main_co(gpointer data) {
         return GPOINTER_TO_INT(coroutine->yield_value);
     }
 
+    g_main_loop_quit(this->ctx->mainloop);
     colod_assert_remove_one_source(this);
     this->quit = TRUE;
+    colod_main_unref(this);
     return ret;
 }
 
@@ -1111,7 +1098,8 @@ static gboolean _colod_main_co(Coroutine *coroutine, ColodMainCoroutine *this) {
                     break;
                 } else if (event == EVENT_AUTOQUIT) {
                     if (this->qemu_quit) {
-                        do_autoquit(this);
+                        new_state = STATE_QUIT;
+                        break;
                     } else {
                         new_state = STATE_AUTOQUIT;
                         break;
@@ -1133,15 +1121,14 @@ static gboolean _colod_main_co(Coroutine *coroutine, ColodMainCoroutine *this) {
                     new_state = STATE_QUIT;
                     break;
                 } else if (event == EVENT_FAILED && this->qemu_quit) {
-                    do_autoquit(this);
+                    new_state = STATE_QUIT;
+                    break;
                 }
             }
         }
     }
 
     co_end;
-
-    return G_SOURCE_REMOVE;
 }
 
 static void colod_hup_cb(gpointer data) {
@@ -1251,15 +1238,18 @@ static void colod_yellow_event_cb(gpointer data, ColodEvent event) {
 }
 
 const ClientCallbacks colod_client_callbacks = {
-    __colod_check_health_co,
     __colod_query_status,
+    __colod_check_health_co,
     __colod_set_peer,
     __colod_get_peer,
     __colod_clear_peer,
+    NULL,
+    NULL,
     __colod_start_migration,
-    __colod_autoquit,
+    NULL,
+    NULL,
+    NULL,
     __colod_quit,
-    __colod_client_cont_failed,
     __colod_yank_co,
     __colod_execute_nocheck_co,
     __colod_execute_co
@@ -1304,14 +1294,14 @@ ColodMainCoroutine *colod_main_new(const ColodContext *ctx, GError **errp) {
 
     this->watchdog = colod_watchdog_new(ctx, __colod_check_health_co, this);
 
+    colod_main_ref(this);
     g_idle_add(colod_main_co, this);
     return this;
 }
 
 static void colod_main_free(gpointer _this) {
     ColodMainCoroutine *this = _this;
-
-    colod_event_queue(this, EVENT_QUIT, "teardown");
+    assert(this->quit);
 
     yellow_del_notify(this->yellow_co, colod_yellow_event_cb, this);
     yellow_coroutine_free(this->yellow_co);
@@ -1321,10 +1311,6 @@ static void colod_main_free(gpointer _this) {
     qmp_del_notify_hup(this->qmp, colod_hup_cb, this);
     qmp_del_notify_event(this->qmp, colod_qmp_event_cb, this);
     colod_raise_timeout_coroutine_free(&this->raise_timeout_coroutine);
-
-    while (!this->quit) {
-        g_main_context_iteration(g_main_context_default(), TRUE);
-    }
 
     colod_watchdog_free(this->watchdog);
 

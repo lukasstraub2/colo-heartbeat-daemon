@@ -28,7 +28,7 @@
 typedef struct ColodClient {
     Coroutine coroutine;
     QLIST_ENTRY(ColodClient) next;
-    const ColodContext *ctx;
+    QmpCommands *commands;
     ColodClientListener *parent;
     GIOChannel *channel;
     gboolean stopped_qemu;
@@ -39,17 +39,64 @@ typedef struct ColodClient {
 QLIST_HEAD(ColodClientHead, ColodClient);
 struct ColodClientListener {
     int socket;
-    const ColodContext *ctx;
+    QmpCommands *commands;
     guint listen_source_id;
     struct ColodClientHead head;
     JsonNode *store;
 
     const ClientCallbacks *cb;
     gpointer cb_data;
+    CoroutineLock lock;
 };
+
+struct MyTimeout {
+    GTimer *timer;
+    guint timeout_ms;
+};
+
+guint my_timeout_remaining_ms(MyTimeout *this) {
+    guint elapsed = g_timer_elapsed(this->timer, NULL)/1000;
+
+    if (elapsed >= this->timeout_ms) {
+        return 0;
+    }
+
+    return this->timeout_ms - elapsed;
+}
+
+guint my_timeout_remaining_minus_ms(MyTimeout *this, guint minus) {
+    guint remaining = my_timeout_remaining_ms(this);
+
+    if (minus >= remaining) {
+        return 0;
+    }
+
+    return remaining - minus;
+}
+
+MyTimeout *my_timeout_new(guint timeout_ms) {
+    MyTimeout *this = g_rc_box_new0(MyTimeout);
+    this->timer = g_timer_new();
+    this->timeout_ms = timeout_ms;
+    return this;
+}
+
+void my_timeout_free(gpointer data) {
+    MyTimeout *this = data;
+    g_timer_destroy(this->timer);
+}
+
+MyTimeout *my_timeout_ref(MyTimeout *this) {
+    return g_rc_box_acquire(this);
+}
+
+void my_timeout_unref(MyTimeout *this) {
+    g_rc_box_release_full(this, my_timeout_free);
+}
 
 void client_register(ColodClientListener *this, const ClientCallbacks *cb, gpointer data) {
     assert(!this->cb && !this->cb_data);
+    assert(cb->query_status);
     this->cb = cb;
     this->cb_data = data;
 }
@@ -59,6 +106,19 @@ void client_unregister(ColodClientListener *this, const ClientCallbacks *cb, gpo
     this->cb = NULL;
     this->cb_data = NULL;
 }
+
+static void query_status(ColodClientListener *this, ColodState *ret) {
+    this->cb->query_status(this->cb_data, ret);
+}
+
+#define wait_while(cond) \
+    while (cond) { \
+        progress_source_add(coroutine->cb, coroutine); \
+        co_yield_int(G_SOURCE_REMOVE); \
+    }
+
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-variable"
 
 #define check_health_co(...) \
     co_wrap(_check_health_co(__VA_ARGS__))
@@ -72,45 +132,270 @@ static int _check_health_co(Coroutine *coroutine, ColodClientListener *this, GEr
     co_frame(co, sizeof(*co));
     co_begin(int, -1);
 
+    wait_while(!this->cb || !this->cb->_check_health_co || this->lock.holder);
+    colod_lock_co(this->lock);
+
     CO cb = this->cb;
     CO data = this->cb_data;
-    co_recurse(((void)__use_co_recurse, ret = CO cb->_check_health_co(coroutine, CO data, errp)));
+    co_recurse(ret = CO cb->_check_health_co(coroutine, CO data, errp));
 
+    colod_unlock_co(this->lock);
     co_end;
 
     return ret;
 }
 
-static void query_status(ColodClientListener *this, ColodState *ret) {
-    this->cb->query_status(this->cb_data, ret);
+#define set_peer(...) co_wrap(_set_peer(__VA_ARGS__))
+static int _set_peer(Coroutine *coroutine, ColodClientListener *this, const gchar *peer) {
+    struct {
+        const ClientCallbacks *cb;
+        gpointer data;
+    } *co;
+    int ret;
+
+    co_frame(co, sizeof(*co));
+    co_begin(int, -1);
+
+    wait_while(!this->cb || !this->cb->_set_peer_co || this->lock.holder);
+    colod_lock_co(this->lock);
+
+    CO cb = this->cb;
+    CO data = this->cb_data;
+
+    co_recurse(ret = CO cb->_set_peer_co(coroutine, CO data, peer));
+
+    colod_unlock_co(this->lock);
+    co_end;
+
+    return ret;
 }
 
-static void set_peer(ColodClientListener *this, const gchar *peer) {
-    this->cb->set_peer(this->cb_data, peer);
+#define get_peer(...) co_wrap(_get_peer(__VA_ARGS__))
+static const gchar *_get_peer(Coroutine *coroutine, ColodClientListener *this) {
+    struct {
+        const ClientCallbacks *cb;
+        gpointer data;
+    } *co;
+    const gchar *ret;
+
+    co_frame(co, sizeof(*co));
+    co_begin(gchar *, NULL);
+
+    wait_while(!this->cb || !this->cb->_get_peer_co || this->lock.holder);
+    colod_lock_co(this->lock);
+
+    CO cb = this->cb;
+    CO data = this->cb_data;
+
+    co_recurse(ret = CO cb->_get_peer_co(coroutine, CO data));
+
+    colod_unlock_co(this->lock);
+    co_end;
+
+    return ret;
 }
 
-static const gchar *get_peer(ColodClientListener *this) {
-    return this->cb->get_peer(this->cb_data);
+#define clear_peer(...) co_wrap(_clear_peer(__VA_ARGS__))
+static int _clear_peer(Coroutine *coroutine, ColodClientListener *this) {
+    struct {
+        const ClientCallbacks *cb;
+        gpointer data;
+    } *co;
+    int ret;
+
+    co_frame(co, sizeof(*co));
+    co_begin(int, -1);
+
+    wait_while(!this->cb || !this->cb->_clear_peer_co || this->lock.holder);
+    colod_lock_co(this->lock);
+
+    CO cb = this->cb;
+    CO data = this->cb_data;
+
+    co_recurse(ret = CO cb->_clear_peer_co(coroutine, CO data));
+
+    colod_unlock_co(this->lock);
+    co_end;
+
+    return ret;
 }
 
-static void clear_peer(ColodClientListener *this) {
-    this->cb->clear_peer(this->cb_data);
+#define start(...) co_wrap(_start(__VA_ARGS__))
+static int _start(Coroutine *coroutine, ColodClientListener *this) {
+    struct {
+        const ClientCallbacks *cb;
+        gpointer data;
+    } *co;
+    int ret;
+
+    co_frame(co, sizeof(*co));
+    co_begin(int, -1);
+
+    wait_while(!this->cb || !this->cb->_start_co || this->lock.holder);
+    colod_lock_co(this->lock);
+
+    CO cb = this->cb;
+    CO data = this->cb_data;
+
+    co_recurse(ret = CO cb->_start_co(coroutine, CO data));
+
+    colod_unlock_co(this->lock);
+    co_end;
+
+    return ret;
 }
 
-static int start_migration(ColodClientListener *this) {
-    return this->cb->start_migration(this->cb_data);
+#define promote(...) co_wrap(_promote(__VA_ARGS__))
+static int _promote(Coroutine *coroutine, ColodClientListener *this) {
+    struct {
+        const ClientCallbacks *cb;
+        gpointer data;
+    } *co;
+    int ret;
+
+    co_frame(co, sizeof(*co));
+    co_begin(int, -1);
+
+    wait_while(!this->cb || !this->cb->_promote_co || this->lock.holder);
+    colod_lock_co(this->lock);
+
+    CO cb = this->cb;
+    CO data = this->cb_data;
+
+    co_recurse(ret = CO cb->_promote_co(coroutine, CO data));
+
+    colod_unlock_co(this->lock);
+    co_end;
+
+    return ret;
 }
 
-static void autoquit(ColodClientListener *this) {
-    this->cb->autoquit(this->cb_data);
+#define start_migration(...) co_wrap(_start_migration(__VA_ARGS__))
+static int _start_migration(Coroutine *coroutine, ColodClientListener *this) {
+    struct {
+        const ClientCallbacks *cb;
+        gpointer data;
+    } *co;
+    int ret;
+
+    co_frame(co, sizeof(*co));
+    co_begin(int, -1);
+
+    wait_while(!this->cb || !this->cb->_start_migration_co || this->lock.holder);
+    colod_lock_co(this->lock);
+
+    CO cb = this->cb;
+    CO data = this->cb_data;
+
+    co_recurse(ret = CO cb->_start_migration_co(coroutine, CO data));
+
+    colod_unlock_co(this->lock);
+    co_end;
+
+    return ret;
 }
 
-static void quit(ColodClientListener *this) {
-    this->cb->quit(this->cb_data);
+#define reboot(...) co_wrap(_reboot(__VA_ARGS__))
+static int _reboot(Coroutine *coroutine, ColodClientListener *this) {
+    struct {
+        const ClientCallbacks *cb;
+        gpointer data;
+    } *co;
+    int ret;
+
+    co_frame(co, sizeof(*co));
+    co_begin(int, -1);
+
+    wait_while(!this->cb || !this->cb->_reboot_co || this->lock.holder);
+    colod_lock_co(this->lock);
+
+    CO cb = this->cb;
+    CO data = this->cb_data;
+
+    co_recurse(ret = CO cb->_reboot_co(coroutine, CO data));
+
+    colod_unlock_co(this->lock);
+    co_end;
+
+    return ret;
 }
 
-static void client_cont_failed(ColodClientListener *this){
-    this->cb->client_cont_failed(this->cb_data);
+#define shutdown(...) co_wrap(_shutdown(__VA_ARGS__))
+static int _shutdown(Coroutine *coroutine, ColodClientListener *this, MyTimeout *timeout) {
+    struct {
+        const ClientCallbacks *cb;
+        gpointer data;
+        MyTimeout *timeout;
+    } *co;
+    int ret;
+
+    co_frame(co, sizeof(*co));
+    co_begin(int, -1);
+
+    wait_while(!this->cb || !this->cb->_shutdown_co || this->lock.holder);
+    colod_lock_co(this->lock);
+
+    CO cb = this->cb;
+    CO data = this->cb_data;
+
+    co_recurse(ret = CO cb->_shutdown_co(coroutine, CO data, timeout));
+
+    colod_unlock_co(this->lock);
+    co_end;
+
+    return ret;
+}
+
+#define demote(...) co_wrap(_demote(__VA_ARGS__))
+static int _demote(Coroutine *coroutine, ColodClientListener *this, MyTimeout *timeout) {
+    struct {
+        const ClientCallbacks *cb;
+        gpointer data;
+        MyTimeout *timeout;
+    } *co;
+    int ret;
+
+    co_frame(co, sizeof(*co));
+    co_begin(int, -1);
+
+    wait_while(!this->cb || !this->cb->_demote_co || this->lock.holder);
+    colod_lock_co(this->lock);
+
+    CO cb = this->cb;
+    CO data = this->cb_data;
+
+    co_recurse(ret = CO cb->_demote_co(coroutine, CO data, timeout));
+
+    colod_unlock_co(this->lock);
+    co_end;
+
+    return ret;
+}
+
+#define quit(...) co_wrap(_quit(__VA_ARGS__))
+static int _quit(Coroutine *coroutine, ColodClientListener *this, MyTimeout *timeout) {
+    struct {
+        const ClientCallbacks *cb;
+        gpointer data;
+        MyTimeout *timeout;
+    } *co;
+    int ret;
+
+    co_frame(co, sizeof(*co));
+    co_begin(int, -1);
+
+    wait_while(!this->cb || !this->cb->_quit_co || this->lock.holder);
+    colod_lock_co(this->lock);
+
+    CO cb = this->cb;
+    CO data = this->cb_data;
+
+    co_recurse(ret = CO cb->_quit_co(coroutine, CO data, timeout));
+
+    colod_unlock_co(this->lock);
+    co_end;
+
+    return ret;
 }
 
 #define yank(...) \
@@ -125,10 +410,14 @@ static int _yank_co(Coroutine *coroutine, ColodClientListener *this, GError **er
     co_frame(co, sizeof(*co));
     co_begin(int, -1);
 
+    wait_while(!this->cb || !this->cb->_yank_co || this->lock.holder);
+    colod_lock_co(this->lock);
+
     CO cb = this->cb;
     CO data = this->cb_data;
-    co_recurse(((void)__use_co_recurse, ret = CO cb->_yank_co(coroutine, CO data, errp)));
+    co_recurse(ret = CO cb->_yank_co(coroutine, CO data, errp));
 
+    colod_unlock_co(this->lock);
     co_end;
 
     return ret;
@@ -147,10 +436,14 @@ static ColodQmpResult *_execute_nocheck_co(Coroutine *coroutine, ColodClientList
     co_frame(co, sizeof(*co));
     co_begin(ColodQmpResult *, NULL);
 
+    wait_while(!this->cb || !this->cb->_execute_nocheck_co || this->lock.holder);
+    colod_lock_co(this->lock);
+
     CO cb = this->cb;
     CO data = this->cb_data;
-    co_recurse(((void)__use_co_recurse, ret = CO cb->_execute_nocheck_co(coroutine, CO data, errp, command)));
+    co_recurse(ret = CO cb->_execute_nocheck_co(coroutine, CO data, errp, command));
 
+    colod_unlock_co(this->lock);
     co_end;
 
     return ret;
@@ -169,14 +462,19 @@ static ColodQmpResult *_execute_co(Coroutine *coroutine, ColodClientListener *th
     co_frame(co, sizeof(*co));
     co_begin(ColodQmpResult *, NULL);
 
+    wait_while(!this->cb || !this->cb->_execute_co || this->lock.holder);
+    colod_lock_co(this->lock);
+
     CO cb = this->cb;
     CO data = this->cb_data;
-    co_recurse(((void)__use_co_recurse, ret = CO cb->_execute_co(coroutine, CO data, errp, command)));
+    co_recurse(ret = CO cb->_execute_co(coroutine, CO data, errp, command));
 
+    colod_unlock_co(this->lock);
     co_end;
 
     return ret;
 }
+#pragma GCC diagnostic pop
 
 static ColodQmpResult *create_reply(const gchar *member) {
     ColodQmpResult *result;
@@ -275,27 +573,91 @@ static ColodQmpResult *handle_set_store(ColodQmpResult *request,
     return create_reply("{}");
 }
 
-static ColodQmpResult *handle_quit(ColodClientListener *this) {
-    quit(this);
+static MyTimeout *request_timeout(ColodQmpResult *request) {
+    if (!has_member(request->json_root, "timeout")) {
+        return NULL;
+    }
 
-    return create_reply("{}");
+    JsonObject *object = json_node_get_object(request->json_root);
+    guint timeout = json_object_get_int_member(object, "timeout");
+
+    return my_timeout_new(timeout);
 }
 
-static ColodQmpResult *handle_autoquit(ColodClientListener *this) {
-    autoquit(this);
+#define handle_start_migration(...) co_wrap(_handle_start_migration(__VA_ARGS__))
+static ColodQmpResult * _handle_start_migration(Coroutine *coroutine, ColodClientListener *this) {
+    co_begin(ColodQmpResult *, NULL);
 
-    return create_reply("{}");
-}
-
-static ColodQmpResult *handle_start_migration(ColodClientListener *this) {
     int ret;
+    co_recurse(ret = start_migration(coroutine, this));
 
-    ret = start_migration(this);
     if (ret < 0) {
         return create_error_reply("Pending actions");
     }
 
     return create_reply("{}");
+
+    co_end;
+}
+
+#define handle_shutdown(...) co_wrap(_handle_shutdown(__VA_ARGS__))
+static ColodQmpResult *_handle_shutdown(Coroutine *coroutine, ColodClientListener *this, ColodQmpResult *request) {
+    struct {
+        MyTimeout *timeout;
+    } *co;
+
+    co_frame(co, sizeof(*co));
+    co_begin(ColodQmpResult *, NULL);
+
+    CO timeout = request_timeout(request);
+    co_recurse(shutdown(coroutine, this, CO timeout));
+    if (CO timeout) {
+        my_timeout_unref(CO timeout);
+    }
+
+    return create_reply("{}");
+
+    co_end;
+}
+
+#define handle_demote(...) co_wrap(_handle_demote(__VA_ARGS__))
+static ColodQmpResult *_handle_demote(Coroutine *coroutine, ColodClientListener *this, ColodQmpResult *request) {
+    struct {
+        MyTimeout *timeout;
+    } *co;
+
+    co_frame(co, sizeof(*co));
+    co_begin(ColodQmpResult *, NULL);
+
+    CO timeout = request_timeout(request);
+    co_recurse(demote(coroutine, this, CO timeout));
+    if (CO timeout) {
+        my_timeout_unref(CO timeout);
+    }
+
+    return create_reply("{}");
+
+    co_end;
+}
+
+#define handle_quit(...) co_wrap(_handle_quit(__VA_ARGS__))
+static ColodQmpResult *_handle_quit(Coroutine *coroutine, ColodClientListener *this, ColodQmpResult *request) {
+    struct {
+        MyTimeout *timeout;
+    } *co;
+
+    co_frame(co, sizeof(*co));
+    co_begin(ColodQmpResult *, NULL);
+
+    CO timeout = request_timeout(request);
+    co_recurse(quit(coroutine, this, CO timeout));
+    if (CO timeout) {
+        my_timeout_unref(CO timeout);
+    }
+
+    return create_reply("{}");
+
+    co_end;
 }
 
 static JsonNode *get_commands(ColodQmpResult *request, GError **errp) {
@@ -316,9 +678,9 @@ static JsonNode *get_commands(ColodQmpResult *request, GError **errp) {
     return commands;
 }
 
-static ColodQmpResult *handle_set(int (*func)(QmpCommands *, JsonNode *, GError **),
-                                  ColodQmpResult *request,
-                                  const ColodContext *ctx) {
+static ColodQmpResult *handle_set(ColodClient *this,
+                                  int (*func)(QmpCommands *, JsonNode *, GError **),
+                                  ColodQmpResult *request) {
     GError *local_errp = NULL;
     ColodQmpResult *reply;
 
@@ -329,7 +691,7 @@ static ColodQmpResult *handle_set(int (*func)(QmpCommands *, JsonNode *, GError 
         return reply;
     }
 
-    int ret = func(ctx->commands, commands, &local_errp);
+    int ret = func(this->commands, commands, &local_errp);
     if (ret < 0) {
         reply = create_error_reply(local_errp->message);
         g_error_free(local_errp);
@@ -339,33 +701,32 @@ static ColodQmpResult *handle_set(int (*func)(QmpCommands *, JsonNode *, GError 
     return create_reply("{}");
 }
 
-static ColodQmpResult *handle_set_prepare_secondary(ColodQmpResult *request,
-                                                  const ColodContext *ctx) {
-    return handle_set(qmp_commands_set_prepare_secondary, request, ctx);
+static ColodQmpResult *handle_set_prepare_secondary(ColodClient *this,
+                                                    ColodQmpResult *request) {
+    return handle_set(this, qmp_commands_set_prepare_secondary, request);
 }
 
-static ColodQmpResult *handle_set_migration_start(ColodQmpResult *request,
-                                                  const ColodContext *ctx) {
-    return handle_set(qmp_commands_set_migration_start, request, ctx);
+static ColodQmpResult *handle_set_migration_start(ColodClient *this,
+                                                  ColodQmpResult *request) {
+    return handle_set(this, qmp_commands_set_migration_start, request);
 }
 
-static ColodQmpResult *handle_set_migration_switchover(ColodQmpResult *request,
-                                                       const ColodContext *ctx) {
-    return handle_set(qmp_commands_set_migration_switchover, request, ctx);
+static ColodQmpResult *handle_set_migration_switchover(ColodClient *this,
+                                                       ColodQmpResult *request) {
+    return handle_set(this, qmp_commands_set_migration_switchover, request);
 }
 
-static ColodQmpResult *handle_set_primary_failover(ColodQmpResult *request,
-                                                   const ColodContext *ctx) {
-    return handle_set(qmp_commands_set_failover_primary, request, ctx);
+static ColodQmpResult *handle_set_primary_failover(ColodClient *this,
+                                                   ColodQmpResult *request) {
+    return handle_set(this, qmp_commands_set_failover_primary, request);
 }
 
-static ColodQmpResult *handle_set_secondary_failover(ColodQmpResult *request,
-                                                     const ColodContext *ctx) {
-    return handle_set(qmp_commands_set_failover_secondary, request, ctx);
+static ColodQmpResult *handle_set_secondary_failover(ColodClient *this,
+                                                     ColodQmpResult *request) {
+    return handle_set(this, qmp_commands_set_failover_secondary, request);
 }
 
-static ColodQmpResult *handle_set_yank(ColodQmpResult *request,
-                                       const ColodContext *ctx) {
+static ColodQmpResult *handle_set_yank(ColodClient *this, ColodQmpResult *request) {
     JsonNode *instances;
 
     if (!has_member(request->json_root, "instances")) {
@@ -377,7 +738,7 @@ static ColodQmpResult *handle_set_yank(ColodQmpResult *request,
         return create_error_reply("Member 'instances' must be an array");
     }
 
-    qmp_set_yank_instances(ctx->qmp, instances);
+    qmp_commands_set_yank_instances(this->commands, instances);
 
     return create_reply("{}");
 }
@@ -447,30 +808,44 @@ static ColodQmpResult *_handle_cont_co(Coroutine *coroutine,
     return result;
 }
 
-static ColodQmpResult *handle_set_peer(ColodQmpResult *request,
-                                       ColodClientListener *this) {
-    const gchar *peer;
+#define handle_set_peer(...) co_wrap(_handle_set_peer(__VA_ARGS__))
+static ColodQmpResult * _handle_set_peer(Coroutine *coroutine, ColodClientListener *this, ColodQmpResult *request) {
+    struct {
+        const gchar *peer;
+    } *co;
+
+    co_frame(co, sizeof(*co));
+    co_begin(ColodQmpResult *, NULL);
 
     if (!has_member(request->json_root, "peer")) {
         return create_error_reply("Member 'peer' missing");
     }
 
-    peer = get_member_str(request->json_root, "peer");
-    set_peer(this, peer);
+    CO peer = get_member_str(request->json_root, "peer");
+    co_recurse(set_peer(coroutine, this, CO peer));
 
     return create_reply("{}");
+
+    co_end;
 }
 
-static ColodQmpResult *handle_query_peer(ColodClientListener *this) {
-    ColodQmpResult *result;
+#define handle_query_peer(...) co_wrap(_handle_query_peer(__VA_ARGS__))
+static ColodQmpResult * _handle_query_peer(Coroutine *coroutine, ColodClientListener *this) {
+    co_begin(ColodQmpResult *, NULL);
+
+    const gchar *peer;
+    co_recurse(peer = get_peer(coroutine, this));
+
     gchar *reply;
     reply = g_strdup_printf("{\"return\": "
-                            "{\"peer\": \"%s\"}}\n",
-                            get_peer(this));
+                            "{\"peer\": \"%s\"}}",
+                            peer);
 
-    result = qmp_parse_result(reply, strlen(reply), NULL);
+    ColodQmpResult *result = qmp_parse_result(reply, strlen(reply), NULL);
     assert(result);
     return result;
+
+    co_end;
 }
 
 static void client_free(ColodClient *client) {
@@ -484,8 +859,6 @@ static gboolean colod_client_co(gpointer data) {
     ColodClient *client = data;
     Coroutine *coroutine = &client->coroutine;
     gboolean ret;
-
-    assert(client->parent->cb && client->parent->cb_data);
 
     co_enter(coroutine, ret = _colod_client_co(coroutine));
     if (coroutine->yield) {
@@ -546,29 +919,35 @@ static gboolean _colod_client_co(Coroutine *coroutine) {
                 CO result = handle_query_store(client);
             } else if (!strcmp(command, "set-store")) {
                 CO result = handle_set_store(CO request, client);
-            } else if (!strcmp(command, "quit")) {
-                CO result = handle_quit(client->parent);
-            } else if (!strcmp(command, "autoquit")) {
-                CO result = handle_autoquit(client->parent);
-            } else if (!strcmp(command, "set-prepare-secondary")) {
-                CO result = handle_set_prepare_secondary(CO request,
-                                                         client->ctx);
-            } else if (!strcmp(command, "set-migration-start")) {
-                CO result = handle_set_migration_start(CO request,
-                                                       client->ctx);
-            } else if (!strcmp(command, "set-migration-switchover")) {
-                CO result = handle_set_migration_switchover(CO request,
-                                                            client->ctx);
+            } else if (!strcmp(command, "start")) {
+                co_recurse(start(coroutine, client->parent));
+                CO result = create_reply("{}");
+            } else if (!strcmp(command, "promote")) {
+                co_recurse(promote(coroutine, client->parent));
+                CO result = create_reply("{}");
             } else if (!strcmp(command, "start-migration")) {
-                CO result = handle_start_migration(client->parent);
+                co_recurse(CO result = handle_start_migration(coroutine, client->parent));
+            } else if (!strcmp(command, "reboot")) {
+                co_recurse(reboot(coroutine, client->parent));
+                CO result = create_reply("{}");
+            } else if (!strcmp(command, "shutdown")) {
+                co_recurse(CO result = handle_shutdown(coroutine, client->parent, CO request));
+            } else if (!strcmp(command, "demote")) {
+                co_recurse(CO result = handle_demote(coroutine, client->parent, CO request));
+            } else if (!strcmp(command, "quit")) {
+                co_recurse(CO result = handle_quit(coroutine, client->parent, CO request));
+            } else if (!strcmp(command, "set-prepare-secondary")) {
+                CO result = handle_set_prepare_secondary(client, CO request);
+            } else if (!strcmp(command, "set-migration-start")) {
+                CO result = handle_set_migration_start(client, CO request);
+            } else if (!strcmp(command, "set-migration-switchover")) {
+                CO result = handle_set_migration_switchover(client, CO request);
             } else if (!strcmp(command, "set-primary-failover")) {
-                CO result = handle_set_primary_failover(CO request,
-                                                        client->ctx);
+                CO result = handle_set_primary_failover(client, CO request);
             } else if (!strcmp(command, "set-secondary-failover")) {
-                CO result = handle_set_secondary_failover(CO request,
-                                                          client->ctx);
+                CO result = handle_set_secondary_failover(client, CO request);
             } else if (!strcmp(command, "set-yank")) {
-                CO result = handle_set_yank(CO request, client->ctx);
+                CO result = handle_set_yank(client, CO request);
             } else if (!strcmp(command, "yank")) {
                 co_recurse(CO result = handle_yank_co(coroutine, client->parent));
             } else if (!strcmp(command, "stop")) {
@@ -576,11 +955,11 @@ static gboolean _colod_client_co(Coroutine *coroutine) {
             } else if (!strcmp(command, "cont")) {
                 co_recurse(CO result = handle_cont_co(coroutine, client));
             } else if (!strcmp(command, "set-peer")) {
-                CO result = handle_set_peer(CO request, client->parent);
+                co_recurse(CO result = handle_set_peer(coroutine, client->parent, CO request));
             } else if (!strcmp(command, "query-peer")) {
-                CO result = handle_query_peer(client->parent);
+                co_recurse(CO result = handle_query_peer(coroutine, client->parent));
             } else if (!strcmp(command, "clear-peer")) {
-                clear_peer(client->parent);
+                co_recurse(clear_peer(coroutine, client->parent));
                 CO result = create_reply("{}");
             } else {
                 CO result = create_error_reply("Unknown command");
@@ -628,7 +1007,6 @@ error_client:
         if (!CO result) {
             log_error(local_errp->message);
             g_error_free(local_errp);
-            client_cont_failed(client->parent);
         }
         qmp_result_free(CO result);
     }
@@ -651,7 +1029,7 @@ static int client_new(ColodClientListener *listener, int fd, GError **errp) {
     client = g_new0(ColodClient, 1);
     coroutine = &client->coroutine;
     coroutine->cb = colod_client_co;
-    client->ctx = listener->ctx;
+    client->commands = listener->commands;
     client->parent = listener;
     client->channel = channel;
     QLIST_INSERT_HEAD(&listener->head, client, next);
@@ -714,12 +1092,12 @@ void client_listener_free(ColodClientListener *listener) {
     g_free(listener);
 }
 
-ColodClientListener *client_listener_new(int socket, const ColodContext *ctx) {
+ColodClientListener *client_listener_new(int socket, QmpCommands *commands) {
     ColodClientListener *listener;
 
     listener = g_new0(ColodClientListener, 1);
     listener->socket = socket;
-    listener->ctx = ctx;
+    listener->commands = commands;
     listener->listen_source_id = g_unix_fd_add(socket, G_IO_IN,
                                                client_listener_new_client,
                                                listener);

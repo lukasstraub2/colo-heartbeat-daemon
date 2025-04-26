@@ -33,71 +33,36 @@
 #include "client.h"
 #include "qmp.h"
 #include "cpg.h"
-#include "watchdog.h"
 
 FILE *trace = NULL;
 gboolean do_syslog = FALSE;
 
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wunused-parameter"
-int _daemon_check_health_co(Coroutine *coroutine, gpointer data, GError **errp) {
-    colod_error_set(errp, "Not running");
-    return -1;
+static int _daemon_start_co(Coroutine *coroutine, gpointer data) {
+    return 0;
 }
 
-void daemon_query_status(gpointer data, ColodState *ret) {
+static void daemon_query_status(gpointer data, ColodState *ret) {
     ColodContext *ctx = data;
     *ret = ctx->last_state;
     ret->running = FALSE;
 }
 
-void daemon_set_peer(gpointer data, const gchar *peer) {}
-
-const gchar *daemon_get_peer(gpointer data) {
-    return NULL;
-}
-
-void daemon_clear_peer(gpointer data) {}
-
-int daemon_start_migration(gpointer data) {
-    return -1;
-}
-
-void daemon_autoquit(gpointer data) {}
-void daemon_quit(gpointer data) {}
-void daemon_client_cont_failed(gpointer data) {}
-
-int _daemon_yank_co(Coroutine *coroutine, gpointer data, GError **errp) {
-    colod_error_set(errp, "Not running");
-    return -1;
-}
-
-ColodQmpResult *_daemon_execute_nocheck_co(Coroutine *coroutine, gpointer data,
-                                           GError **errp, const gchar *command) {
-    colod_error_set(errp, "Not running");
-    return NULL;
-}
-
-ColodQmpResult *_daemon_execute_co(Coroutine *coroutine, gpointer data,
-                                   GError **errp, const gchar *command) {
-    colod_error_set(errp, "Not running");
-    return NULL;
-}
-#pragma GCC diagnostic pop
-
 const ClientCallbacks daemon_client_callbacks = {
-    _daemon_check_health_co,
     daemon_query_status,
-    daemon_set_peer,
-    daemon_get_peer,
-    daemon_clear_peer,
-    daemon_start_migration,
-    daemon_autoquit,
-    daemon_quit,
-    daemon_client_cont_failed,
-    _daemon_yank_co,
-    _daemon_execute_nocheck_co,
-    _daemon_execute_co
+    NULL,
+    NULL,
+    NULL,
+    NULL,
+    _daemon_start_co,
+    NULL,
+    NULL,
+    NULL,
+    NULL,
+    NULL,
+    NULL,
+    NULL,
+    NULL,
+    NULL
 };
 
 void daemon_mainloop(ColodContext *mctx) {
@@ -119,7 +84,7 @@ void daemon_mainloop(ColodContext *mctx) {
         exit(EXIT_FAILURE);
     }
 
-    mctx->listener = client_listener_new(ctx->mngmt_listen_fd, ctx);
+    mctx->listener = client_listener_new(ctx->mngmt_listen_fd, ctx->commands);
 
     mctx->qmp = qmp_new(ctx->qmp_fd, ctx->qmp_yank_fd, ctx->qmp_timeout_low,
                         &local_errp);

@@ -15,7 +15,7 @@
 #include "smoke_util.h"
 
 typedef struct QuitEarlyConfig {
-    gboolean autoquit, qemu_quit;
+    gboolean qemu_quit;
 } QuitEarlyConfig;
 
 struct SmokeTestcase {
@@ -37,24 +37,11 @@ static gboolean _testcase_co(Coroutine *coroutine, SmokeTestcase *this) {
         colod_shutdown_channel(sctx->qmp_yank_ch);
     }
 
-    if (this->config->autoquit) {
-        co_recurse(ch_write_co(coroutine, sctx->client_ch,
-                               "{'exec-colod': 'autoquit'}\n", 1000));
-    } else {
-        co_recurse(ch_write_co(coroutine, sctx->client_ch,
-                               "{'exec-colod': 'quit'}\n", 1000));
-    }
+    co_recurse(ch_write_co(coroutine, sctx->client_ch,
+                           "{'exec-colod': 'quit'}\n", 1000));
 
     co_recurse(ch_readln_co(coroutine, sctx->client_ch, &line, &len, 1000));
     g_free(line);
-
-    if (this->config->autoquit && !this->config->qemu_quit) {
-        g_timeout_add(500, coroutine->cb, this);
-        co_yield_int(G_SOURCE_REMOVE);
-
-        colod_shutdown_channel(sctx->qmp_ch);
-        colod_shutdown_channel(sctx->qmp_yank_ch);
-    }
 
     assert(!this->do_quit);
     while (!this->do_quit) {
@@ -132,22 +119,10 @@ int main(int argc, char **argv) {
 
     g_test_add_data_func("/quit_early/normal",
                          &(QuitEarlyConfig) {
-                             .autoquit = FALSE,
-                             .qemu_quit = FALSE
-                         }, test_run);
-    g_test_add_data_func("/quit_early/autoquit",
-                         &(QuitEarlyConfig) {
-                             .autoquit = TRUE,
                              .qemu_quit = FALSE
                          }, test_run);
     g_test_add_data_func("/quit_early/qemu_quit",
                          &(QuitEarlyConfig) {
-                             .autoquit = FALSE,
-                             .qemu_quit = TRUE
-                         }, test_run);
-    g_test_add_data_func("/quit_early/autoquit/qemu_quit",
-                         &(QuitEarlyConfig) {
-                             .autoquit = TRUE,
                              .qemu_quit = TRUE
                          }, test_run);
 
