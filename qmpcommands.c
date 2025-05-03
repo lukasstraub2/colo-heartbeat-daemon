@@ -467,7 +467,9 @@ static JsonNode* parse_config(const char* config_str, const char* qemu_options, 
     }
 
     JsonNode *ret = json_node_alloc();
-    return json_node_init_object(ret, config);
+    json_node_init_object(ret, config);
+    json_object_unref(config);
+    return ret;
 }
 
 int qmp_commands_set_qemu_options_str(QmpCommands *this, const char *_qemu_options, GError **errp) {
@@ -483,6 +485,7 @@ int qmp_commands_set_qemu_options_str(QmpCommands *this, const char *_qemu_optio
     JsonNode *qemu_options = json_node_alloc();
     JsonArray *array = json_array_sized_new(len);
     json_node_init_array(qemu_options, array);
+    json_array_unref(array);
 
     for (int i = 0; i < len; i++) {
         json_array_add_string_element(array, argv[i]);
@@ -737,6 +740,7 @@ void qmp_commands_free(QmpCommands *this) {
     qmp_commands_node_unref(this->throttle_prop);
     qmp_commands_node_unref(this->blk_mirror_prop);
     qmp_commands_node_unref(this->qemu_options);
+    qmp_commands_node_unref(this->yank_instances);
 
     my_array_unref(this->qemu_primary);
     my_array_unref(this->qemu_secondary);

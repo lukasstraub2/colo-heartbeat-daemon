@@ -699,6 +699,9 @@ static void qmp_free(gpointer _this) {
 
     g_io_channel_unref(state->yank_channel.channel);
     g_io_channel_unref(state->channel.channel);
+    if (state->yank_instances) {
+        json_node_unref(state->yank_instances);
+    }
 }
 
 ColodQmpState *qmp_new(int fd, int yank_fd, guint timeout, GError **errp) {
