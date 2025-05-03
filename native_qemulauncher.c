@@ -11,6 +11,7 @@
 #include <unistd.h>
 #include <sys/prctl.h>
 #include <signal.h>
+#include <sys/wait.h>
 
 #include "base_types.h"
 #include "qemulauncher.h"
@@ -110,16 +111,19 @@ static int open_qmp_sockets(QemuLauncher *this, int *qmp_fd, int *qmp_yank_fd, G
 
 #define qemu_launcher_launch_co(...) \
     co_wrap(_qemu_launcher_launch_co(__VA_ARGS__))
-
 static ColodQmpState *_qemu_launcher_launch_co(Coroutine *coroutine, QemuLauncher *this,
                                                MyArray *argv, GError **errp) {
     struct {
         int i;
+        GError *local_errp;
     } *co;
     int ret;
 
     co_frame(co, sizeof(*co));
     co_begin(ColodQmpState *, NULL);
+
+    CO local_errp = NULL;
+
     ret = execute_qemu(argv, errp);
     if (ret < 0) {
         return NULL;
@@ -134,16 +138,22 @@ static ColodQmpState *_qemu_launcher_launch_co(Coroutine *coroutine, QemuLaunche
         g_source_set_name_by_id(timeout_source_id, "reconnect sleep timer");
         co_yield_int(G_SOURCE_REMOVE);
 
+        ret = waitpid(this->pid, NULL, WNOHANG);
+        if (ret != 0) {
+            colod_error_set(errp, "qemu died");
+            return NULL;
+        }
+
         ret = open_qmp_sockets(this, &qmp_fd, &qmp_yank_fd, NULL);
         if (ret < 0) {
             continue;
         }
 
-        qmp = qmp_new(qmp_fd, qmp_yank_fd, this->qmp_timeout, errp);
+        qmp = qmp_new(qmp_fd, qmp_yank_fd, this->qmp_timeout, &CO local_errp);
         if (!qmp) {
             close(qmp_fd);
             close(qmp_yank_fd);
-            return NULL;
+            break;
         }
 
         JsonNode *yank_instances = qmp_commands_get_yank_instances(this->commands);
@@ -156,7 +166,11 @@ static ColodQmpState *_qemu_launcher_launch_co(Coroutine *coroutine, QemuLaunche
     qemu_launcher_kill(this);
     co_recurse(ret = qemu_launcher_wait_co(coroutine, this, 0, NULL));
 
-    colod_error_set(errp, "timeout while trying to connect to qmp");
+    if (CO local_errp) {
+        g_propagate_error(errp, CO local_errp);
+    } else {
+        colod_error_set(errp, "timeout while trying to connect to qmp");
+    }
     return NULL;
 
     co_end;
@@ -191,10 +205,13 @@ static char *_qemu_launcher_disk_size_co(Coroutine *coroutine, QemuLauncher *thi
         ColodQmpState *qmp;
         char *disk_size;
         MyArray *cmdline;
+        GError *local_errp;
     } *co;
 
     co_frame(co, sizeof(*co));
     co_begin(char *, NULL);
+
+    CO local_errp = NULL;
 
     CO cmdline = qmp_commands_get_qemu_dummy(this->commands);
     co_recurse(CO qmp = qemu_launcher_launch_co(coroutine, this, CO cmdline, errp));
@@ -209,7 +226,7 @@ static char *_qemu_launcher_disk_size_co(Coroutine *coroutine, QemuLauncher *thi
         return NULL;
     }
 
-    CO disk_size = get_disk_size(ret, errp);
+    CO disk_size = get_disk_size(ret, &CO local_errp);
     qmp_result_free(ret);
 
     co_recurse(ret = qmp_execute_co(coroutine, CO qmp, NULL, "{'execute': 'quit'}\n"));
@@ -218,6 +235,17 @@ static char *_qemu_launcher_disk_size_co(Coroutine *coroutine, QemuLauncher *thi
         abort();
     }
     qmp_result_free(ret);
+
+    int iret;
+    co_recurse(iret = qemu_launcher_wait_co(coroutine, this, 1000, NULL));
+    if (iret < 0) {
+        abort();
+    }
+
+    if (!CO disk_size) {
+        g_propagate_error(errp, CO local_errp);
+        return NULL;
+    }
 
     return CO disk_size;
 
