@@ -171,12 +171,12 @@ static int _set_peer(Coroutine *coroutine, ColodClientListener *this, const gcha
 }
 
 #define get_peer(...) co_wrap(_get_peer(__VA_ARGS__))
-static const gchar *_get_peer(Coroutine *coroutine, ColodClientListener *this) {
+static gchar *_get_peer(Coroutine *coroutine, ColodClientListener *this) {
     struct {
         const ClientCallbacks *cb;
         gpointer data;
     } *co;
-    const gchar *ret;
+    gchar *ret;
 
     co_frame(co, sizeof(*co));
     co_begin(gchar *, NULL);
@@ -833,7 +833,7 @@ static ColodQmpResult * _handle_set_peer(Coroutine *coroutine, ColodClientListen
 static ColodQmpResult * _handle_query_peer(Coroutine *coroutine, ColodClientListener *this) {
     co_begin(ColodQmpResult *, NULL);
 
-    const gchar *peer;
+    gchar *peer;
     co_recurse(peer = get_peer(coroutine, this));
 
     gchar *reply;
@@ -843,6 +843,7 @@ static ColodQmpResult * _handle_query_peer(Coroutine *coroutine, ColodClientList
 
     ColodQmpResult *result = qmp_parse_result(reply, strlen(reply), NULL);
     assert(result);
+    g_free(peer);
     return result;
 
     co_end;

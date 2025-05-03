@@ -110,13 +110,10 @@ static int __colod_set_peer(Coroutine *coroutine, gpointer data, const gchar *pe
     return 0;
 }
 
-static const gchar *colod_get_peer(ColodMainCoroutine *this) {
-    return this->peer;
-}
-
-static const gchar *__colod_get_peer(Coroutine *coroutine, gpointer data) {
+static gchar *__colod_get_peer(Coroutine *coroutine, gpointer data) {
+    ColodMainCoroutine *this = data;
     (void) coroutine;
-    return colod_get_peer(data);
+    return g_strdup(this->peer);
 }
 
 static void colod_clear_peer(ColodMainCoroutine *this) {

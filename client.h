@@ -31,7 +31,7 @@ struct ClientCallbacks {
     int (*_check_health_co)(Coroutine *coroutine, gpointer data, GError **errp);
 
     int (*_set_peer_co)(Coroutine *coroutine, gpointer data, const gchar *peer);
-    const gchar *(*_get_peer_co)(Coroutine *coroutine, gpointer data);
+    gchar *(*_get_peer_co)(Coroutine *coroutine, gpointer data);
     int (*_clear_peer_co)(Coroutine *coroutine, gpointer data);
 
     int (*_start_co)(Coroutine *coroutine, gpointer data);
