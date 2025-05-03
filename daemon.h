@@ -32,16 +32,11 @@ typedef struct ColodContext {
     gboolean primary_startup;
 
     /* Variables */
-    GMainLoop *mainloop;
-
-    int qmp_fd, qmp_yank_fd, mngmt_listen_fd;
+    int mngmt_listen_fd;
 
     QmpCommands *commands;
 	ColodClientListener *listener;
     Cpg *cpg;
-
-	ColodState last_state;
-	ColodQmpState *qmp;
 } ColodContext;
 
 void colod_syslog(int pri, const char *fmt, ...)

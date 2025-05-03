@@ -31,4 +31,6 @@ QemuLauncher *qemu_launcher_new(QmpCommands *commands, const char *base_dir, gui
 QemuLauncher *qemu_launcher_ref(QemuLauncher *this);
 void qemu_launcher_unref(QemuLauncher *this);
 
+void qemu_launcher_stub_set_fd(int qmp_fd, int qmp_yank_fd);
+
 #endif

@@ -8,7 +8,7 @@ typedef int (*WatchdogCheckHealth)(Coroutine *coroutine, gpointer data, GError *
 
 void colod_watchdog_refresh(ColodWatchdog *state);
 void colod_watchdog_free(ColodWatchdog *state);
-ColodWatchdog *colod_watchdog_new(const ColodContext *ctx,
+ColodWatchdog *colod_watchdog_new(const ColodContext *ctx, ColodQmpState *qmp,
                                   WatchdogCheckHealth cb, gpointer data);
 
 #endif // WATCHDOG_H

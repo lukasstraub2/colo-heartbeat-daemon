@@ -20,6 +20,7 @@ typedef struct SmokeColodContext {
     GIOChannel *client_ch;
 } SmokeColodContext;
 
+GIOChannel *smoke_open_client(GError **errp);
 void smoke_init();
 const gchar *smoke_basedir();
 gboolean smoke_do_trace();

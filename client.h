@@ -14,7 +14,6 @@
 
 #include "base_types.h"
 #include "daemon.h"
-#include "main_coroutine.h"
 
 typedef struct MyTimeout MyTimeout;
 

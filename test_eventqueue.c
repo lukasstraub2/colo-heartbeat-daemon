@@ -26,8 +26,7 @@ void test_a() {
     ColodEvent expect[] = {EVENT_FAILED, EVENT_QUIT,
                            EVENT_START_MIGRATION, EVENT_YELLOW};
 
-    queue = eventqueue_new(4, EVENT_FAILED, EVENT_PEER_FAILOVER, EVENT_QUIT,
-                           EVENT_AUTOQUIT, 0);
+    queue = eventqueue_new(4, EVENT_FAILED, EVENT_PEER_FAILOVER, EVENT_QUIT, 0);
 
     prepare(queue);
     int ret = eventqueue_add(queue, EVENT_FAILED, NULL);
@@ -51,8 +50,7 @@ void test_b() {
     ColodEvent expect[] = {EVENT_START_MIGRATION, EVENT_FAILED,
                            EVENT_QUIT, EVENT_YELLOW};
 
-    queue = eventqueue_new(4, EVENT_FAILED, EVENT_PEER_FAILOVER, EVENT_QUIT,
-                           EVENT_AUTOQUIT, 0);
+    queue = eventqueue_new(4, EVENT_FAILED, EVENT_PEER_FAILOVER, EVENT_QUIT, 0);
 
     prepare(queue);
     int ret = eventqueue_add(queue, EVENT_FAILED, NULL);
@@ -75,8 +73,7 @@ void test_b() {
 
 void test_c() {
     EventQueue *queue;
-    queue = eventqueue_new(4, EVENT_FAILED, EVENT_PEER_FAILOVER, EVENT_QUIT,
-                           EVENT_AUTOQUIT, 0);
+    queue = eventqueue_new(4, EVENT_FAILED, EVENT_PEER_FAILOVER, EVENT_QUIT, 0);
 
     prepare(queue);
 

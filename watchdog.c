@@ -13,7 +13,7 @@
 
 typedef struct ColodWatchdog {
     Coroutine coroutine;
-    const ColodContext *ctx;
+    ColodQmpState *qmp;
     guint interval;
     guint timer_id;
     gboolean quit;
@@ -99,7 +99,7 @@ void colod_watchdog_free(ColodWatchdog *state) {
 
     state->quit = TRUE;
 
-    qmp_del_notify_event(state->ctx->qmp, colod_watchdog_event_cb, state);
+    qmp_del_notify_event(state->qmp, colod_watchdog_event_cb, state);
 
     if (state->timer_id) {
         g_source_remove(state->timer_id);
@@ -114,7 +114,7 @@ void colod_watchdog_free(ColodWatchdog *state) {
     g_free(state);
 }
 
-ColodWatchdog *colod_watchdog_new(const ColodContext *ctx,
+ColodWatchdog *colod_watchdog_new(const ColodContext *ctx, ColodQmpState *qmp,
                                   WatchdogCheckHealth cb, gpointer data) {
     ColodWatchdog *state;
     Coroutine *coroutine;
@@ -122,13 +122,14 @@ ColodWatchdog *colod_watchdog_new(const ColodContext *ctx,
     state = g_new0(ColodWatchdog, 1);
     coroutine = &state->coroutine;
     coroutine->cb = colod_watchdog_co;
+    state->qmp = qmp;
     state->interval = ctx->watchdog_interval;
     state->cb = cb;
     state->cb_data = data;
 
     if (state->interval) {
         g_idle_add(colod_watchdog_co, coroutine);
-        qmp_add_notify_event(ctx->qmp, colod_watchdog_event_cb, state);
+        qmp_add_notify_event(state->qmp, colod_watchdog_event_cb, state);
     }
     return state;
 }

@@ -40,8 +40,14 @@ void colod_syslog(G_GNUC_UNUSED int pri, const char *fmt, ...) {
 }
 
 static gboolean _testcase_co(Coroutine *coroutine, SmokeTestcase *this) {
+    struct {
+        GIOChannel *new_ch;
+    } *co;
     SmokeColodContext *sctx = this->sctx;
+    gchar *line;
+    gsize len;
 
+    co_frame(co, sizeof(*co));
     co_begin(gboolean, G_SOURCE_CONTINUE);
 
     g_timeout_add(200, coroutine->cb, this);
@@ -58,10 +64,18 @@ static gboolean _testcase_co(Coroutine *coroutine, SmokeTestcase *this) {
     co_yield_int(G_SOURCE_REMOVE);
 
     g_assert_false(logged);
-
-    g_main_loop_quit(this->sctx->cctx.mainloop);
-
     assert(!this->do_quit);
+
+    CO new_ch = smoke_open_client(NULL);
+    assert(CO new_ch);
+
+    co_recurse(ch_write_co(coroutine, CO new_ch,
+                           "{'exec-colod': 'quit'}\n", 1000));
+
+    co_recurse(ch_readln_co(coroutine, CO new_ch, &line, &len, 1000));
+    g_free(line);
+    g_io_channel_unref(CO new_ch);
+
     while (!this->do_quit) {
         progress_source_add(coroutine->cb, this);
         co_yield_int(G_SOURCE_REMOVE);

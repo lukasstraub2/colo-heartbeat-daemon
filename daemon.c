@@ -33,17 +33,71 @@
 #include "client.h"
 #include "qmp.h"
 #include "cpg.h"
+#include "qemulauncher.h"
 
 FILE *trace = NULL;
 gboolean do_syslog = FALSE;
 
-static int _daemon_start_co(Coroutine *coroutine, gpointer data) {
+typedef enum DaemonCmd DaemonCmd;
+enum DaemonCmd {
+    DAEMON_NONE,
+    DAEMON_START,
+    DAEMON_QUIT
+};
+
+typedef struct DaemonCoroutine DaemonCoroutine;
+struct DaemonCoroutine {
+    Coroutine coroutine;
+    ColodContext *ctx;
+    GMainLoop *mainloop;
+    ColodState last_state;
+
+    DaemonCmd command;
+    Coroutine *command_wake;
+};
+
+static gboolean daemon_co(gpointer data);
+static DaemonCoroutine *daemon_co_ref(DaemonCoroutine *this);
+static void daemon_co_unref(DaemonCoroutine *this);
+
+static int _deliver_command_co(Coroutine *coroutine, DaemonCoroutine *this,
+                               DaemonCmd command) {
+    co_begin(int, -1);
+
+    assert(!this->command_wake);
+    this->command = command;
+    this->command_wake = coroutine;
+
+    daemon_co_ref(this);
+    g_idle_add(daemon_co, this);
+
+    co_yield_int(G_SOURCE_REMOVE);
+    this->command_wake = NULL;
+    daemon_co_unref(this);
+
+    co_end;
     return 0;
 }
 
+static void daemon_wake_command(DaemonCoroutine *this, DaemonCmd command) {
+    if (this->command_wake) {
+        assert(this->command == command);
+        g_idle_add(this->command_wake->cb, this->command_wake);
+    }
+}
+
+static int _daemon_start_co(Coroutine *coroutine, gpointer data) {
+    return _deliver_command_co(coroutine, data, DAEMON_START);
+}
+
+static int _daemon_quit_co(Coroutine *coroutine, gpointer data, MyTimeout *timeout) {
+    (void) timeout;
+    return _deliver_command_co(coroutine, data, DAEMON_QUIT);
+}
+
 static void daemon_query_status(gpointer data, ColodState *ret) {
-    ColodContext *ctx = data;
-    *ret = ctx->last_state;
+    DaemonCoroutine *this = data;
+    *ret = this->last_state;
     ret->running = FALSE;
 }
 
@@ -59,11 +113,121 @@ const ClientCallbacks daemon_client_callbacks = {
     NULL,
     NULL,
     NULL,
-    NULL,
+    _daemon_quit_co,
     NULL,
     NULL,
     NULL
 };
+
+static gboolean _daemon_co(Coroutine *coroutine, DaemonCoroutine *this);
+static gboolean daemon_co(gpointer data) {
+    DaemonCoroutine *this = data;
+    Coroutine *coroutine = data;
+
+    co_enter(coroutine, _daemon_co(coroutine, this));
+    if (coroutine->yield) {
+        return GPOINTER_TO_INT(coroutine->yield_value);
+    }
+
+    g_main_loop_quit(this->mainloop);
+    colod_assert_remove_one_source(this);
+    return G_SOURCE_REMOVE;
+}
+
+static gboolean _daemon_co(Coroutine *coroutine, DaemonCoroutine *this) {
+    struct {
+        GError *local_errp;
+        QemuLauncher *launcher;
+        ColodMainCoroutine *mainco;
+    } *co;
+    const ColodContext *ctx = this->ctx;
+
+    co_frame(co, sizeof(*co));
+    co_begin(int, -1);
+
+    CO local_errp = NULL;
+
+    while (TRUE) {
+        client_register(ctx->listener, &daemon_client_callbacks, this);
+        co_yield_int(G_SOURCE_REMOVE);
+        client_unregister(ctx->listener, &daemon_client_callbacks, this);
+
+        DaemonCmd command = this->command;
+        if (command == DAEMON_START) {
+            CO launcher = qemu_launcher_new(ctx->commands, ctx->base_dir,
+                                            ctx->qmp_timeout_low);
+
+            ColodQmpState *qmp;
+            co_recurse(qmp = qemu_launcher_launch_secondary(coroutine, CO launcher,
+                                                            &CO local_errp));
+            daemon_wake_command(this, DAEMON_START);
+            if (!qmp) {
+                log_error(CO local_errp->message);
+                g_error_free(CO local_errp);
+                CO local_errp = NULL;
+                this->last_state.failed = TRUE;
+
+                qemu_launcher_unref(CO launcher);
+
+                continue;
+            }
+
+            CO mainco = colod_main_new(ctx, CO launcher, qmp, &CO local_errp);
+            qmp_unref(qmp);
+            qemu_launcher_unref(CO launcher);
+            if (!CO mainco) {
+                log_error(CO local_errp->message);
+                g_error_free(CO local_errp);
+                CO local_errp = NULL;
+                this->last_state.failed = TRUE;
+
+                continue;
+            }
+
+            colod_main_client_register(CO mainco);
+            gboolean quit;
+            co_recurse(quit = colod_main_enter(coroutine, CO mainco));
+            colod_main_query_status(CO mainco, &this->last_state);
+            colod_main_client_unregister(CO mainco);
+
+            colod_main_unref(CO mainco);
+
+            if (quit) {
+                break;
+            }
+        } else if (command == DAEMON_QUIT) {
+            break;
+        } else {
+            abort();
+        }
+    }
+
+    daemon_wake_command(this, DAEMON_QUIT);
+    return 0;
+    co_end;
+}
+
+static DaemonCoroutine *daemon_co_new(ColodContext *mctx, GMainLoop *mainloop) {
+    DaemonCoroutine *this = g_rc_box_new0(DaemonCoroutine);
+    Coroutine *coroutine = &this->coroutine;
+    coroutine->cb = daemon_co;
+    this->ctx = mctx;
+    this->mainloop = mainloop;
+    g_idle_add(coroutine->cb, coroutine);
+    return this;
+}
+
+static void daemon_co_free(gpointer data) {
+    (void) data;
+}
+
+static DaemonCoroutine *daemon_co_ref(DaemonCoroutine *this) {
+    return g_rc_box_acquire(this);
+}
+
+static void daemon_co_unref(DaemonCoroutine *this) {
+    g_rc_box_release_full(this, daemon_co_free);
+}
 
 void daemon_mainloop(ColodContext *mctx) {
     const ColodContext *ctx = mctx;
@@ -71,7 +235,7 @@ void daemon_mainloop(ColodContext *mctx) {
 
     // g_main_context_default creates the global context on demand
     GMainContext *main_context = g_main_context_default();
-    mctx->mainloop = g_main_loop_new(main_context, FALSE);
+    GMainLoop *mainloop = g_main_loop_new(main_context, FALSE);
 
     mctx->commands = qmp_commands_new(ctx->instance_name, ctx->base_dir, "",
                                       "", "", "", 9000);
@@ -86,34 +250,12 @@ void daemon_mainloop(ColodContext *mctx) {
 
     mctx->listener = client_listener_new(ctx->mngmt_listen_fd, ctx->commands);
 
-    mctx->qmp = qmp_new(ctx->qmp_fd, ctx->qmp_yank_fd, ctx->qmp_timeout_low,
-                        &local_errp);
-    if (!ctx->qmp) {
-        colod_syslog(LOG_ERR, "Failed to initialize qmp: %s",
-                     local_errp->message);
-        g_error_free(local_errp);
-        exit(EXIT_FAILURE);
-    }
+    DaemonCoroutine *daemon = daemon_co_new(mctx, mainloop);
 
-    ColodMainCoroutine *main_coroutine = colod_main_new(ctx, &local_errp);
-    if (!main_coroutine) {
-        colod_syslog(LOG_ERR, "Failed to initialize main coroutine: %s",
-                     local_errp->message);
-        g_error_free(local_errp);
-        exit(EXIT_FAILURE);
-    }
-    colod_client_register(main_coroutine);
+    g_main_loop_run(mainloop);
+    g_main_loop_unref(mainloop);
 
-    g_main_loop_run(ctx->mainloop);
-    g_main_loop_unref(ctx->mainloop);
-    mctx->mainloop = NULL;
-
-    colod_client_unregister(main_coroutine);
-    client_register(ctx->listener, &daemon_client_callbacks, mctx);
-
-    colod_query_status(main_coroutine, &mctx->last_state);
-    colod_main_unref(main_coroutine);
-    qmp_unref(ctx->qmp);
+    daemon_co_unref(daemon);
     client_listener_free(ctx->listener);
     cpg_free(ctx->cpg);
     qmp_commands_free(ctx->commands);
@@ -166,26 +308,6 @@ static int daemon_open_mngmt(ColodContext *ctx, GError **errp) {
 err:
     close(sockfd);
     return -1;
-}
-
-static int daemon_open_qmp(ColodContext *ctx, GError **errp) {
-    int ret;
-
-    ret = colod_unix_connect(ctx->qmp_path, errp);
-    if (ret < 0) {
-        return -1;
-    }
-    ctx->qmp_fd = ret;
-
-    ret = colod_unix_connect(ctx->qmp_yank_path, errp);
-    if (ret < 0) {
-        close(ctx->qmp_fd);
-        ctx->qmp_fd = 0;
-        return -1;
-    }
-    ctx->qmp_yank_fd = ret;
-
-    return 0;
 }
 
 static int daemonize(ColodContext *ctx) {
@@ -295,11 +417,6 @@ int daemon_main(int argc, char **argv) {
     prctl(PR_SET_DUMPABLE, 1);
 
     signal(SIGPIPE, SIG_IGN); // TODO: Handle this properly
-
-    ret = daemon_open_qmp(ctx, &errp);
-    if (ret < 0) {
-        goto err;
-    }
 
     ret = daemon_open_mngmt(ctx, &errp);
     if (ret < 0) {

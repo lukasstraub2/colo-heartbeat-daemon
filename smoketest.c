@@ -34,6 +34,7 @@
 #include "qmp.h"
 #include "cpg.h"
 #include "watchdog.h"
+#include "qemulauncher.h"
 
 extern FILE *trace;
 extern gboolean do_syslog;
@@ -112,24 +113,54 @@ static int socketpair_channel(GIOChannel **channel, GError **errp) {
 
 static int smoke_open_qmp(SmokeColodContext *sctx, GError **errp) {
     int ret;
+    int qmp_fd, qmp_yank_fd;
 
     ret = socketpair_channel(&sctx->qmp_ch, errp);
     if (ret < 0) {
         return -1;
     }
-    sctx->cctx.qmp_fd = ret;
+    qmp_fd = ret;
 
     ret = socketpair_channel(&sctx->qmp_yank_ch, errp);
     if (ret < 0) {
         return -1;
     }
-    sctx->cctx.qmp_yank_fd = ret;
+    qmp_yank_fd = ret;
+
+    qemu_launcher_stub_set_fd(qmp_fd, qmp_yank_fd);
 
     return 0;
 }
 
+GIOChannel *smoke_open_client(GError **errp) {
+    struct sockaddr_un address = { 0 };
+    g_autofree char *path = NULL;
+
+    path = g_strconcat(smoke_basedir(), "/colod.sock", NULL);
+    if (strlen(path) >= sizeof(address.sun_path)) {
+        colod_error_set(errp, "Management unix path too long");
+        return NULL;
+    }
+
+    int ret = colod_unix_connect(path, errp);
+    if (ret < 0) {
+        colod_error_set(errp, "Failed to connect to management socket: %s",
+                        g_strerror(errno));
+        return NULL;
+    }
+    int clientfd = ret;
+
+    GIOChannel *client_ch = colod_create_channel(ret, errp);
+    if (!client_ch) {
+        close(clientfd);
+        return NULL;
+    }
+
+    return client_ch;
+}
+
 static int smoke_open_mngmt(SmokeColodContext *sctx, GError **errp) {
-    int sockfd, clientfd, ret;
+    int sockfd, ret;
     struct sockaddr_un address = { 0 };
     g_autofree char *path = NULL;
 
@@ -171,17 +202,8 @@ static int smoke_open_mngmt(SmokeColodContext *sctx, GError **errp) {
 
     sctx->cctx.mngmt_listen_fd = sockfd;
 
-    ret = colod_unix_connect(path, errp);
-    if (ret < 0) {
-        colod_error_set(errp, "Failed to connect to management socket: %s",
-                        g_strerror(errno));
-        goto err;
-    }
-    clientfd = ret;
-
-    sctx->client_ch = colod_create_channel(ret, errp);
+    sctx->client_ch = smoke_open_client(errp);
     if (!sctx->client_ch) {
-        close(clientfd);
         goto err;
     }
 

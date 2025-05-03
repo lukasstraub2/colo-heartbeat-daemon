@@ -22,6 +22,7 @@
 #include "eventqueue.h"
 #include "raise_timeout_coroutine.h"
 #include "yellow_coroutine.h"
+#include "qemulauncher.h"
 
 typedef enum MainState {
     STATE_SECONDARY_STARTUP,
@@ -35,16 +36,16 @@ typedef enum MainState {
     STATE_FAILOVER,
     STATE_FAILED_PEER_FAILOVER,
     STATE_FAILED,
-    STATE_QUIT,
-    STATE_AUTOQUIT
+    STATE_QUIT
 } MainState;
 
 struct ColodMainCoroutine {
     Coroutine coroutine;
-    gboolean quit;
+    gboolean mainco_running;
     const ColodContext *ctx;
     EventQueue *queue;
     guint wake_source_id;
+    QemuLauncher *launcher;
     ColodQmpState *qmp;
     ColodRaiseCoroutine *raise_timeout_coroutine;
     YellowCoroutine *yellow_co;
@@ -59,6 +60,9 @@ struct ColodMainCoroutine {
     gboolean primary;
     gboolean replication;
     gchar *peer;
+
+    Coroutine *wake_on_exit;
+    gboolean return_quit;
 };
 
 #define colod_trace_source(data) \
@@ -76,7 +80,7 @@ static void _colod_trace_source(gpointer data, const gchar *func,
                 func, line, found_name, current_name);
 }
 
-void colod_query_status(ColodMainCoroutine *this, ColodState *ret) {
+void colod_main_query_status(ColodMainCoroutine *this, ColodState *ret) {
     ret->running = TRUE;
     ret->primary = this->primary;
     ret->replication = this->replication;
@@ -86,7 +90,7 @@ void colod_query_status(ColodMainCoroutine *this, ColodState *ret) {
 }
 
 static void __colod_query_status(gpointer data, ColodState *ret) {
-    return colod_query_status(data, ret);
+    return colod_main_query_status(data, ret);
 }
 
 static void colod_peer_failed(ColodMainCoroutine *this) {
@@ -131,7 +135,6 @@ static const gchar *event_str(ColodEvent event) {
         case EVENT_FAILED: return "EVENT_FAILED";
         case EVENT_PEER_FAILOVER: return "EVENT_PEER_FAILOVER";
         case EVENT_QUIT: return "EVENT_QUIT";
-        case EVENT_AUTOQUIT: return "EVENT_AUTOQUIT";
 
         case EVENT_FAILOVER_SYNC: return "EVENT_FAILOVER_SYNC";
         case EVENT_FAILOVER_WIN: return "EVENT_FAILOVER_WIN";
@@ -144,8 +147,7 @@ static const gchar *event_str(ColodEvent event) {
 }
 
 static EventQueue *colod_eventqueue_new() {
-    return eventqueue_new(32, EVENT_FAILED, EVENT_PEER_FAILOVER, EVENT_QUIT,
-                          EVENT_AUTOQUIT, 0);
+    return eventqueue_new(32, EVENT_FAILED, EVENT_PEER_FAILOVER, EVENT_QUIT, 0);
 }
 
 static gboolean event_always_interrupting(ColodEvent event) {
@@ -153,7 +155,6 @@ static gboolean event_always_interrupting(ColodEvent event) {
         case EVENT_FAILED:
         case EVENT_PEER_FAILOVER:
         case EVENT_QUIT:
-        case EVENT_AUTOQUIT:
             return TRUE;
         break;
 
@@ -168,7 +169,6 @@ static MainState handle_always_interrupting(ColodEvent event) {
         case EVENT_FAILED: return STATE_FAILED;
         case EVENT_PEER_FAILOVER: return STATE_FAILED_PEER_FAILOVER;
         case EVENT_QUIT: return STATE_QUIT;
-        case EVENT_AUTOQUIT: return STATE_AUTOQUIT;
         default: abort();
     }
 }
@@ -205,7 +205,7 @@ static void _colod_event_queue(ColodMainCoroutine *this, ColodEvent event,
     colod_trace("%s:%u: queued %s (%s)\n", func, line, event_str(event),
                 reason);
 
-    if (!this->wake_source_id) {
+    if (this->mainco_running && !this->wake_source_id) {
         if (!eventqueue_pending(this->queue)
                 || eventqueue_event_interrupting(this->queue, event)) {
             colod_trace("%s:%u: Waking main coroutine\n", __func__, __LINE__);
@@ -225,31 +225,42 @@ static void _colod_event_queue(ColodMainCoroutine *this, ColodEvent event,
     eventqueue_add(this->queue, event, NULL);
 }
 
-#define colod_event_wait(coroutine, ctx) \
-    co_wrap(_colod_event_wait(coroutine, ctx, __func__, __LINE__))
-static ColodEvent _colod_event_wait(Coroutine *coroutine,
-                                    ColodMainCoroutine *this,
-                                    const gchar *func, int line) {
-    guint source_id;
+static gboolean _colod_eventqueue_pending(ColodMainCoroutine *this) {
+    return eventqueue_pending(this->queue);
+}
+
+#define _colod_eventqueue_remove(this) \
+    __colod_eventqueue_remove(this, __func__, __LINE__)
+static ColodEvent __colod_eventqueue_remove(ColodMainCoroutine *this,
+                                            const gchar *func, int line) {
     Event *event;
     ColodEvent _event;
-
-    source_id = g_source_get_id(g_main_current_source());
-    if (source_id == this->wake_source_id) {
-        this->wake_source_id = 0;
-    }
-
-    if (!eventqueue_pending(this->queue) || this->wake_source_id) {
-        coroutine->yield = TRUE;
-        coroutine->yield_value = GINT_TO_POINTER(G_SOURCE_REMOVE);
-        return EVENT_FAILED;
-    }
 
     event = eventqueue_remove(this->queue);
     _event = event->event;
     g_free(event);
     colod_trace("%s:%u: got %s\n", func, line, event_str(_event));
     return _event;
+}
+
+#define colod_event_wait(coroutine, ctx) \
+    co_wrap(_colod_event_wait(coroutine, ctx, __func__, __LINE__))
+static ColodEvent _colod_event_wait(Coroutine *coroutine,
+                                    ColodMainCoroutine *this,
+                                    const gchar *func, int line) {
+    guint source_id = g_source_get_id(g_main_current_source());
+
+    if (source_id == this->wake_source_id) {
+        this->wake_source_id = 0;
+    }
+
+    if (!_colod_eventqueue_pending(this) || this->wake_source_id) {
+        coroutine->yield = TRUE;
+        coroutine->yield_value = GINT_TO_POINTER(G_SOURCE_REMOVE);
+        return EVENT_FAILED;
+    }
+
+    return __colod_eventqueue_remove(this, func, line);
 }
 
 #define colod_qmp_event_wait_co(...) \
@@ -855,8 +866,6 @@ static MainState _colod_primary_wait_co(Coroutine *coroutine,
              */
         } else if (event == EVENT_QUIT) {
             return STATE_QUIT;
-        } else if (event == EVENT_AUTOQUIT) {
-            return STATE_AUTOQUIT;
         }
     }
     co_end;
@@ -1001,6 +1010,7 @@ static void colod_quit(ColodMainCoroutine *this) {
 
 static int __colod_quit(Coroutine *coroutine, gpointer data, MyTimeout *timeout) {
     colod_quit(data);
+    return 0;
 }
 
 static gboolean _colod_main_co(Coroutine *coroutine, ColodMainCoroutine *this);
@@ -1014,11 +1024,15 @@ static gboolean colod_main_co(gpointer data) {
         return GPOINTER_TO_INT(coroutine->yield_value);
     }
 
-    g_main_loop_quit(this->ctx->mainloop);
+    this->return_quit = ret;
+    if (this->wake_on_exit) {
+        g_idle_add(this->wake_on_exit->cb, this->wake_on_exit);
+    }
+
+    this->mainco_running = FALSE;
     colod_assert_remove_one_source(this);
-    this->quit = TRUE;
     colod_main_unref(this);
-    return ret;
+    return G_SOURCE_REMOVE;
 }
 
 static gboolean _colod_main_co(Coroutine *coroutine, ColodMainCoroutine *this) {
@@ -1088,43 +1102,19 @@ static gboolean _colod_main_co(Coroutine *coroutine, ColodMainCoroutine *this) {
                 local_errp = NULL;
             }
 
-            while (TRUE) {
+            while (_colod_eventqueue_pending(this)) {
                 ColodEvent event;
                 co_recurse(event = colod_event_wait(coroutine, this));
                 if (event == EVENT_PEER_FAILOVER) {
                     this->peer_failover = TRUE;
                 } else if (event == EVENT_QUIT) {
-                    new_state = STATE_QUIT;
-                    break;
-                } else if (event == EVENT_AUTOQUIT) {
-                    if (this->qemu_quit) {
-                        new_state = STATE_QUIT;
-                        break;
-                    } else {
-                        new_state = STATE_AUTOQUIT;
-                        break;
-                    }
+                    return TRUE;
                 }
             }
-        } else if (this->state == STATE_QUIT) {
-            return G_SOURCE_REMOVE;
-        } else if (this->state == STATE_AUTOQUIT) {
-            this->failed = TRUE;
-            colod_cpg_send(this->ctx->cpg, MESSAGE_FAILED);
 
-            while (TRUE) {
-                ColodEvent event;
-                co_recurse(event = colod_event_wait(coroutine, this));
-                if (event == EVENT_PEER_FAILOVER) {
-                    this->peer_failover = TRUE;
-                } else if (event == EVENT_QUIT) {
-                    new_state = STATE_QUIT;
-                    break;
-                } else if (event == EVENT_FAILED && this->qemu_quit) {
-                    new_state = STATE_QUIT;
-                    break;
-                }
-            }
+            return FALSE;
+        } else if (this->state == STATE_QUIT) {
+            return TRUE;
         }
     }
 
@@ -1255,17 +1245,36 @@ const ClientCallbacks colod_client_callbacks = {
     __colod_execute_co
 };
 
-void colod_client_register(ColodMainCoroutine *this) {
+void colod_main_client_register(ColodMainCoroutine *this) {
     colod_main_ref(this);
     client_register(this->ctx->listener, &colod_client_callbacks, this);
 }
 
-void colod_client_unregister(ColodMainCoroutine *this) {
+void colod_main_client_unregister(ColodMainCoroutine *this) {
     client_unregister(this->ctx->listener, &colod_client_callbacks, this);
     colod_main_unref(this);
 }
 
-ColodMainCoroutine *colod_main_new(const ColodContext *ctx, GError **errp) {
+int _colod_main_enter(Coroutine *coroutine, ColodMainCoroutine *this) {
+    co_begin(int, -1);
+
+    assert(!this->wake_on_exit);
+    this->wake_on_exit = coroutine;
+    this->mainco_running = TRUE;
+
+    colod_main_ref(this);
+    g_idle_add(colod_main_co, this);
+
+    co_yield_int(G_SOURCE_REMOVE);
+    this->wake_on_exit = NULL;
+
+    co_end;
+
+    return this->return_quit;
+}
+
+ColodMainCoroutine *colod_main_new(const ColodContext *ctx, QemuLauncher *launcher,
+                                   ColodQmpState *qmp, GError **errp) {
     ColodMainCoroutine *this;
     Coroutine *coroutine;
 
@@ -1273,7 +1282,8 @@ ColodMainCoroutine *colod_main_new(const ColodContext *ctx, GError **errp) {
     coroutine = &this->coroutine;
     coroutine->cb = colod_main_co;
     this->ctx = ctx;
-    this->qmp = ctx->qmp;
+    this->launcher = qemu_launcher_ref(launcher);
+    this->qmp = qmp_ref(qmp);
 
     this->yellow_co = yellow_coroutine_new(ctx->cpg, ctx, 500, 1000, errp);
     if (!this->yellow_co) {
@@ -1292,16 +1302,14 @@ ColodMainCoroutine *colod_main_new(const ColodContext *ctx, GError **errp) {
 
     yellow_add_notify(this->yellow_co, colod_yellow_event_cb, this);
 
-    this->watchdog = colod_watchdog_new(ctx, __colod_check_health_co, this);
-
-    colod_main_ref(this);
-    g_idle_add(colod_main_co, this);
+    this->watchdog = colod_watchdog_new(ctx, this->qmp,
+                                        __colod_check_health_co, this);
     return this;
 }
 
 static void colod_main_free(gpointer _this) {
     ColodMainCoroutine *this = _this;
-    assert(this->quit);
+    assert(!this->mainco_running);
 
     yellow_del_notify(this->yellow_co, colod_yellow_event_cb, this);
     yellow_coroutine_free(this->yellow_co);
@@ -1313,6 +1321,9 @@ static void colod_main_free(gpointer _this) {
     colod_raise_timeout_coroutine_free(&this->raise_timeout_coroutine);
 
     colod_watchdog_free(this->watchdog);
+
+    qmp_unref(this->qmp);
+    qemu_launcher_unref(this->launcher);
 
     eventqueue_free(this->queue);
     g_free(this->peer);

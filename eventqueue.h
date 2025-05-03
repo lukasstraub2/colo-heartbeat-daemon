@@ -18,7 +18,6 @@ enum ColodEvent {
     EVENT_FAILED = 1,
     EVENT_PEER_FAILOVER,
     EVENT_QUIT,
-    EVENT_AUTOQUIT,
 
     EVENT_FAILOVER_SYNC,
 
