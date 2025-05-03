@@ -9,3 +9,4 @@ test_myarray
 test_qmpcommands
 test_native_qemulauncher
 *.o
+.aider.*

@@ -47,32 +47,19 @@ typedef struct CoroutineLock {
 
 #define colod_wait_co(...) \
     co_wrap(_colod_wait_co(__VA_ARGS__))
+int _colod_wait_co(Coroutine *coroutine, GPid pid, guint timeout, GError **errp);
 
 #define colod_execute_sync_timeout_co(...) \
     co_wrap(_colod_execute_sync_timeout_co(__VA_ARGS__))
-
-#define colod_execute_sync_co(...) \
-    co_wrap(_colod_execute_sync_co(__VA_ARGS__))
-
-int _colod_wait_co(Coroutine *coroutine, GPid pid, guint timeout, GError **errp);
-
 int _colod_execute_sync_timeout_co(Coroutine *coroutine, MyArray *argv,
                                    guint timeout, GError **errp);
 
+#define colod_execute_sync_co(...) \
+    co_wrap(_colod_execute_sync_co(__VA_ARGS__))
 int _colod_execute_sync_co(Coroutine *coroutine, MyArray *argv, GError **errp);
 
 #define colod_channel_read_line_timeout_co(...) \
     co_wrap(_colod_channel_read_line_timeout_co(__VA_ARGS__))
-
-#define colod_channel_read_line_co(...) \
-    co_wrap(_colod_channel_read_line_co(__VA_ARGS__))
-
-#define colod_channel_write_timeout_co(...) \
-    co_wrap(_colod_channel_write_timeout_co(__VA_ARGS__))
-
-#define colod_channel_write_co(...) \
-    co_wrap(_colod_channel_write_co(__VA_ARGS__))
-
 int _colod_channel_read_line_timeout_co(Coroutine *coroutine,
                                         GIOChannel *channel,
                                         gchar **line,
@@ -80,10 +67,14 @@ int _colod_channel_read_line_timeout_co(Coroutine *coroutine,
                                         guint timeout,
                                         GError **errp);
 
+#define colod_channel_read_line_co(...) \
+    co_wrap(_colod_channel_read_line_co(__VA_ARGS__))
 int _colod_channel_read_line_co(Coroutine *coroutine,
                                 GIOChannel *channel, gchar **line,
                                 gsize *len, GError **errp);
 
+#define colod_channel_write_timeout_co(...) \
+    co_wrap(_colod_channel_write_timeout_co(__VA_ARGS__))
 int _colod_channel_write_timeout_co(Coroutine *coroutine,
                                     GIOChannel *channel,
                                     const gchar *buf,
@@ -91,6 +82,8 @@ int _colod_channel_write_timeout_co(Coroutine *coroutine,
                                     guint timeout,
                                     GError **errp);
 
+#define colod_channel_write_co(...) \
+    co_wrap(_colod_channel_write_co(__VA_ARGS__))
 int _colod_channel_write_co(Coroutine *coroutine,
                             GIOChannel *channel, const gchar *buf,
                             gsize len, GError **errp);
