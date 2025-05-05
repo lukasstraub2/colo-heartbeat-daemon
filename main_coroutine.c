@@ -309,7 +309,6 @@ static int _colod_yank_co(Coroutine *coroutine, ColodMainCoroutine *this, GError
         colod_event_queue(this, EVENT_FAILED, local_errp->message);
         g_propagate_error(errp, local_errp);
     } else {
-        qmp_clear_yank(this->qmp);
         colod_event_queue(this, EVENT_FAILOVER_SYNC, "did yank");
     }
 
@@ -338,7 +337,6 @@ static ColodQmpResult *_colod_execute_nocheck_co(Coroutine *coroutine,
                                                  GError **errp,
                                                  const gchar *command) {
     ColodQmpResult *result;
-    int ret;
     GError *local_errp = NULL;
 
     colod_watchdog_refresh(this->watchdog);
@@ -353,16 +351,7 @@ static ColodQmpResult *_colod_execute_nocheck_co(Coroutine *coroutine,
         return NULL;
     }
 
-    ret = qmp_get_error(this->qmp, &local_errp);
-    if (ret < 0) {
-        qmp_result_free(result);
-        colod_event_queue(this, EVENT_FAILED, local_errp->message);
-        g_propagate_error(errp, local_errp);
-        return NULL;
-    }
-
-    if (qmp_get_yank(this->qmp)) {
-        qmp_clear_yank(this->qmp);
+    if (result->did_yank) {
         colod_event_queue(this, EVENT_FAILOVER_SYNC, "did yank");
     }
 
@@ -1082,17 +1071,11 @@ static gboolean _colod_main_co(Coroutine *coroutine, ColodMainCoroutine *this) {
             this->peer_failover = TRUE;
             new_state = STATE_FAILED;
         } else if (this->state == STATE_FAILED) {
+            log_error("qemu failed");
             this->failed = TRUE;
             colod_cpg_send(this->ctx->cpg, MESSAGE_FAILED);
 
             qmp_set_timeout(this->qmp, this->ctx->qmp_timeout_low);
-            ret = qmp_get_error(this->qmp, &local_errp);
-            if (ret < 0) {
-                log_error_fmt("qemu failed: %s", local_errp->message);
-                g_error_free(local_errp);
-                local_errp = NULL;
-            }
-
             co_recurse(ret = colod_stop_co(coroutine, this, &local_errp));
             if (ret < 0) {
                 g_error_free(local_errp);

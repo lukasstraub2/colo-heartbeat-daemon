@@ -44,7 +44,7 @@ void colod_syslog(int pri, const char *fmt, ...)
 #define log_error(message) \
     colod_syslog(LOG_ERR, "%s:%u: %s", __func__, __LINE__, message)
 #define log_error_fmt(fmt, ...) \
-    colod_syslog(LOG_ERR, "%s: " fmt, __func__, ##__VA_ARGS__)
+    colod_syslog(LOG_ERR, "%s:%u: " fmt, __func__, __LINE__, ##__VA_ARGS__)
 
 void colod_trace(const char *fmt, ...);
 
