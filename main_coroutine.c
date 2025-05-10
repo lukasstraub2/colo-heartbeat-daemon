@@ -23,6 +23,7 @@
 #include "raise_timeout_coroutine.h"
 #include "yellow_coroutine.h"
 #include "qemulauncher.h"
+#include "qmpexectx.h"
 
 typedef enum MainState {
     STATE_SECONDARY_STARTUP,
@@ -295,16 +296,15 @@ static int _colod_qmp_event_wait_co(Coroutine *coroutine,
     return ret;
 }
 
-#define colod_yank(...) \
-    co_wrap(_colod_yank_co(__VA_ARGS__))
-static int _colod_yank_co(Coroutine *coroutine, ColodMainCoroutine *this, GError **errp) {
-    int ret;
+static int __colod_yank_co(Coroutine *coroutine, gpointer data, GError **errp) {
+    ColodMainCoroutine *this = data;
     GError *local_errp = NULL;
+    int ret;
 
-    ret = _qmp_yank_co(coroutine, this->qmp, &local_errp);
-    if (coroutine->yield) {
-        return -1;
-    }
+    co_begin(int, -1);
+
+    colod_main_ref(this);
+    co_recurse(ret = qmp_yank_co(coroutine, this->qmp, &local_errp));
     if (ret < 0) {
         colod_event_queue(this, EVENT_FAILED, local_errp->message);
         g_propagate_error(errp, local_errp);
@@ -312,42 +312,28 @@ static int _colod_yank_co(Coroutine *coroutine, ColodMainCoroutine *this, GError
         colod_event_queue(this, EVENT_FAILOVER_SYNC, "did yank");
     }
 
-    return ret;
-}
-
-static int __colod_yank_co(Coroutine *coroutine, gpointer data, GError **errp) {
-    ColodMainCoroutine *this = data;
-    int ret;
-
-    co_begin(int, -1);
-
-    colod_main_ref(this);
-    co_recurse(ret = colod_yank(coroutine, this, errp));
-
-    co_end;
-
     colod_main_unref(this);
     return ret;
+    co_end;
 }
 
-#define colod_execute_nocheck_co(...) \
-    co_wrap(_colod_execute_nocheck_co(__VA_ARGS__))
-static ColodQmpResult *_colod_execute_nocheck_co(Coroutine *coroutine,
-                                                 ColodMainCoroutine *this,
-                                                 GError **errp,
-                                                 const gchar *command) {
+#define _colod_execute_nocheck_co(...) co_wrap(__colod_execute_nocheck_co(__VA_ARGS__))
+static ColodQmpResult *__colod_execute_nocheck_co(Coroutine *coroutine, gpointer data,
+                                                  GError **errp, const gchar *command) {
+    ColodMainCoroutine *this = data;
     ColodQmpResult *result;
     GError *local_errp = NULL;
 
+    co_begin(ColodQmpResult *, NULL);
+
+    colod_main_ref(this);
     colod_watchdog_refresh(this->watchdog);
 
-    result = _qmp_execute_nocheck_co(coroutine, this->qmp, &local_errp, command);
-    if (coroutine->yield) {
-        return NULL;
-    }
+    co_recurse(result = qmp_execute_nocheck_co(coroutine, this->qmp, &local_errp, command));
     if (!result) {
         colod_event_queue(this, EVENT_FAILED, local_errp->message);
         g_propagate_error(errp, local_errp);
+        colod_main_unref(this);
         return NULL;
     }
 
@@ -355,39 +341,18 @@ static ColodQmpResult *_colod_execute_nocheck_co(Coroutine *coroutine,
         colod_event_queue(this, EVENT_FAILOVER_SYNC, "did yank");
     }
 
+    colod_main_unref(this);
     return result;
+    co_end;
 }
 
-static ColodQmpResult *__colod_execute_nocheck_co(Coroutine *coroutine,
-                                                  gpointer data,
-                                                  GError **errp,
-                                                  const gchar *command) {
-    ColodMainCoroutine *this = data;
-    ColodQmpResult * ret;
+static ColodQmpResult *__colod_execute_co(Coroutine *coroutine, gpointer data,
+                                          GError **errp, const gchar *command) {
+    ColodQmpResult *result;
 
     co_begin(ColodQmpResult *, NULL);
 
-    colod_main_ref(this);
-    co_recurse(ret = colod_execute_nocheck_co(coroutine, this, errp, command));
-
-    co_end;
-
-    colod_main_unref(this);
-    return ret;
-}
-
-#define colod_execute_co(...) \
-    co_wrap(_colod_execute_co(__VA_ARGS__))
-static ColodQmpResult *_colod_execute_co(Coroutine *coroutine,
-                                         ColodMainCoroutine *this,
-                                         GError **errp,
-                                         const gchar *command) {
-    ColodQmpResult *result;
-
-    result = _colod_execute_nocheck_co(coroutine, this, errp, command);
-    if (coroutine->yield) {
-        return NULL;
-    }
+    co_recurse(result = _colod_execute_nocheck_co(coroutine, data, errp, command));
     if (!result) {
         return NULL;
     }
@@ -400,67 +365,7 @@ static ColodQmpResult *_colod_execute_co(Coroutine *coroutine,
     }
 
     return result;
-}
-
-static ColodQmpResult *__colod_execute_co(Coroutine *coroutine,
-                                          gpointer data,
-                                          GError **errp,
-                                          const gchar *command) {
-    ColodMainCoroutine *this = data;
-    ColodQmpResult * ret;
-
-    co_begin(ColodQmpResult *, NULL);
-
-    colod_main_ref(this);
-    co_recurse(ret = colod_execute_co(coroutine, this, errp, command));
-
     co_end;
-
-    colod_main_unref(this);
-    return ret;
-}
-
-#define colod_execute_array_co(...) \
-    co_wrap(_colod_execute_array_co(__VA_ARGS__))
-static int _colod_execute_array_co(Coroutine *coroutine, ColodMainCoroutine *this,
-                                   MyArray *array, gboolean ignore_errors,
-                                   GError **errp) {
-    struct {
-        int i;
-    } *co;
-    GError *local_errp = NULL;
-
-    co_frame(co, sizeof(*co));
-    co_begin(int, -1);
-
-    assert(!errp || !*errp);
-
-    for (CO i = 0; CO i < array->size; CO i++) {
-        if (eventqueue_pending_interrupt(this->queue)) {
-            g_set_error(errp, COLOD_ERROR, COLOD_ERROR_INTERRUPT,
-                        "Got interrupting event while executing array");
-            return -1;
-            break;
-        }
-
-        ColodQmpResult *result;
-        co_recurse(result = colod_execute_co(coroutine, this, &local_errp, array->array[CO i]));
-        if (ignore_errors &&
-                g_error_matches(local_errp, COLOD_ERROR, COLOD_ERROR_QMP)) {
-            colod_syslog(LOG_WARNING, "Ignoring qmp error: %s",
-                         local_errp->message);
-            g_error_free(local_errp);
-            local_errp = NULL;
-        } else if (!result) {
-            g_propagate_error(errp, local_errp);
-            return -1;
-        }
-        qmp_result_free(result);
-    }
-
-    co_end;
-
-    return 0;
 }
 
 static gboolean qemu_runnng(const gchar *status) {
@@ -473,27 +378,28 @@ static gboolean qemu_runnng(const gchar *status) {
 
 #define qemu_query_status_co(...) \
     co_wrap(_qemu_query_status_co(__VA_ARGS__))
-static int _qemu_query_status_co(Coroutine *coroutine, ColodMainCoroutine *this,
-                                 gboolean *primary, gboolean *replication,
-                                 GError **errp) {
+static QmpEctx *_qemu_query_status_co(Coroutine *coroutine, ColodMainCoroutine *this,
+                                      gboolean *primary, gboolean *replication,
+                                      GError **errp) {
     struct {
+        QmpEctx *ectx;
         ColodQmpResult *qemu_status, *colo_status;
     } *co;
 
     co_frame(co, sizeof(*co));
-    co_begin(int, -1);
+    co_begin(QmpEctx *, NULL);
 
-    co_recurse(CO qemu_status = colod_execute_co(coroutine, this, errp,
-                                                 "{'execute': 'query-status'}\n"));
-    if (!CO qemu_status) {
-        return -1;
-    }
+    CO ectx = qmp_ectx_new(this->qmp);
+    qmp_ectx_set_ignore_yank(CO ectx);
 
-    co_recurse(CO colo_status = colod_execute_co(coroutine, this, errp,
-                                                 "{'execute': 'query-colo-status'}\n"));
-    if (!CO colo_status) {
+    co_recurse(CO qemu_status = qmp_ectx(coroutine, CO ectx, "{'execute': 'query-status'}\n"));
+    co_recurse(CO colo_status = qmp_ectx(coroutine, CO ectx, "{'execute': 'query-colo-status'}\n"));
+
+    if (qmp_ectx_failed(CO ectx)) {
         qmp_result_free(CO qemu_status);
-        return -1;
+        qmp_result_free(CO colo_status);
+        qmp_ectx_unref(CO ectx, errp);
+        return NULL;
     }
 
     co_end;
@@ -510,7 +416,8 @@ static int _qemu_query_status_co(Coroutine *coroutine, ColodMainCoroutine *this,
                         "and query-colo-status output");
         qmp_result_free(CO qemu_status);
         qmp_result_free(CO colo_status);
-        return -1;
+        qmp_ectx_unref(CO ectx, NULL);
+        return NULL;
     }
 
     if (!strcmp(status, "inmigrate") || !strcmp(status, "shutdown")) {
@@ -532,12 +439,13 @@ static int _qemu_query_status_co(Coroutine *coroutine, ColodMainCoroutine *this,
                         CO qemu_status->line, CO colo_status->line);
         qmp_result_free(CO qemu_status);
         qmp_result_free(CO colo_status);
-        return -1;
+        qmp_ectx_unref(CO ectx, NULL);
+        return NULL;
     }
 
     qmp_result_free(CO qemu_status);
     qmp_result_free(CO colo_status);
-    return 0;
+    return CO ectx;
 }
 
 #define colod_check_health_co(...) \
@@ -546,7 +454,7 @@ static int _colod_check_health_co(Coroutine *coroutine, ColodMainCoroutine *this
                                   GError **errp) {
     gboolean primary;
     gboolean replication;
-    int ret;
+    QmpEctx *ret;
     GError *local_errp = NULL;
 
     ret = _qemu_query_status_co(coroutine, this, &primary, &replication,
@@ -554,11 +462,16 @@ static int _colod_check_health_co(Coroutine *coroutine, ColodMainCoroutine *this
     if (coroutine->yield) {
         return -1;
     }
-    if (ret < 0) {
+    if (!ret) {
         colod_event_queue(this, EVENT_FAILED, local_errp->message);
         g_propagate_error(errp, local_errp);
         return -1;
     }
+
+    if (qmp_ectx_did_yank(ret)) {
+        colod_event_queue(this, EVENT_FAILOVER_SYNC, "did yank");
+    }
+    qmp_ectx_unref(ret, NULL);
 
     if (!this->transitioning &&
             (this->primary != primary ||
@@ -586,10 +499,9 @@ static int __colod_check_health_co(Coroutine *coroutine, gpointer data,
     colod_main_ref(this);
     co_recurse(ret = colod_check_health_co(coroutine, this, errp));
 
-    co_end;
-
     colod_main_unref(this);
     return ret;
+    co_end;
 }
 
 static int colod_start_migration(ColodMainCoroutine *this) {
@@ -605,60 +517,41 @@ static int __colod_start_migration(Coroutine *coroutine, gpointer data) {
     return colod_start_migration(data);
 }
 
-#define colod_stop_co(...) \
-    co_wrap(_colod_stop_co(__VA_ARGS__))
-static int _colod_stop_co(Coroutine *coroutine, ColodMainCoroutine *this,
-                          GError **errp) {
-    ColodQmpResult *result;
-
-    result = _colod_execute_co(coroutine, this, errp, "{'execute': 'stop'}\n");
-    if (coroutine->yield) {
-        return -1;
-    }
-    if (!result) {
-        return -1;
-    }
-    qmp_result_free(result);
-
-    return 0;
-}
-
 #define colod_failover_co(...) \
     co_wrap(_colod_failover_co(__VA_ARGS__))
 static MainState _colod_failover_co(Coroutine *coroutine,
                                     ColodMainCoroutine *this) {
     struct {
+        QmpEctx *ectx;
         MyArray *commands;
     } *co;
-    int ret;
-    GError *local_errp = NULL;
+    QmpCommands *qmpcommands = this->ctx->commands;
 
     co_frame(co, sizeof(*co));
     co_begin(MainState, STATE_FAILED);
 
+    CO ectx = qmp_ectx_new(this->qmp);
+    qmp_ectx_set_ignore_yank(CO ectx);
+    qmp_ectx_set_ignore_qmp_error(CO ectx);
     eventqueue_set_interrupting(this->queue, 0);
 
-    co_recurse(ret = qmp_yank_co(coroutine, this->qmp, &local_errp));
-    if (ret < 0) {
-        log_error(local_errp->message);
-        g_error_free(local_errp);
-        return STATE_FAILED;
-    }
+    co_recurse(qmp_ectx_yank(coroutine, CO ectx));
 
-    if (this->primary) {
-        CO commands = qmp_commands_get_failover_primary(this->ctx->commands);
-    } else {
-        CO commands = qmp_commands_get_failover_secondary(this->ctx->commands);
-    }
     this->transitioning = TRUE;
-    co_recurse(ret = colod_execute_array_co(coroutine, this, CO commands,
-                                            TRUE, &local_errp));
+    if (this->primary) {
+        CO commands = qmp_commands_get_failover_primary(qmpcommands);
+    } else {
+        CO commands = qmp_commands_get_failover_secondary(qmpcommands);
+    }
+    co_recurse(qmp_ectx_array(coroutine, CO ectx, CO commands));
     my_array_unref(CO commands);
-    if (ret < 0) {
-        log_error(local_errp->message);
-        g_error_free(local_errp);
+
+    if (qmp_ectx_failed(CO ectx)) {
+        qmp_ectx_log_error(CO ectx);
+        qmp_ectx_unref(CO ectx, NULL);
         return STATE_FAILED;
     }
+    qmp_ectx_unref(CO ectx, NULL);
 
     colod_clear_peer(this);
 
@@ -698,22 +591,27 @@ static MainState _colod_secondary_startup_co(Coroutine *coroutine,
     GError *local_errp = NULL;
     ColodQmpResult *result;
 
-    result =_colod_execute_co(coroutine, this, &local_errp,
+    co_begin(MainState, STATE_FAILED);
+
+    co_recurse(result = qmp_execute_co(coroutine, this->qmp, &local_errp,
                             "{'execute': 'migrate-set-capabilities',"
                             "'arguments': {'capabilities': ["
-                                "{'capability': 'events', 'state': true }]}}\n");
-    if (coroutine->yield) {
-        return 0;
-    }
-
+                                "{'capability': 'events', 'state': true }]}}\n"));
     if (!result) {
         log_error(local_errp->message);
         g_error_free(local_errp);
         return STATE_FAILED;
     }
+
+    if (result->did_yank) {
+        log_error("Yank during startup");
+        qmp_result_free(result);
+        return STATE_FAILED;
+    }
     qmp_result_free(result);
 
     return STATE_SECONDARY_WAIT;
+    co_end;
 }
 
 #define colod_secondary_wait_co(...) \
@@ -857,6 +755,11 @@ static MainState _colod_primary_wait_co(Coroutine *coroutine,
     co_end;
 }
 
+static gboolean eventqueue_interrupt(gpointer data) {
+    ColodMainCoroutine *this = data;
+    return eventqueue_pending_interrupt(this->queue);
+}
+
 #define colod_primary_start_migration_co(...) \
     co_wrap(_colod_primary_start_migration_co(__VA_ARGS__))
 static MainState _colod_primary_start_migration_co(Coroutine *coroutine,
@@ -864,39 +767,33 @@ static MainState _colod_primary_start_migration_co(Coroutine *coroutine,
     struct {
         ColodEvent event;
         MyArray *commands;
+        QmpEctx *ectx;
     } *co;
-    ColodQmpState *qmp = this->qmp;
-    ColodQmpResult *qmp_result;
+    QmpCommands *qmpcommands = this->ctx->commands;
+    ColodQmpResult *result;
     int ret;
     GError *local_errp = NULL;
 
     co_frame(co, sizeof(*co));
     co_begin(MainState, STATE_FAILED);
 
+    CO ectx = qmp_ectx_new(this->qmp);
+    qmp_ectx_set_interrupt_cb(CO ectx, eventqueue_interrupt, this);
     eventqueue_set_interrupting(this->queue, EVENT_FAILOVER_SYNC, 0);
 
-    co_recurse(qmp_result = colod_execute_co(coroutine, this, &local_errp,
+    co_recurse(result = qmp_ectx(coroutine, CO ectx,
                     "{'execute': 'migrate-set-capabilities',"
                     "'arguments': {'capabilities': ["
                         "{'capability': 'events', 'state': true },"
                         "{'capability': 'pause-before-switchover', 'state': true}]}}\n"));
-    if (!qmp_result) {
-        goto qmp_error;
-    }
-    qmp_result_free(qmp_result);
-    if (eventqueue_pending_interrupt(this->queue)) {
-        goto handle_event;
-    }
+    qmp_result_free(result);
 
-    CO commands = qmp_commands_get_migration_start(this->ctx->commands, "dummy");
-    co_recurse(ret = colod_execute_array_co(coroutine, this, CO commands,
-                                            FALSE, &local_errp));
+    CO commands = qmp_commands_get_migration_start(qmpcommands, "dummy address");
+    co_recurse(qmp_ectx_array(coroutine, CO ectx, CO commands));
     my_array_unref(CO commands);
-    if (ret < 0) {
-        goto qmp_error;
-    }
-    if (eventqueue_pending_interrupt(this->queue)) {
-        goto handle_event;
+
+    if (qmp_ectx_failed(CO ectx)) {
+        goto ectx_failed;
     }
 
     this->transitioning = TRUE;
@@ -905,35 +802,24 @@ static MainState _colod_primary_start_migration_co(Coroutine *coroutine,
                     " 'data': {'status': 'pre-switchover'}}",
                     &local_errp));
     if (ret < 0) {
-        goto qmp_error;
+        goto wait_error;
     }
 
-    CO commands = qmp_commands_get_migration_switchover(this->ctx->commands);
-    co_recurse(ret = colod_execute_array_co(coroutine, this,
-                                            CO commands,
-                                            FALSE, &local_errp));
+    CO commands = qmp_commands_get_migration_switchover(qmpcommands);
+    co_recurse(qmp_ectx_array(coroutine, CO ectx, CO commands));
     my_array_unref(CO commands);
-    if (ret < 0) {
-        goto qmp_error;
-    }
-    if (eventqueue_pending_interrupt(this->queue)) {
-        goto handle_event;
-    }
 
     colod_raise_timeout_coroutine(&this->raise_timeout_coroutine, this->qmp,
                                   this->ctx);
 
-    co_recurse(qmp_result = colod_execute_co(coroutine, this, &local_errp,
+    co_recurse(result = qmp_ectx(coroutine, CO ectx,
                     "{'execute': 'migrate-continue',"
                     "'arguments': {'state': 'pre-switchover'}}\n"));
-    if (!qmp_result) {
-        qmp_set_timeout(qmp, this->ctx->qmp_timeout_low);
-        goto qmp_error;
-    }
-    qmp_result_free(qmp_result);
-    if (eventqueue_pending_interrupt(this->queue)) {
-        qmp_set_timeout(qmp, this->ctx->qmp_timeout_low);
-        goto handle_event;
+    qmp_result_free(result);
+
+    if (qmp_ectx_failed(CO ectx)) {
+        qmp_set_timeout(this->qmp, this->ctx->qmp_timeout_low);
+        goto ectx_failed;
     }
 
     co_recurse(ret = colod_qmp_event_wait_co(coroutine, this, 10000,
@@ -941,27 +827,42 @@ static MainState _colod_primary_start_migration_co(Coroutine *coroutine,
                     " 'data': {'status': 'colo'}}",
                     &local_errp));
     if (ret < 0) {
-        qmp_set_timeout(qmp, this->ctx->qmp_timeout_low);
-        goto qmp_error;
+        qmp_set_timeout(this->qmp, this->ctx->qmp_timeout_low);
+        goto wait_error;
     }
 
+    qmp_ectx_unref(CO ectx, NULL);
     return STATE_PRIMARY_COLO_RUNNING;
 
-qmp_error:
+ectx_failed:
+    if (qmp_ectx_did_interrupt(CO ectx)) {
+        qmp_ectx_unref(CO ectx, NULL);
+
+        goto handle_event;
+    } else if (qmp_ectx_did_yank(CO ectx) || qmp_ectx_did_qmp_error(CO ectx)) {
+        qmp_ectx_unref(CO ectx, NULL);
+
+        goto failover;
+    } else {
+        assert(qmp_ectx_did_error(CO ectx));
+        qmp_ectx_log_error(CO ectx);
+        qmp_ectx_unref(CO ectx, NULL);
+        return STATE_FAILED;
+    }
+
+wait_error:
+    qmp_ectx_unref(CO ectx, NULL);
+    assert(local_errp);
     if (g_error_matches(local_errp, COLOD_ERROR, COLOD_ERROR_INTERRUPT)) {
         g_error_free(local_errp);
         local_errp = NULL;
         goto handle_event;
-    } else if (g_error_matches(local_errp, COLOD_ERROR, COLOD_ERROR_QMP)) {
-        log_error(local_errp->message);
+    } else if (g_error_matches(local_errp, COLOD_ERROR, COLOD_ERROR_TIMEOUT)) {
         g_error_free(local_errp);
         local_errp = NULL;
-        CO event = EVENT_FAILOVER_SYNC;
         goto failover;
     } else {
-        log_error(local_errp->message);
-        g_error_free(local_errp);
-        return STATE_FAILED;
+        abort();
     }
 
 handle_event:
@@ -974,20 +875,17 @@ handle_event:
     }
 
 failover:
-    co_recurse(qmp_result = colod_execute_co(coroutine, this, &local_errp,
+    co_recurse(result = qmp_execute_co(coroutine, this->qmp, &local_errp,
                     "{'execute': 'migrate_cancel'}\n"));
-    if (!qmp_result) {
+    if (!result) {
         log_error(local_errp->message);
         g_error_free(local_errp);
         return STATE_FAILED;
     }
-    qmp_result_free(qmp_result);
-    assert(event_failover(CO event));
-    return handle_event_failover(CO event);
+    qmp_result_free(result);
 
+    return STATE_FAILOVER_SYNC;
     co_end;
-
-    return STATE_FAILED;
 }
 
 static void colod_quit(ColodMainCoroutine *this) {
@@ -1022,8 +920,6 @@ static gboolean colod_main_co(gpointer data) {
 }
 
 static gboolean _colod_main_co(Coroutine *coroutine, ColodMainCoroutine *this) {
-    int ret;
-    GError *local_errp = NULL;
     MainState new_state;
 
     co_begin(gboolean, G_SOURCE_CONTINUE);
@@ -1076,11 +972,10 @@ static gboolean _colod_main_co(Coroutine *coroutine, ColodMainCoroutine *this) {
             colod_cpg_send(this->ctx->cpg, MESSAGE_FAILED);
 
             qmp_set_timeout(this->qmp, this->ctx->qmp_timeout_low);
-            co_recurse(ret = colod_stop_co(coroutine, this, &local_errp));
-            if (ret < 0) {
-                g_error_free(local_errp);
-                local_errp = NULL;
-            }
+            ColodQmpResult *result;
+            co_recurse(result = qmp_execute_co(coroutine, this->qmp, NULL,
+                                               "{'execute': 'stop'}\n"));
+            qmp_result_free(result);
 
             while (_colod_eventqueue_pending(this)) {
                 ColodEvent event;

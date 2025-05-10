@@ -3,7 +3,7 @@ CC=gcc
 CFLAGS=-g -O2 -Wall -Wextra -fsanitize=address `pkg-config --cflags libnl-3.0 glib-2.0 json-glib-1.0`
 CPG_LDFLAGS=-lcorosync_common -lcpg
 LDFLAGS=`pkg-config --libs libnl-3.0 glib-2.0 json-glib-1.0`
-common_objects=util.o qemu_util.o json_util.o coutil.o qmp.o client.o netlink.o watchdog.o formater.o qmpcommands.o raise_timeout_coroutine.o yellow_coroutine.o eventqueue.o main_coroutine.o daemon.o
+common_objects=util.o qemu_util.o json_util.o coutil.o qmp.o qmpexectx.o client.o netlink.o watchdog.o formater.o qmpcommands.o raise_timeout_coroutine.o yellow_coroutine.o eventqueue.o main_coroutine.o daemon.o
 
 %.o: %.c *.h
 	$(CC) -c -o $@ $< $(CFLAGS)
@@ -31,7 +31,7 @@ test_myarray: util.o test_myarray.o
 test_qmpcommands: util.o formater.o qmpcommands.o test_qmpcommands.o
 	$(CC) -o $@ $^ $(CFLAGS) $(LDFLAGS)
 
-test_native_qemulauncher: util.o formater.o qmpcommands.o json_util.o coutil.o qmp.o native_qemulauncher.o test_native_qemulauncher.o
+test_native_qemulauncher: util.o formater.o qmpcommands.o json_util.o coutil.o qmp.o qmpexectx.o native_qemulauncher.o test_native_qemulauncher.o
 	$(CC) -o $@ $^ $(CFLAGS) $(LDFLAGS)
 
 io_watch_test: util.o io_watch_test.o

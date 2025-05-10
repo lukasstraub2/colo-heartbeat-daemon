@@ -3,18 +3,10 @@ colo
 test_*
 smoketest*
 stub_*
+smoke_*
 
-io_watch_test.c
-netlink_test.c
-smoke_util.c
-smoke_util.h
-yellow_coroutine.c
-raise_timeout_coroutine.c
-util.c
-client.c
-netlink.c
-native_qemulauncher.c
-qmpcommands.c
-qemu_util.c
-watchdog.c
-eventqueue.c
+*.c
+!main_coroutine.c
+!daemon.c
+!formater.c
+!json_util.c

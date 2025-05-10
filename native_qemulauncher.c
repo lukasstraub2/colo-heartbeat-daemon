@@ -23,6 +23,7 @@
 #include "json_util.h"
 
 #include "coroutine_stack.h"
+#include "qmpexectx.h"
 
 struct QemuLauncher {
     QmpCommands *commands;
@@ -31,33 +32,6 @@ struct QemuLauncher {
     int pid;
     char *disk_size;
 };
-
-#define execute_array_co(...) \
-    co_wrap(_execute_array_co(__VA_ARGS__))
-static int _execute_array_co(Coroutine *coroutine, ColodQmpState *qmp,
-                             MyArray *array, GError **errp) {
-    struct {
-        int i;
-    } *co;
-
-    co_frame(co, sizeof(*co));
-    co_begin(int, -1);
-
-    assert(!errp || !*errp);
-
-    for (CO i = 0; CO i < array->size; CO i++) {
-        ColodQmpResult *result;
-        co_recurse(result = qmp_execute_co(coroutine, qmp, errp, array->array[CO i]));
-        if (!result) {
-            return -1;
-        }
-        qmp_result_free(result);
-    }
-
-    co_end;
-
-    return 0;
-}
 
 static void setup_child(gpointer data) {
     (void) data;
@@ -202,7 +176,7 @@ static char *get_disk_size(ColodQmpResult *res, GError **errp) {
     co_wrap(_qemu_launcher_disk_size_co(__VA_ARGS__))
 static char *_qemu_launcher_disk_size_co(Coroutine *coroutine, QemuLauncher *this, GError **errp) {
     struct {
-        ColodQmpState *qmp;
+        QmpEctx *ectx;
         char *disk_size;
         MyArray *cmdline;
         GError *local_errp;
@@ -213,28 +187,33 @@ static char *_qemu_launcher_disk_size_co(Coroutine *coroutine, QemuLauncher *thi
 
     CO local_errp = NULL;
 
+    ColodQmpState *_qmp;
     CO cmdline = qmp_commands_get_qemu_dummy(this->commands);
-    co_recurse(CO qmp = qemu_launcher_launch_co(coroutine, this, CO cmdline, errp));
-    if (!CO qmp) {
+    co_recurse(_qmp = qemu_launcher_launch_co(coroutine, this, CO cmdline, errp));
+    if (!_qmp) {
         return NULL;
     }
+    CO ectx = qmp_ectx_new(_qmp);
+    qmp_unref(_qmp);
 
     ColodQmpResult *ret;
-    co_recurse(ret = qmp_execute_co(coroutine, CO qmp, errp,
-                                    "{'execute': 'query-named-block-nodes', 'arguments': {'flat': true}}\n"));
-    if (!ret) {
+    co_recurse(ret = qmp_ectx(coroutine, CO ectx,
+                              "{'execute': 'query-named-block-nodes', 'arguments': {'flat': true}}\n"));
+    if (qmp_ectx_failed(CO ectx)) {
+        qmp_ectx_unref(CO ectx, errp);
         return NULL;
     }
 
     CO disk_size = get_disk_size(ret, &CO local_errp);
     qmp_result_free(ret);
 
-    co_recurse(ret = qmp_execute_co(coroutine, CO qmp, NULL, "{'execute': 'quit'}\n"));
-    qmp_unref(CO qmp);
-    if (!ret) {
+    co_recurse(ret = qmp_ectx(coroutine, CO ectx, "{'execute': 'quit'}\n"));
+    if (qmp_ectx_failed(CO ectx)) {
+        qmp_ectx_unref(CO ectx, NULL);
         abort();
     }
     qmp_result_free(ret);
+    qmp_ectx_unref(CO ectx, NULL);
 
     int iret;
     co_recurse(iret = qemu_launcher_wait_co(coroutine, this, 1000, NULL));
@@ -276,6 +255,7 @@ ColodQmpState *_qemu_launcher_launch_primary(Coroutine *coroutine, QemuLauncher 
     struct {
         MyArray *cmdline;
         ColodQmpState *qmp;
+        QmpEctx *ectx;
     } *co;
 
     co_frame(co, sizeof(*co));
@@ -286,16 +266,18 @@ ColodQmpState *_qemu_launcher_launch_primary(Coroutine *coroutine, QemuLauncher 
     if (!CO qmp) {
         return NULL;
     }
+    CO ectx = qmp_ectx_new(CO qmp);
 
     CO cmdline = qmp_commands_get_prepare_primary(this->commands);
-    int ret;
-    co_recurse(ret = execute_array_co(coroutine, CO qmp, CO cmdline, errp));
+    co_recurse(qmp_ectx_array(coroutine, CO ectx, CO cmdline));
     my_array_unref(CO cmdline);
-    if (ret < 0) {
+    if (qmp_ectx_failed(CO ectx)) {
         qmp_unref(CO qmp);
+        qmp_ectx_unref(CO ectx, errp);
         return NULL;
     }
 
+    qmp_ectx_unref(CO ectx, NULL);
     return CO qmp;
 
     co_end;
@@ -305,6 +287,7 @@ ColodQmpState *_qemu_launcher_launch_secondary(Coroutine *coroutine, QemuLaunche
     struct {
         MyArray *cmdline;
         ColodQmpState *qmp;
+        QmpEctx *ectx;
     } *co;
     int ret;
 
@@ -347,15 +330,18 @@ ColodQmpState *_qemu_launcher_launch_secondary(Coroutine *coroutine, QemuLaunche
     if (!CO qmp) {
         return NULL;
     }
+    CO ectx = qmp_ectx_new(CO qmp);
 
     CO cmdline = qmp_commands_get_prepare_secondary(this->commands);
-    co_recurse(ret = execute_array_co(coroutine, CO qmp, CO cmdline, errp));
+    co_recurse(qmp_ectx_array(coroutine, CO ectx, CO cmdline));
     my_array_unref(CO cmdline);
-    if (ret < 0) {
+    if (qmp_ectx_failed(CO ectx)) {
         qmp_unref(CO qmp);
+        qmp_ectx_unref(CO ectx, errp);
         return NULL;
     }
 
+    qmp_ectx_unref(CO ectx, NULL);
     return CO qmp;
 
     co_end;
