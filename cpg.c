@@ -15,12 +15,10 @@
 
 #include "cpg.h"
 #include "daemon.h"
-#include "main_coroutine.h"
 
 struct Cpg {
     cpg_handle_t handle;
     guint source_id;
-    ColodContext *ctx;
     ColodCallbackHead callbacks;
     guint retransmit_source_id;
     gboolean retransmit[MESSAGE_MAX];
@@ -29,11 +27,13 @@ struct Cpg {
 void colod_cpg_add_notify(Cpg *this, CpgCallback _func, gpointer user_data) {
     ColodCallbackFunc func = (ColodCallbackFunc) _func;
     colod_callback_add(&this->callbacks, func, user_data);
+    cpg_ref(this);
 }
 
 void colod_cpg_del_notify(Cpg *this, CpgCallback _func, gpointer user_data) {
     ColodCallbackFunc func = (ColodCallbackFunc) _func;
     colod_callback_del(&this->callbacks, func, user_data);
+    cpg_unref(this);
 }
 
 static void notify(Cpg *this, ColodMessage message,
@@ -164,8 +164,7 @@ Cpg *colod_open_cpg(ColodContext *ctx, GError **errp) {
     strcpy(name.value, ctx->instance_name);
     name.length = strlen(name.value);
 
-    cpg = g_new0(Cpg, 1);
-    cpg->ctx = ctx;
+    cpg = g_rc_box_new0(Cpg);
 
     ret = cpg_model_initialize(&cpg->handle, CPG_MODEL_V1,
                                (cpg_model_data_t*) &cpg_data, cpg);
@@ -201,11 +200,21 @@ Cpg *cpg_new(Cpg *cpg, GError **errp) {
     return cpg;
 }
 
-void cpg_free(Cpg *cpg) {
+static void cpg_free(gpointer data) {
+    Cpg *cpg = data;
+
     colod_callback_clear(&cpg->callbacks);
     if (cpg->retransmit_source_id) {
         g_source_remove(cpg->retransmit_source_id);
     }
     g_source_remove(cpg->source_id);
     g_free(cpg);
+}
+
+Cpg *cpg_ref(Cpg *this) {
+    return g_rc_box_acquire(this);
+}
+
+void cpg_unref(Cpg *this) {
+    g_rc_box_release_full(this, cpg_free);
 }

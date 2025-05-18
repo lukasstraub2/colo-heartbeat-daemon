@@ -30,10 +30,6 @@ struct ClientCallbacks {
     void (*query_status)(gpointer data, ColodState *ret);
     int (*_check_health_co)(Coroutine *coroutine, gpointer data, GError **errp);
 
-    int (*_set_peer_co)(Coroutine *coroutine, gpointer data, const gchar *peer);
-    gchar *(*_get_peer_co)(Coroutine *coroutine, gpointer data);
-    int (*_clear_peer_co)(Coroutine *coroutine, gpointer data);
-
     int (*_start_co)(Coroutine *coroutine, gpointer data);
     int (*_promote_co)(Coroutine *coroutine, gpointer data);
     int (*_start_migration_co)(Coroutine *coroutine, gpointer data);
@@ -55,6 +51,6 @@ void client_register(ColodClientListener *this, const ClientCallbacks *cb, gpoin
 void client_unregister(ColodClientListener *this, const ClientCallbacks *cb, gpointer data);
 
 void client_listener_free(ColodClientListener *listener);
-ColodClientListener *client_listener_new(int socket, QmpCommands *commands);
+ColodClientListener *client_listener_new(int socket, QmpCommands *commands, PeerManager *peer);
 
 #endif // CLIENT_H

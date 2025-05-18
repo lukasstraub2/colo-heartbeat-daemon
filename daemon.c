@@ -34,6 +34,7 @@
 #include "qmp.h"
 #include "cpg.h"
 #include "qemulauncher.h"
+#include "peer_manager.h"
 
 FILE *trace = NULL;
 gboolean do_syslog = FALSE;
@@ -97,15 +98,15 @@ static int _daemon_quit_co(Coroutine *coroutine, gpointer data, MyTimeout *timeo
 
 static void daemon_query_status(gpointer data, ColodState *ret) {
     DaemonCoroutine *this = data;
+    PeerManager *peer = this->ctx->peer;
     *ret = this->last_state;
     ret->running = FALSE;
+    ret->peer_failed = peer_manager_failed(peer);
+    ret->peer_failover = peer_manager_failover(peer);
 }
 
 const ClientCallbacks daemon_client_callbacks = {
     daemon_query_status,
-    NULL,
-    NULL,
-    NULL,
     NULL,
     _daemon_start_co,
     NULL,
@@ -248,7 +249,8 @@ void daemon_mainloop(ColodContext *mctx) {
         exit(EXIT_FAILURE);
     }
 
-    mctx->listener = client_listener_new(ctx->mngmt_listen_fd, ctx->commands);
+    mctx->peer = peer_manager_new(ctx->cpg);
+    mctx->listener = client_listener_new(ctx->mngmt_listen_fd, ctx->commands, ctx->peer);
 
     DaemonCoroutine *daemon = daemon_co_new(mctx, mainloop);
 
@@ -257,7 +259,8 @@ void daemon_mainloop(ColodContext *mctx) {
 
     daemon_co_unref(daemon);
     client_listener_free(ctx->listener);
-    cpg_free(ctx->cpg);
+    peer_manager_unref(ctx->peer);
+    cpg_unref(ctx->cpg);
     qmp_commands_free(ctx->commands);
 }
 

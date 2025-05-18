@@ -39,14 +39,23 @@ void colod_cpg_stub_notify(Cpg *this, ColodMessage message,
 void colod_cpg_send(G_GNUC_UNUSED Cpg *cpg, G_GNUC_UNUSED uint32_t message) {}
 
 Cpg *colod_open_cpg(G_GNUC_UNUSED ColodContext *ctx, G_GNUC_UNUSED GError **errp) {
-    return g_new0(Cpg, 1);
+    return g_rc_box_new0(Cpg);
 }
 
 Cpg *cpg_new(Cpg *cpg, G_GNUC_UNUSED GError **errp) {
     return cpg;
 }
 
-void cpg_free(Cpg *cpg) {
+void cpg_free(gpointer data) {
+    Cpg *cpg = data;
+
     colod_callback_clear(&cpg->callbacks);
-    g_free(cpg);
+}
+
+Cpg *cpg_ref(Cpg *this) {
+    return g_rc_box_acquire(this);
+}
+
+void cpg_unref(Cpg *this) {
+    g_rc_box_release_full(this, cpg_free);
 }

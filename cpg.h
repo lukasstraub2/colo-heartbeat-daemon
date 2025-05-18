@@ -27,6 +27,7 @@ void colod_cpg_stub_notify(Cpg *this, ColodMessage message,
 void colod_cpg_send(Cpg *cpg, uint32_t message);
 Cpg *colod_open_cpg(ColodContext *ctx, GError **errp);
 Cpg *cpg_new(Cpg *cpg, GError **errp);
-void cpg_free(Cpg *cpg);
+Cpg *cpg_ref(Cpg *this);
+void cpg_unref(Cpg *this);
 
 #endif // CPG_C

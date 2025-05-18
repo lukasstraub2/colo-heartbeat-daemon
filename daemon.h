@@ -35,8 +35,9 @@ typedef struct ColodContext {
     int mngmt_listen_fd;
 
     QmpCommands *commands;
-	ColodClientListener *listener;
+    ColodClientListener *listener;
     Cpg *cpg;
+    PeerManager *peer;
 } ColodContext;
 
 void colod_syslog(int pri, const char *fmt, ...)

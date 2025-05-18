@@ -163,7 +163,7 @@ int main(G_GNUC_UNUSED int argc, G_GNUC_UNUSED char **argv) {
     g_main_loop_unref(this->mainloop);
 
     yellow_coroutine_free(this->yellow_co);
-    cpg_free(this->cpg);
+    cpg_unref(this->cpg);
 
     return 0;
 }

@@ -24,6 +24,7 @@
 #include "yellow_coroutine.h"
 #include "qemulauncher.h"
 #include "qmpexectx.h"
+#include "peer_manager.h"
 
 typedef enum MainState {
     STATE_SECONDARY_STARTUP,
@@ -35,7 +36,6 @@ typedef enum MainState {
     STATE_PRIMARY_COLO_RUNNING,
     STATE_FAILOVER_SYNC,
     STATE_FAILOVER,
-    STATE_FAILED_PEER_FAILOVER,
     STATE_FAILED,
     STATE_QUIT
 } MainState;
@@ -54,13 +54,10 @@ struct ColodMainCoroutine {
 
     MainState state;
     gboolean transitioning;
-    gboolean failed, peer_failed;
-    gboolean yellow, peer_yellow;
+    gboolean failed, yellow;
     gboolean qemu_quit;
-    gboolean peer_failover;
     gboolean primary;
     gboolean replication;
-    gchar *peer;
 
     Coroutine *wake_on_exit;
     gboolean return_quit;
@@ -82,56 +79,22 @@ static void _colod_trace_source(gpointer data, const gchar *func,
 }
 
 void colod_main_query_status(ColodMainCoroutine *this, ColodState *ret) {
+    PeerManager *peer = this->ctx->peer;
     ret->running = TRUE;
     ret->primary = this->primary;
     ret->replication = this->replication;
     ret->failed = this->failed;
-    ret->peer_failover = this->peer_failover;
-    ret->peer_failed = this->peer_failed;
+    ret->peer_failover = peer_manager_failover(peer);
+    ret->peer_failed = peer_manager_failed(peer);
 }
 
 static void __colod_query_status(gpointer data, ColodState *ret) {
     return colod_main_query_status(data, ret);
 }
 
-static void colod_peer_failed(ColodMainCoroutine *this) {
-    this->peer_failed = TRUE;
-}
-
-static void colod_set_peer(ColodMainCoroutine *this, const gchar *peer) {
-    g_free(this->peer);
-    this->peer = g_strdup(peer);
-    this->peer_failed = FALSE;
-    this->peer_yellow = FALSE;
-}
-
-static int __colod_set_peer(Coroutine *coroutine, gpointer data, const gchar *peer) {
-    (void) coroutine;
-    colod_set_peer(data, peer);
-    return 0;
-}
-
-static gchar *__colod_get_peer(Coroutine *coroutine, gpointer data) {
-    ColodMainCoroutine *this = data;
-    (void) coroutine;
-    return g_strdup(this->peer);
-}
-
-static void colod_clear_peer(ColodMainCoroutine *this) {
-    g_free(this->peer);
-    this->peer = g_strdup("");
-}
-
-static int __colod_clear_peer(Coroutine *coroutine, gpointer data) {
-    (void) coroutine;
-    colod_clear_peer(data);
-    return 0;
-}
-
 static const gchar *event_str(ColodEvent event) {
     switch (event) {
         case EVENT_FAILED: return "EVENT_FAILED";
-        case EVENT_PEER_FAILOVER: return "EVENT_PEER_FAILOVER";
         case EVENT_QUIT: return "EVENT_QUIT";
 
         case EVENT_FAILOVER_SYNC: return "EVENT_FAILOVER_SYNC";
@@ -145,13 +108,12 @@ static const gchar *event_str(ColodEvent event) {
 }
 
 static EventQueue *colod_eventqueue_new() {
-    return eventqueue_new(32, EVENT_FAILED, EVENT_PEER_FAILOVER, EVENT_QUIT, 0);
+    return eventqueue_new(32, EVENT_FAILED, EVENT_QUIT, 0);
 }
 
 static gboolean event_always_interrupting(ColodEvent event) {
     switch (event) {
         case EVENT_FAILED:
-        case EVENT_PEER_FAILOVER:
         case EVENT_QUIT:
             return TRUE;
         break;
@@ -165,7 +127,6 @@ static gboolean event_always_interrupting(ColodEvent event) {
 static MainState handle_always_interrupting(ColodEvent event) {
     switch (event) {
         case EVENT_FAILED: return STATE_FAILED;
-        case EVENT_PEER_FAILOVER: return STATE_FAILED_PEER_FAILOVER;
         case EVENT_QUIT: return STATE_QUIT;
         default: abort();
     }
@@ -553,7 +514,7 @@ static MainState _colod_failover_co(Coroutine *coroutine,
     }
     qmp_ectx_unref(CO ectx, NULL);
 
-    colod_clear_peer(this);
+    peer_manager_clear_peer(this->ctx->peer);
 
     co_end;
 
@@ -645,8 +606,6 @@ static MainState _colod_secondary_wait_co(Coroutine *coroutine,
 
             if (event_always_interrupting(event)) {
                 return handle_always_interrupting(event);
-            } else if (event_failover(event)) {
-                this->peer_failed = FALSE;
             }
             continue;
         }
@@ -655,6 +614,7 @@ static MainState _colod_secondary_wait_co(Coroutine *coroutine,
     }
     co_end;
 
+    peer_manager_clear_failed(this->ctx->peer);
     colod_raise_timeout_coroutine(&this->raise_timeout_coroutine, this->qmp,
                                   this->ctx);
 
@@ -670,6 +630,7 @@ static MainState _colod_colo_running_co(Coroutine *coroutine,
     } *co;
     GError *local_errp = NULL;
     int ret;
+    PeerManager *peer = this->ctx->peer;
 
     co_frame(co, sizeof(*co));
     co_begin(MainState, STATE_FAILED);
@@ -706,7 +667,7 @@ static MainState _colod_colo_running_co(Coroutine *coroutine,
             goto handle_event;
         }
 
-        if (this->yellow && !this->peer_yellow) {
+        if (this->yellow && !peer_manager_yellow(peer)) {
             return STATE_FAILED;
         }
     }
@@ -721,7 +682,7 @@ handle_event:
         } else if (event_always_interrupting(event)) {
             return handle_always_interrupting(event);
         } else if (event_yellow(event)) {
-            if (this->primary && this->yellow && !this->peer_yellow) {
+            if (this->primary && this->yellow && !peer_manager_yellow(peer)) {
                 return STATE_FAILED;
             }
         }
@@ -740,16 +701,8 @@ static MainState _colod_primary_wait_co(Coroutine *coroutine,
         co_recurse(event = colod_event_wait(coroutine, this));
 
         if (event == EVENT_START_MIGRATION) {
-            return STATE_PRIMARY_START_MIGRATION;
-        } else if (event == EVENT_FAILED) {
-            return STATE_FAILED;
-        } else if (event == EVENT_PEER_FAILOVER) {
-            /*
-             * Failover message from node that lost failover sync may
-             * arrive later, when we've failed over.
-             */
-        } else if (event == EVENT_QUIT) {
-            return STATE_QUIT;
+        } else if (event_always_interrupting(event)) {
+            return handle_always_interrupting(event);
         }
     }
     co_end;
@@ -963,9 +916,6 @@ static gboolean _colod_main_co(Coroutine *coroutine, ColodMainCoroutine *this) {
             co_recurse(new_state = colod_failover_sync_co(coroutine, this));
         } else if (this->state == STATE_FAILOVER) {
             co_recurse(new_state = colod_failover_co(coroutine, this));
-        } else if (this->state == STATE_FAILED_PEER_FAILOVER) {
-            this->peer_failover = TRUE;
-            new_state = STATE_FAILED;
         } else if (this->state == STATE_FAILED) {
             log_error("qemu failed");
             this->failed = TRUE;
@@ -980,9 +930,7 @@ static gboolean _colod_main_co(Coroutine *coroutine, ColodMainCoroutine *this) {
             while (_colod_eventqueue_pending(this)) {
                 ColodEvent event;
                 co_recurse(event = colod_event_wait(coroutine, this));
-                if (event == EVENT_PEER_FAILOVER) {
-                    this->peer_failover = TRUE;
-                } else if (event == EVENT_QUIT) {
+                if (event == EVENT_QUIT) {
                     return TRUE;
                 }
             }
@@ -1050,41 +998,30 @@ static void colod_qmp_event_cb(gpointer data, ColodQmpResult *result) {
     }
 }
 
+static void colod_failover_cb(gpointer data, ColodEvent event) {
+    ColodMainCoroutine *this = data;
+    colod_event_queue(this, event, "Got failover msg");
+}
+
 static void colod_cpg_event_cb(gpointer data, ColodMessage message,
                                gboolean message_from_this_node,
                                gboolean peer_left_group) {
     ColodMainCoroutine *this = data;
 
-    if (peer_left_group) {
-        log_error("Peer failed");
-        colod_peer_failed(this);
-        colod_event_queue(this, EVENT_FAILOVER_SYNC, "peer left cpg group");
-    } else if (message == MESSAGE_FAILOVER) {
-        if (message_from_this_node) {
-            colod_event_queue(this, EVENT_FAILOVER_WIN, "Got our failover msg");
-        } else {
-            colod_event_queue(this, EVENT_PEER_FAILOVER, "Got peer failover msg");
-        }
-    } else if (message == MESSAGE_FAILED) {
-        if (!message_from_this_node) {
-            log_error("Peer failed");
-            colod_peer_failed(this);
-            colod_event_queue(this, EVENT_FAILOVER_SYNC, "got MESSAGE_FAILED");
-        }
+    if (message_from_this_node) {
+        return;
+    }
+
+    if (message == MESSAGE_FAILED || peer_left_group) {
+        colod_event_queue(this, EVENT_FAILOVER_SYNC, "got MESSAGE_FAILED or peer left group");
     } else if (message == MESSAGE_HELLO) {
         if (this->yellow) {
             colod_cpg_send(this->ctx->cpg, MESSAGE_YELLOW);
         }
     } else if (message == MESSAGE_YELLOW) {
-        if (!message_from_this_node) {
-            this->peer_yellow = TRUE;
-            colod_event_queue(this, EVENT_YELLOW, "peer yellow state change");
-        }
+        colod_event_queue(this, EVENT_YELLOW, "peer yellow state change");
     } else if (message == MESSAGE_UNYELLOW) {
-        if (!message_from_this_node) {
-            this->peer_yellow = FALSE;
-            colod_event_queue(this, EVENT_YELLOW, "peer yellow state change");
-        }
+        colod_event_queue(this, EVENT_YELLOW, "peer yellow state change");
     }
 }
 
@@ -1105,9 +1042,6 @@ static void colod_yellow_event_cb(gpointer data, ColodEvent event) {
 const ClientCallbacks colod_client_callbacks = {
     __colod_query_status,
     __colod_check_health_co,
-    __colod_set_peer,
-    __colod_get_peer,
-    __colod_clear_peer,
     NULL,
     NULL,
     __colod_start_migration,
@@ -1169,10 +1103,10 @@ ColodMainCoroutine *colod_main_new(const ColodContext *ctx, QemuLauncher *launch
     this->queue = colod_eventqueue_new();
 
     this->primary = ctx->primary_startup;
-    this->peer = g_strdup("");
     qmp_add_notify_event(this->qmp, colod_qmp_event_cb, this);
     qmp_add_notify_hup(this->qmp, colod_hup_cb, this);
 
+    peer_manager_add_notify(ctx->peer, colod_failover_cb, this);
     colod_cpg_add_notify(ctx->cpg, colod_cpg_event_cb, this);
 
     yellow_add_notify(this->yellow_co, colod_yellow_event_cb, this);
@@ -1190,6 +1124,7 @@ static void colod_main_free(gpointer _this) {
     yellow_coroutine_free(this->yellow_co);
 
     colod_cpg_del_notify(this->ctx->cpg, colod_cpg_event_cb, this);
+    peer_manager_del_notify(this->ctx->peer, colod_failover_cb, this);
 
     qmp_del_notify_hup(this->qmp, colod_hup_cb, this);
     qmp_del_notify_event(this->qmp, colod_qmp_event_cb, this);
@@ -1201,7 +1136,6 @@ static void colod_main_free(gpointer _this) {
     qemu_launcher_unref(this->launcher);
 
     eventqueue_free(this->queue);
-    g_free(this->peer);
 }
 
 ColodMainCoroutine *colod_main_ref(ColodMainCoroutine *this) {

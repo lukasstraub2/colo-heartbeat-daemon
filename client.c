@@ -21,8 +21,8 @@
 #include "daemon.h"
 #include "json_util.h"
 #include "qmp.h"
-#include "main_coroutine.h"
 #include "coroutine_stack.h"
+#include "peer_manager.h"
 
 
 typedef struct ColodClient {
@@ -40,6 +40,7 @@ QLIST_HEAD(ColodClientHead, ColodClient);
 struct ColodClientListener {
     int socket;
     QmpCommands *commands;
+    PeerManager *peer;
     guint listen_source_id;
     struct ColodClientHead head;
     JsonNode *store;
@@ -146,78 +147,21 @@ static int _check_health_co(Coroutine *coroutine, ColodClientListener *this, GEr
 }
 
 #define set_peer(...) co_wrap(_set_peer(__VA_ARGS__))
-static int _set_peer(Coroutine *coroutine, ColodClientListener *this, const gchar *peer) {
-    struct {
-        const ClientCallbacks *cb;
-        gpointer data;
-    } *co;
-    int ret;
-
-    co_frame(co, sizeof(*co));
-    co_begin(int, -1);
-
-    wait_while(!this->cb || !this->cb->_set_peer_co || this->lock.holder);
-    colod_lock_co(this->lock);
-
-    CO cb = this->cb;
-    CO data = this->cb_data;
-
-    co_recurse(ret = CO cb->_set_peer_co(coroutine, CO data, peer));
-
-    colod_unlock_co(this->lock);
-    co_end;
-
-    return ret;
+static void _set_peer(Coroutine *coroutine, ColodClientListener *this, const char *peer) {
+    (void) coroutine;
+    peer_manager_set_peer(this->peer, peer);
 }
 
 #define get_peer(...) co_wrap(_get_peer(__VA_ARGS__))
 static gchar *_get_peer(Coroutine *coroutine, ColodClientListener *this) {
-    struct {
-        const ClientCallbacks *cb;
-        gpointer data;
-    } *co;
-    gchar *ret;
-
-    co_frame(co, sizeof(*co));
-    co_begin(gchar *, NULL);
-
-    wait_while(!this->cb || !this->cb->_get_peer_co || this->lock.holder);
-    colod_lock_co(this->lock);
-
-    CO cb = this->cb;
-    CO data = this->cb_data;
-
-    co_recurse(ret = CO cb->_get_peer_co(coroutine, CO data));
-
-    colod_unlock_co(this->lock);
-    co_end;
-
-    return ret;
+    (void) coroutine;
+    return peer_manager_get_peer(this->peer);
 }
 
 #define clear_peer(...) co_wrap(_clear_peer(__VA_ARGS__))
-static int _clear_peer(Coroutine *coroutine, ColodClientListener *this) {
-    struct {
-        const ClientCallbacks *cb;
-        gpointer data;
-    } *co;
-    int ret;
-
-    co_frame(co, sizeof(*co));
-    co_begin(int, -1);
-
-    wait_while(!this->cb || !this->cb->_clear_peer_co || this->lock.holder);
-    colod_lock_co(this->lock);
-
-    CO cb = this->cb;
-    CO data = this->cb_data;
-
-    co_recurse(ret = CO cb->_clear_peer_co(coroutine, CO data));
-
-    colod_unlock_co(this->lock);
-    co_end;
-
-    return ret;
+static void _clear_peer(Coroutine *coroutine, ColodClientListener *this) {
+    (void) coroutine;
+    peer_manager_clear_peer(this->peer);
 }
 
 #define start(...) co_wrap(_start(__VA_ARGS__))
@@ -1090,15 +1034,18 @@ void client_listener_free(ColodClientListener *listener) {
         g_main_context_iteration(g_main_context_default(), TRUE);
     }
 
+    peer_manager_unref(listener->peer);
     g_free(listener);
 }
 
-ColodClientListener *client_listener_new(int socket, QmpCommands *commands) {
+ColodClientListener *client_listener_new(int socket, QmpCommands *commands,
+                                         PeerManager *peer) {
     ColodClientListener *listener;
 
     listener = g_new0(ColodClientListener, 1);
     listener->socket = socket;
     listener->commands = commands;
+    listener->peer = peer_manager_ref(peer);
     listener->listen_source_id = g_unix_fd_add(socket, G_IO_IN,
                                                client_listener_new_client,
                                                listener);
