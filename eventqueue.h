@@ -23,6 +23,7 @@ enum ColodEvent {
     EVENT_FAILOVER_WIN,
     EVENT_KICK,
     EVENT_START_MIGRATION,
+    EVENT_SHUTDOWN,
     EVENT_MAX
 };
 

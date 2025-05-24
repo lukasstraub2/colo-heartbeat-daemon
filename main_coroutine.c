@@ -37,6 +37,7 @@ typedef enum MainState {
     STATE_PRIMARY_COLO_RUNNING,
     STATE_FAILOVER_SYNC,
     STATE_FAILOVER,
+    STATE_SHUTDOWN,
     STATE_FAILED,
     STATE_QUIT
 } MainState;
@@ -65,6 +66,7 @@ struct ColodMainCoroutine {
 
     ColodEvent command;
     Coroutine *command_wake;
+    MyTimeout *command_timeout;
 };
 
 #define colod_trace_source(data) \
@@ -105,6 +107,7 @@ static const gchar *event_str(ColodEvent event) {
         case EVENT_FAILOVER_WIN: return "EVENT_FAILOVER_WIN";
         case EVENT_KICK: return "EVENT_KICK";
         case EVENT_START_MIGRATION: return "EVENT_START_MIGRATION";
+        case EVENT_SHUTDOWN: return "EVENT_SHUTDOWN";
         case EVENT_MAX: abort();
     }
     abort();
@@ -465,18 +468,20 @@ static int __colod_check_health_co(Coroutine *coroutine, gpointer data,
 }
 
 #define deliver_command(...) co_wrap(_deliver_command(__VA_ARGS__))
-static int _deliver_command(Coroutine *coroutine, ColodMainCoroutine *this, ColodEvent command) {
+static int _deliver_command(Coroutine *coroutine, ColodMainCoroutine *this, ColodEvent command, MyTimeout *timeout) {
     co_begin(int, -1);
 
     colod_main_ref(this);
     assert(!this->command_wake);
     this->command = command;
     this->command_wake = coroutine;
+    this->command_timeout = timeout;
 
     colod_event_queue(this, command, "client request");
 
     co_yield_int(G_SOURCE_REMOVE);
     this->command_wake = NULL;
+    this->command_timeout = NULL;
     colod_main_unref(this);
 
     return 0;
@@ -499,10 +504,49 @@ static int __colod_start_migration(Coroutine *coroutine, gpointer data) {
         return -1;
     }
 
-    co_recurse(deliver_command(coroutine, this, EVENT_START_MIGRATION));
+    co_recurse(deliver_command(coroutine, this, EVENT_START_MIGRATION, NULL));
     return 0;
     co_end;
 }
+
+static int __colod_shutdown(Coroutine *coroutine, gpointer data, MyTimeout *timeout) {
+    ColodMainCoroutine *this = data;
+
+    co_begin(int, -1);
+
+    if (this->state != STATE_PRIMARY_WAIT && this->state != STATE_PRIMARY_COLO_RUNNING) {
+        return -1;
+    }
+
+    co_recurse(deliver_command(coroutine, this, EVENT_SHUTDOWN, timeout));
+    return 0;
+    co_end;
+}
+
+static int __colod_quit(Coroutine *coroutine, gpointer data, MyTimeout *timeout) {
+    ColodMainCoroutine *this = data;
+
+    co_begin(int, -1);
+
+    co_recurse(deliver_command(coroutine, this, EVENT_QUIT, timeout));
+    return 0;
+    co_end;
+}
+
+const ClientCallbacks colod_client_callbacks = {
+    __colod_query_status,
+    __colod_check_health_co,
+    NULL,
+    NULL,
+    __colod_start_migration,
+    NULL,
+    __colod_shutdown,
+    NULL,
+    __colod_quit,
+    __colod_yank_co,
+    __colod_execute_nocheck_co,
+    __colod_execute_co
+};
 
 #define colod_failover_co(...) \
     co_wrap(_colod_failover_co(__VA_ARGS__))
@@ -726,7 +770,6 @@ static MainState _colod_primary_wait_co(Coroutine *coroutine,
         co_recurse(event = colod_event_wait(coroutine, this));
 
         if (event == EVENT_START_MIGRATION) {
-            wake_command(this, EVENT_START_MIGRATION);
             return STATE_PRIMARY_RESYNC;
         } else if (event_always_interrupting(event)) {
             return handle_always_interrupting(event);
@@ -1041,13 +1084,67 @@ failover:
     co_end;
 }
 
-static void colod_quit(ColodMainCoroutine *this) {
-    colod_event_queue(this, EVENT_QUIT, "client request");
-}
+#define colod_shutdown_co(...) co_wrap(_colod_shutdown_co(__VA_ARGS__))
+static MainState _colod_shutdown_co(Coroutine *coroutine, ColodMainCoroutine *this,
+                                    MyTimeout *mytimeout) {
+    struct {
+        guint timeout;
+    } *co;
+    ColodQmpResult *result;
+    int ret;
+    GError *local_errp = NULL;
 
-static int __colod_quit(Coroutine *coroutine, gpointer data, MyTimeout *timeout) {
-    colod_quit(data);
-    return 0;
+    co_frame(co, sizeof(*co));
+    co_begin(MainState, STATE_FAILED);
+
+    CO timeout = 0;
+    eventqueue_set_interrupting(this->queue, 0);
+
+    co_recurse(result = qmp_execute_co(coroutine, this->qmp, NULL,
+                                       "{'execute': 'system_powerdown'}\n"));
+    if (!result) {
+        goto stop;
+    }
+    qmp_result_free(result);
+
+    CO timeout = my_timeout_remaining_minus_ms(mytimeout, 10*1000);
+
+    co_recurse(ret = colod_qmp_event_wait_co(coroutine, this, CO timeout,
+                    "{'event': 'SHUTDOWN'}", &local_errp));
+    if (ret < 0) {
+        if (g_error_matches(local_errp, COLOD_ERROR, COLOD_ERROR_INTERRUPT)) {
+            g_error_free(local_errp);
+            local_errp = NULL;
+            goto handle_event;
+        } else if (g_error_matches(local_errp, COLOD_ERROR, COLOD_ERROR_TIMEOUT)) {
+            g_error_free(local_errp);
+            local_errp = NULL;
+        } else {
+            abort();
+        }
+    }
+
+stop:
+    co_recurse(result = qmp_execute_co(coroutine, this->qmp, NULL,
+                                       "{'execute': 'quit'}\n"));
+    if (!result) {
+        qemu_launcher_kill(this->launcher);
+    }
+    qmp_result_free(result);
+
+    CO timeout = my_timeout_remaining_ms(mytimeout);
+    co_recurse(qemu_launcher_wait_co(coroutine, this->launcher, CO timeout, NULL));
+
+    return STATE_QUIT;
+
+handle_event:
+    assert(eventqueue_pending_interrupt(this->queue));
+    ColodEvent event;
+    co_recurse(event = colod_event_wait(coroutine, this));
+    assert(event_always_interrupting(event));
+    return handle_always_interrupting(event);
+
+    co_end;
 }
 
 static gboolean _colod_main_co(Coroutine *coroutine, ColodMainCoroutine *this);
@@ -1107,6 +1204,7 @@ static gboolean _colod_main_co(Coroutine *coroutine, ColodMainCoroutine *this) {
 
             co_recurse(new_state = colod_primary_wait_co(coroutine, this));
         } else if (this->state == STATE_PRIMARY_RESYNC) {
+            wake_command(this, EVENT_START_MIGRATION);
             co_recurse(new_state = colod_primary_start_resync(coroutine, this));
         } else if (this->state == STATE_PRIMARY_START_MIGRATION) {
             co_recurse(new_state = colod_primary_start_migration_co(coroutine,
@@ -1118,6 +1216,9 @@ static gboolean _colod_main_co(Coroutine *coroutine, ColodMainCoroutine *this) {
             co_recurse(new_state = colod_failover_sync_co(coroutine, this));
         } else if (this->state == STATE_FAILOVER) {
             co_recurse(new_state = colod_failover_co(coroutine, this));
+        } else if (this->state == STATE_SHUTDOWN) {
+            co_recurse(new_state = colod_shutdown_co(coroutine, this, this->command_timeout));
+            wake_command(this, EVENT_SHUTDOWN);
         } else if (this->state == STATE_FAILED) {
             log_error("qemu failed");
             this->failed = TRUE;
@@ -1133,12 +1234,16 @@ static gboolean _colod_main_co(Coroutine *coroutine, ColodMainCoroutine *this) {
                 ColodEvent event;
                 co_recurse(event = colod_event_wait(coroutine, this));
                 if (event == EVENT_QUIT) {
-                    return TRUE;
+                    new_state = STATE_QUIT;
+                    break;
                 }
             }
 
-            return FALSE;
+            if (new_state == STATE_FAILED) {
+                return FALSE;
+            }
         } else if (this->state == STATE_QUIT) {
+            wake_command(this, EVENT_QUIT);
             return TRUE;
         }
     }
@@ -1250,21 +1355,6 @@ static void colod_yellow_event_cb(gpointer data, YellowStatus event) {
         abort();
     }
 }
-
-const ClientCallbacks colod_client_callbacks = {
-    __colod_query_status,
-    __colod_check_health_co,
-    NULL,
-    NULL,
-    __colod_start_migration,
-    NULL,
-    NULL,
-    NULL,
-    __colod_quit,
-    __colod_yank_co,
-    __colod_execute_nocheck_co,
-    __colod_execute_co
-};
 
 void colod_main_client_register(ColodMainCoroutine *this) {
     colod_main_ref(this);

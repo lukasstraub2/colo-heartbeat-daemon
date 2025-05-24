@@ -215,11 +215,7 @@ static char *_qemu_launcher_disk_size_co(Coroutine *coroutine, QemuLauncher *thi
     qmp_result_free(ret);
     qmp_ectx_unref(CO ectx, NULL);
 
-    int iret;
-    co_recurse(iret = qemu_launcher_wait_co(coroutine, this, 1000, NULL));
-    if (iret < 0) {
-        abort();
-    }
+    co_recurse(qemu_launcher_wait_co(coroutine, this, 1000, NULL));
 
     if (!CO disk_size) {
         g_propagate_error(errp, CO local_errp);

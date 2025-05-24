@@ -78,7 +78,7 @@ guint my_timeout_remaining_minus_ms(MyTimeout *this, guint minus) {
 MyTimeout *my_timeout_new(guint timeout_ms) {
     MyTimeout *this = g_rc_box_new0(MyTimeout);
     this->timer = g_timer_new();
-    this->timeout_ms = timeout_ms;
+    this->timeout_ms = MAX(0, timeout_ms - 1000);
     return this;
 }
 
