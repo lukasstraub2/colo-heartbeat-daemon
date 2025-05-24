@@ -21,8 +21,7 @@ enum ColodEvent {
     EVENT_FAILOVER_SYNC,
 
     EVENT_FAILOVER_WIN,
-    EVENT_YELLOW,
-    EVENT_UNYELLOW,
+    EVENT_KICK,
     EVENT_START_MIGRATION,
     EVENT_MAX
 };
@@ -49,7 +48,5 @@ gboolean eventqueue_event_interrupting(EventQueue *this, ColodEvent event);
 
 EventQueue *eventqueue_new(guint size, ...);
 void eventqueue_free(EventQueue *this);
-
-char *null_stack();
 
 #endif // EVENTQUEUE_H

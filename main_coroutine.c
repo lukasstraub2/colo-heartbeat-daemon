@@ -99,8 +99,7 @@ static const gchar *event_str(ColodEvent event) {
 
         case EVENT_FAILOVER_SYNC: return "EVENT_FAILOVER_SYNC";
         case EVENT_FAILOVER_WIN: return "EVENT_FAILOVER_WIN";
-        case EVENT_YELLOW: return "EVENT_YELLOW";
-        case EVENT_UNYELLOW: return "EVENT_UNYELLOW";
+        case EVENT_KICK: return "EVENT_KICK";
         case EVENT_START_MIGRATION: return "EVENT_START_MIGRATION";
         case EVENT_MAX: abort();
     }
@@ -142,10 +141,6 @@ static MainState handle_event_failover(ColodEvent event) {
     } else {
         abort();
     }
-}
-
-static gboolean event_yellow(ColodEvent event) {
-    return event == EVENT_YELLOW || event == EVENT_UNYELLOW;
 }
 
 static void event_wake_source_destroy_cb(gpointer data) {
@@ -590,8 +585,7 @@ static MainState _colod_secondary_wait_co(Coroutine *coroutine,
      * colo_running and wreak havoc.
      */
     eventqueue_set_interrupting(this->queue, EVENT_FAILOVER_SYNC,
-                                EVENT_FAILOVER_WIN, EVENT_YELLOW,
-                                EVENT_UNYELLOW, 0);
+                                EVENT_FAILOVER_WIN, EVENT_KICK, 0);
 
     while (TRUE) {
         co_recurse(ret = colod_qmp_event_wait_co(coroutine, this, 0,
@@ -681,10 +675,10 @@ handle_event:
             return handle_event_failover(event);
         } else if (event_always_interrupting(event)) {
             return handle_always_interrupting(event);
-        } else if (event_yellow(event)) {
-            if (this->primary && this->yellow && !peer_manager_yellow(peer)) {
-                return STATE_FAILED;
-            }
+        }
+
+        if (this->primary && this->yellow && !peer_manager_yellow(peer)) {
+            return STATE_FAILED;
         }
     }
 
@@ -973,7 +967,7 @@ static void colod_qmp_event_cb(gpointer data, ColodQmpResult *result) {
                 this->yellow = TRUE;
                 colod_cpg_send(this->ctx->cpg, MESSAGE_YELLOW);
                 yellow_shutdown(this->yellow_co);
-                colod_event_queue(this, EVENT_YELLOW,
+                colod_event_queue(this, EVENT_KICK,
                                   "local disk write/flush error");
             }
         }
@@ -1019,21 +1013,21 @@ static void colod_cpg_event_cb(gpointer data, ColodMessage message,
             colod_cpg_send(this->ctx->cpg, MESSAGE_YELLOW);
         }
     } else if (message == MESSAGE_YELLOW) {
-        colod_event_queue(this, EVENT_YELLOW, "peer yellow state change");
+        colod_event_queue(this, EVENT_KICK, "peer yellow state change");
     } else if (message == MESSAGE_UNYELLOW) {
-        colod_event_queue(this, EVENT_YELLOW, "peer yellow state change");
+        colod_event_queue(this, EVENT_KICK, "peer yellow state change");
     }
 }
 
-static void colod_yellow_event_cb(gpointer data, ColodEvent event) {
+static void colod_yellow_event_cb(gpointer data, YellowStatus event) {
     ColodMainCoroutine *this = data;
 
-    if (event == EVENT_YELLOW) {
+    if (event == STATUS_YELLOW) {
         this->yellow = TRUE;
-        colod_event_queue(this, EVENT_YELLOW, "link down event");
-    } else if (event == EVENT_UNYELLOW) {
+        colod_event_queue(this, EVENT_KICK, "link down event");
+    } else if (event == STATUS_UNYELLOW) {
         this->yellow = FALSE;
-        colod_event_queue(this, EVENT_UNYELLOW, "link up event");
+        colod_event_queue(this, EVENT_KICK, "link up event");
     } else {
         abort();
     }

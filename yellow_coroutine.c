@@ -9,7 +9,6 @@
 
 #include "yellow_coroutine.h"
 #include "coroutine_stack.h"
-#include "eventqueue.h"
 #include "cpg.h"
 #include "netlink.h"
 
@@ -35,7 +34,7 @@ void yellow_del_notify(YellowCoroutine *this, YellowCallback _func,
     colod_callback_del(&this->callbacks, func, user_data);
 }
 
-static void notify(YellowCoroutine *this, ColodEvent event) {
+static void notify(YellowCoroutine *this, YellowStatus event) {
     ColodCallback *entry, *next_entry;
     QLIST_FOREACH_SAFE(entry, &this->callbacks, next, next_entry) {
         YellowCallback func = (YellowCallback) entry->func;
@@ -43,16 +42,16 @@ static void notify(YellowCoroutine *this, ColodEvent event) {
     }
 }
 
-static void yellow_send_target_message(Cpg *cpg, ColodEvent target_event) {
-    if (target_event == EVENT_YELLOW) {
+static void yellow_send_target_message(Cpg *cpg, YellowStatus target_event) {
+    if (target_event == STATUS_YELLOW) {
         colod_cpg_send(cpg, MESSAGE_YELLOW);
     } else {
         colod_cpg_send(cpg, MESSAGE_UNYELLOW);
     }
 }
 
-static void yellow_send_revert_message(Cpg *cpg, ColodEvent target_event) {
-    if (target_event == EVENT_YELLOW) {
+static void yellow_send_revert_message(Cpg *cpg, YellowStatus target_event) {
+    if (target_event == STATUS_YELLOW) {
         colod_cpg_send(cpg, MESSAGE_UNYELLOW);
     } else {
         colod_cpg_send(cpg, MESSAGE_YELLOW);
@@ -62,7 +61,7 @@ static void yellow_send_revert_message(Cpg *cpg, ColodEvent target_event) {
 #define yellow_delay_co(...) \
     co_wrap(_yellow_delay_co(__VA_ARGS__))
 static int _yellow_delay_co(Coroutine *coroutine, YellowCoroutine *this,
-                            ColodEvent target_event, ColodEvent event) {
+                            YellowStatus target_event, YellowStatus event) {
     struct {
         guint source_id;
     } *co;
@@ -71,7 +70,7 @@ static int _yellow_delay_co(Coroutine *coroutine, YellowCoroutine *this,
     co_begin(int, -1);
     while (TRUE) {
         assert(event);
-        if (event == EVENT_QUIT) {
+        if (event == STATUS_QUIT) {
             return -1;
         } else if (event != target_event) {
             co_yield(0);
@@ -113,24 +112,24 @@ static int _yellow_delay_co(Coroutine *coroutine, YellowCoroutine *this,
 }
 
 static int _yellow_co(Coroutine *coroutine, YellowCoroutine *this,
-                      ColodEvent event) {
+                      YellowStatus event) {
     int ret;
 
     co_begin(gboolean, FALSE);
 
     while (TRUE) {
-        co_recurse(ret = yellow_delay_co(coroutine, this, EVENT_YELLOW, event));
+        co_recurse(ret = yellow_delay_co(coroutine, this, STATUS_YELLOW, event));
         if (ret < 0) {
             return 0;
         }
-        notify(this, EVENT_YELLOW);
+        notify(this, STATUS_YELLOW);
         co_yield(0);
 
-        co_recurse(ret = yellow_delay_co(coroutine, this, EVENT_UNYELLOW, event));
+        co_recurse(ret = yellow_delay_co(coroutine, this, STATUS_UNYELLOW, event));
         if (ret < 0) {
             return 0;
         }
-        notify(this, EVENT_UNYELLOW);
+        notify(this, STATUS_UNYELLOW);
         co_yield(0);
     }
 
@@ -146,10 +145,10 @@ static gboolean yellow_co(gpointer data) {
     return G_SOURCE_REMOVE;
 }
 
-static void yellow_queue_event(YellowCoroutine *this, ColodEvent event) {
+static void yellow_queue_event(YellowCoroutine *this, YellowStatus event) {
     Coroutine *coroutine = &this->coroutine;
 
-    assert(event == EVENT_QUIT || event == EVENT_YELLOW || event == EVENT_UNYELLOW);
+    assert(event == STATUS_QUIT || event == STATUS_YELLOW || event == STATUS_UNYELLOW);
     co_enter(coroutine, _yellow_co(coroutine, this, event));
     if (coroutine->yield) {
         return;
@@ -168,9 +167,9 @@ static void yellow_netlink_event_cb(gpointer data, const char *ifname,
 
     if (!strcmp(ifname, this->ctx->monitor_interface)) {
         if (up) {
-            yellow_queue_event(this, EVENT_UNYELLOW);
+            yellow_queue_event(this, STATUS_UNYELLOW);
         } else {
-            yellow_queue_event(this, EVENT_YELLOW);
+            yellow_queue_event(this, STATUS_YELLOW);
         }
     }
 }
@@ -212,7 +211,7 @@ void yellow_shutdown(YellowCoroutine *this) {
     }
 
     netlink_del_notify(this->netlink, yellow_netlink_event_cb, this);
-    yellow_queue_event(this, EVENT_QUIT);
+    yellow_queue_event(this, STATUS_QUIT);
     assert(this->quit);
 }
 

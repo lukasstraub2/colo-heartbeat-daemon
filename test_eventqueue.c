@@ -13,7 +13,7 @@
 #include "eventqueue.h"
 
 static void prepare(EventQueue *queue) {
-    ColodEvent insert[] = {EVENT_START_MIGRATION, EVENT_YELLOW,
+    ColodEvent insert[] = {EVENT_START_MIGRATION, EVENT_KICK,
                            EVENT_FAILED, EVENT_QUIT};
 
     for (guint i = 0; i < sizeof(insert)/sizeof(insert[0]); i++) {
@@ -24,7 +24,7 @@ static void prepare(EventQueue *queue) {
 void test_a() {
     EventQueue *queue;
     ColodEvent expect[] = {EVENT_FAILED, EVENT_QUIT,
-                           EVENT_START_MIGRATION, EVENT_YELLOW};
+                           EVENT_START_MIGRATION, EVENT_KICK};
 
     queue = eventqueue_new(4, EVENT_FAILED, EVENT_QUIT, 0);
 
@@ -48,7 +48,7 @@ void test_a() {
 void test_b() {
     EventQueue *queue;
     ColodEvent expect[] = {EVENT_START_MIGRATION, EVENT_FAILED,
-                           EVENT_QUIT, EVENT_YELLOW};
+                           EVENT_QUIT, EVENT_KICK};
 
     queue = eventqueue_new(4, EVENT_FAILED, EVENT_QUIT, 0);
 

@@ -10,14 +10,18 @@
 #ifndef YELLOW_COROUTINE_H
 #define YELLOW_COROUTINE_H
 
-#include "main_coroutine.h"
 #include "cpg.h"
-#include "daemon.h"
-#include "eventqueue.h"
+
+typedef enum YellowStatus {
+    STATUS_NONE,
+    STATUS_QUIT,
+    STATUS_YELLOW,
+    STATUS_UNYELLOW,
+} YellowStatus;
 
 typedef struct YellowCoroutine YellowCoroutine;
 
-typedef void (*YellowCallback)(gpointer data, ColodEvent event);
+typedef void (*YellowCallback)(gpointer data, YellowStatus event);
 
 void yellow_add_notify(YellowCoroutine *this, YellowCallback _func,
                        gpointer user_data);

@@ -45,7 +45,7 @@ struct TestCoroutine {
     GMainLoop *mainloop;
 };
 
-int _test_co(Coroutine *coroutine, TestCoroutine *this, ColodEvent event) {
+int _test_co(Coroutine *coroutine, TestCoroutine *this, YellowStatus event) {
     struct {
         guint source_id;
     } *co;
@@ -57,7 +57,7 @@ int _test_co(Coroutine *coroutine, TestCoroutine *this, ColodEvent event) {
     netlink_stub_notify("eth0", FALSE);
 
     co_yield(0);
-    assert(event == EVENT_YELLOW);
+    assert(event == STATUS_YELLOW);
     g_source_remove(CO source_id);
 
     CO source_id = g_idle_add(coroutine->cb, this);
@@ -68,7 +68,7 @@ int _test_co(Coroutine *coroutine, TestCoroutine *this, ColodEvent event) {
     netlink_stub_notify("eth0", TRUE);
 
     co_yield(0);
-    assert(event == EVENT_UNYELLOW);
+    assert(event == STATUS_UNYELLOW);
     g_source_remove(CO source_id);
 
     CO source_id = g_idle_add(coroutine->cb, this);
@@ -93,7 +93,7 @@ int _test_co(Coroutine *coroutine, TestCoroutine *this, ColodEvent event) {
     netlink_stub_notify("eth0", FALSE);
 
     co_yield(0);
-    assert(event == EVENT_YELLOW);
+    assert(event == STATUS_YELLOW);
     g_source_remove(CO source_id);
 
     CO source_id = g_idle_add(coroutine->cb, this);
@@ -123,14 +123,14 @@ static gboolean test_co(gpointer data) {
     return G_SOURCE_REMOVE;
 }
 
-static void _test_queue_event(TestCoroutine *this, ColodEvent event) {
+static void _test_queue_event(TestCoroutine *this, YellowStatus event) {
     Coroutine *coroutine = &this->coroutine;
 
-    assert(event == EVENT_YELLOW || event == EVENT_UNYELLOW);
+    assert(event == STATUS_YELLOW || event == STATUS_UNYELLOW);
     co_enter(coroutine, _test_co(coroutine, this, event));
 }
 
-static void test_queue_event(gpointer data, ColodEvent event) {
+static void test_queue_event(gpointer data, YellowStatus event) {
     TestCoroutine *this = data;
 
     _test_queue_event(this, event);
