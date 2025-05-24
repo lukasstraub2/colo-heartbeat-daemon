@@ -12,7 +12,7 @@ void peer_manager_set_failed(PeerManager *this);
 void peer_manager_clear_failed(PeerManager *this);
 void peer_manager_set_peer(PeerManager *this, const gchar *peer);
 void peer_manager_clear_peer(PeerManager *this);
-char *peer_manager_get_peer(PeerManager *this);
+const char *peer_manager_get_peer(PeerManager *this);
 gboolean peer_manager_failed(PeerManager *this);
 gboolean peer_manager_yellow(PeerManager *this);
 gboolean peer_manager_failover(PeerManager *this);

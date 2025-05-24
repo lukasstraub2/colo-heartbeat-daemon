@@ -152,12 +152,6 @@ static void _set_peer(Coroutine *coroutine, ColodClientListener *this, const cha
     peer_manager_set_peer(this->peer, peer);
 }
 
-#define get_peer(...) co_wrap(_get_peer(__VA_ARGS__))
-static gchar *_get_peer(Coroutine *coroutine, ColodClientListener *this) {
-    (void) coroutine;
-    return peer_manager_get_peer(this->peer);
-}
-
 #define clear_peer(...) co_wrap(_clear_peer(__VA_ARGS__))
 static void _clear_peer(Coroutine *coroutine, ColodClientListener *this) {
     (void) coroutine;
@@ -775,22 +769,15 @@ static ColodQmpResult * _handle_set_peer(Coroutine *coroutine, ColodClientListen
 
 #define handle_query_peer(...) co_wrap(_handle_query_peer(__VA_ARGS__))
 static ColodQmpResult * _handle_query_peer(Coroutine *coroutine, ColodClientListener *this) {
-    co_begin(ColodQmpResult *, NULL);
-
-    gchar *peer;
-    co_recurse(peer = get_peer(coroutine, this));
-
+    (void) coroutine;
     gchar *reply;
     reply = g_strdup_printf("{\"return\": "
                             "{\"peer\": \"%s\"}}",
-                            peer);
+                            peer_manager_get_peer(this->peer));
 
     ColodQmpResult *result = qmp_parse_result(reply, strlen(reply), NULL);
     assert(result);
-    g_free(peer);
     return result;
-
-    co_end;
 }
 
 static void client_free(ColodClient *client) {

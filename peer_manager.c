@@ -98,8 +98,8 @@ void peer_manager_clear_peer(PeerManager *this) {
     this->peer_name = g_strdup("");
 }
 
-char *peer_manager_get_peer(PeerManager *this) {
-    return g_strdup(this->peer_name);
+const char *peer_manager_get_peer(PeerManager *this) {
+    return this->peer_name;
 }
 
 gboolean peer_manager_failed(PeerManager *this) {
