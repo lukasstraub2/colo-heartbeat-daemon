@@ -236,11 +236,11 @@ MyArray *qmp_commands_cmdline(QmpCommands *this, const char *address,
     return ret;
 }
 
-MyArray *qmp_commands_adhoc(QmpCommands *this, ...) {
+MyArray *qmp_commands_adhoc(QmpCommands *this, const char *address, ...) {
     va_list args;
     MyArray *array = my_array_new(g_free);
 
-    va_start(args, this);
+    va_start(args, address);
     while (TRUE) {
         const char *str = va_arg(args, const char *);
         if (!str) {
@@ -251,7 +251,7 @@ MyArray *qmp_commands_adhoc(QmpCommands *this, ...) {
     }
     va_end(args);
 
-    MyArray *ret = qmp_commands_format(this, array, NULL, NULL);
+    MyArray *ret = qmp_commands_format(this, array, address, NULL);
     my_array_unref(array);
     return ret;
 }

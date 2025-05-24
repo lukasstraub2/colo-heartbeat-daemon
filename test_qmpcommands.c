@@ -203,7 +203,7 @@ static void test_h() {
     qmp_commands_set_blk_mirror_prop(commands, blk_mirror_prop);
     json_node_unref(blk_mirror_prop);
 
-    MyArray *array = qmp_commands_adhoc(commands,
+    MyArray *array = qmp_commands_adhoc(commands, "dummy address",
         "@@DECL_BLK_MIRROR_PROP@@ {\"test\": \"test\"}",
         "{'execute': 'blockdev-mirror', 'arguments': @@BLK_MIRROR_PROP@@}",
         NULL);
@@ -277,7 +277,7 @@ static void test_l() {
                                    "override this", NULL);
     assert(ret == 0);
 
-    MyArray *array = qmp_commands_adhoc(commands,
+    MyArray *array = qmp_commands_adhoc(commands, "dummy address",
         "@@DECL_COMP_PROP@@ {\"test\": \"test\"}",
         "@@COMP_PROP@@",
         "@@MIG_CAP@@",

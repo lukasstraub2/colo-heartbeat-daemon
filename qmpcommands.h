@@ -27,7 +27,7 @@ int qmp_commands_set_failover_secondary(QmpCommands *this, JsonNode *commands, G
 
 MyArray *qmp_commands_cmdline(QmpCommands *this, const char *address,
                               const char *disk_size, ...);
-MyArray *qmp_commands_adhoc(QmpCommands *this, ...);
+MyArray *qmp_commands_adhoc(QmpCommands *this, const char *address, ...);
 MyArray *qmp_commands_get_qemu_primary(QmpCommands *this);
 MyArray *qmp_commands_get_qemu_secondary(QmpCommands *this);
 MyArray *qmp_commands_get_qemu_dummy(QmpCommands *this);

@@ -32,6 +32,7 @@ typedef enum MainState {
     STATE_SECONDARY_COLO_RUNNING,
     STATE_PRIMARY_STARTUP,
     STATE_PRIMARY_WAIT,
+    STATE_PRIMARY_RESYNC,
     STATE_PRIMARY_START_MIGRATION,
     STATE_PRIMARY_COLO_RUNNING,
     STATE_FAILOVER_SYNC,
@@ -61,6 +62,9 @@ struct ColodMainCoroutine {
 
     Coroutine *wake_on_exit;
     gboolean return_quit;
+
+    ColodEvent command;
+    Coroutine *command_wake;
 };
 
 #define colod_trace_source(data) \
@@ -460,17 +464,44 @@ static int __colod_check_health_co(Coroutine *coroutine, gpointer data,
     co_end;
 }
 
-static int colod_start_migration(ColodMainCoroutine *this) {
+#define deliver_command(...) co_wrap(_deliver_command(__VA_ARGS__))
+static int _deliver_command(Coroutine *coroutine, ColodMainCoroutine *this, ColodEvent command) {
+    co_begin(int, -1);
+
+    colod_main_ref(this);
+    assert(!this->command_wake);
+    this->command = command;
+    this->command_wake = coroutine;
+
+    colod_event_queue(this, command, "client request");
+
+    co_yield_int(G_SOURCE_REMOVE);
+    this->command_wake = NULL;
+    colod_main_unref(this);
+
+    return 0;
+    co_end;
+}
+
+static void wake_command(ColodMainCoroutine *this, ColodEvent command) {
+    if (this->command_wake) {
+        assert(this->command == command);
+        g_idle_add(this->command_wake->cb, this->command_wake);
+    }
+}
+
+static int __colod_start_migration(Coroutine *coroutine, gpointer data) {
+    ColodMainCoroutine *this = data;
+
+    co_begin(int, -1);
+
     if (this->state != STATE_PRIMARY_WAIT) {
         return -1;
     }
 
-    colod_event_queue(this, EVENT_START_MIGRATION, "client request");
+    co_recurse(deliver_command(coroutine, this, EVENT_START_MIGRATION));
     return 0;
-}
-
-static int __colod_start_migration(Coroutine *coroutine, gpointer data) {
-    return colod_start_migration(data);
+    co_end;
 }
 
 #define colod_failover_co(...) \
@@ -695,6 +726,8 @@ static MainState _colod_primary_wait_co(Coroutine *coroutine,
         co_recurse(event = colod_event_wait(coroutine, this));
 
         if (event == EVENT_START_MIGRATION) {
+            wake_command(this, EVENT_START_MIGRATION);
+            return STATE_PRIMARY_RESYNC;
         } else if (event_always_interrupting(event)) {
             return handle_always_interrupting(event);
         }
@@ -705,6 +738,175 @@ static MainState _colod_primary_wait_co(Coroutine *coroutine,
 static gboolean eventqueue_interrupt(gpointer data) {
     ColodMainCoroutine *this = data;
     return eventqueue_pending_interrupt(this->queue);
+}
+
+#define colod_primary_start_resync(...) \
+    co_wrap(_colod_primary_start_resync(__VA_ARGS__))
+static MainState _colod_primary_start_resync(Coroutine *coroutine, ColodMainCoroutine *this) {
+    struct {
+        ColodEvent event;
+        MyArray *commands;
+        QmpEctx *ectx;
+    } *co;
+    QmpCommands *qmpcommands = this->ctx->commands;
+    ColodQmpResult *result;
+    int ret;
+    GError *local_errp = NULL;
+
+    co_frame(co, sizeof(*co));
+    co_begin(MainState, STATE_FAILED);
+
+    if (!peer_manager_get_peer(this->ctx->peer)) {
+        return STATE_PRIMARY_WAIT;
+    }
+
+    CO ectx = qmp_ectx_new(this->qmp);
+    qmp_ectx_set_interrupt_cb(CO ectx, eventqueue_interrupt, this);
+    eventqueue_set_interrupting(this->queue, EVENT_FAILOVER_SYNC, 0);
+
+    CO commands = qmp_commands_adhoc(qmpcommands, peer_manager_get_peer(this->ctx->peer),
+                                     "{'execute': 'blockdev-add', 'arguments': {'driver': 'nbd', 'node-name': 'nbd0', 'server': {'type': 'inet', 'host': '@@ADDRESS@@', 'port': '@@NBD_PORT@@'}, 'export': 'parent0', 'detect-zeroes': 'on'}}",
+                                     "@@DECL_BLK_MIRROR_PROP@@ {'device': 'colo-disk0', 'job-id': 'resync', 'target': 'nbd0', 'sync': 'full', 'on-target-error': 'report', 'on-source-error': 'ignore', 'auto-dismiss': false}",
+                                     "{'execute': 'blockdev-mirror', 'arguments': @@BLK_MIRROR_PROP@@}",
+                                     NULL);
+    co_recurse(qmp_ectx_array(coroutine, CO ectx, CO commands));
+    my_array_unref(CO commands);
+
+    if (qmp_ectx_failed(CO ectx)) {
+        goto ectx_failed;
+    }
+
+    co_recurse(ret = colod_qmp_event_wait_co(coroutine, this, 24*60*60*1000,
+                    "{'event': 'JOB_STATUS_CHANGE',"
+                    " 'data': {'status': 'ready', 'id': 'resync'}}",
+                    &local_errp));
+    if (ret < 0) {
+        goto wait_error;
+    }
+
+    CO commands = qmp_commands_adhoc(qmpcommands, peer_manager_get_peer(this->ctx->peer),
+                                     "{'execute': 'stop'}",
+                                     "{'execute': 'block-job-cancel', 'arguments': {'device': 'resync'}}",
+                                     NULL);
+    co_recurse(qmp_ectx_array(coroutine, CO ectx, CO commands));
+    my_array_unref(CO commands);
+
+    if (qmp_ectx_failed(CO ectx)) {
+        goto ectx_failed;
+    }
+
+    co_recurse(ret = colod_qmp_event_wait_co(coroutine, this, 10*1000,
+                    "{'event': 'JOB_STATUS_CHANGE',"
+                    " 'data': {'status': 'concluded', 'id': 'resync'}}",
+                    &local_errp));
+    if (ret < 0) {
+        goto wait_error;
+    }
+
+    CO commands = qmp_commands_adhoc(qmpcommands, peer_manager_get_peer(this->ctx->peer),
+                                     "{'execute': 'block-job-dismiss', 'arguments': {'id': 'resync'}}",
+                                     "{'execute': 'x-blockdev-change', 'arguments': {'parent': 'quorum0', 'node': 'nbd0'}}",
+                                     "{'execute': 'cont'}",
+                                     NULL);
+    co_recurse(qmp_ectx_array(coroutine, CO ectx, CO commands));
+    my_array_unref(CO commands);
+
+    if (qmp_ectx_failed(CO ectx)) {
+        goto ectx_failed;
+    }
+
+    return STATE_PRIMARY_START_MIGRATION;
+
+ectx_failed:
+    if (qmp_ectx_did_interrupt(CO ectx)) {
+        qmp_ectx_unref(CO ectx, NULL);
+
+        goto handle_event;
+    } else if (qmp_ectx_did_yank(CO ectx) || qmp_ectx_did_qmp_error(CO ectx)) {
+        qmp_ectx_unref(CO ectx, NULL);
+
+        goto failover;
+    } else {
+        assert(qmp_ectx_did_error(CO ectx));
+        qmp_ectx_log_error(CO ectx);
+        qmp_ectx_unref(CO ectx, NULL);
+        return STATE_FAILED;
+    }
+
+wait_error:
+    qmp_ectx_unref(CO ectx, NULL);
+    assert(local_errp);
+    if (g_error_matches(local_errp, COLOD_ERROR, COLOD_ERROR_INTERRUPT)) {
+        g_error_free(local_errp);
+        local_errp = NULL;
+        goto handle_event;
+    } else if (g_error_matches(local_errp, COLOD_ERROR, COLOD_ERROR_TIMEOUT)) {
+        g_error_free(local_errp);
+        local_errp = NULL;
+        goto failover;
+    } else {
+        abort();
+    }
+
+handle_event:
+    assert(eventqueue_pending_interrupt(this->queue));
+    co_recurse(CO event = colod_event_wait(coroutine, this));
+    if (event_failover(CO event)) {
+        goto failover;
+    } else {
+        return handle_always_interrupting(CO event);
+    }
+
+failover:
+    CO ectx = qmp_ectx_new(this->qmp);
+    qmp_ectx_set_ignore_yank(CO ectx);
+    qmp_ectx_set_ignore_qmp_error(CO ectx);
+    eventqueue_set_interrupting(this->queue, 0);
+
+    co_recurse(qmp_ectx_yank(coroutine, CO ectx));
+
+    co_recurse(result = qmp_ectx(coroutine, CO ectx,
+                                 "{'execute': 'block-job-cancel', 'arguments': {'device': 'resync'}, 'force': true}}"));
+    if (result) {
+        qmp_result_free(result);
+
+        co_recurse(ret = colod_qmp_event_wait_co(coroutine, this, 10*1000,
+                        "{'event': 'JOB_STATUS_CHANGE',"
+                        " 'data': {'status': 'concluded', 'id': 'resync'}}",
+                        &local_errp));
+        if (ret < 0) {
+            if (g_error_matches(local_errp, COLOD_ERROR, COLOD_ERROR_INTERRUPT)) {
+                g_error_free(local_errp);
+                local_errp = NULL;
+                goto handle_event;
+            } else if (g_error_matches(local_errp, COLOD_ERROR, COLOD_ERROR_TIMEOUT)) {
+                g_error_free(local_errp);
+                local_errp = NULL;
+                return STATE_FAILED;
+            } else {
+                abort();
+            }
+        }
+    }
+
+    CO commands = qmp_commands_adhoc(qmpcommands, "dummy address",
+                                     "{'execute': 'block-job-dismiss', 'arguments': {'id': 'resync'}}",
+                                     "{'execute': 'x-blockdev-change', 'arguments': {'parent': 'quorum0', 'child': 'children.1'}}",
+                                     "{'execute': 'blockdev-del', 'arguments': {'node-name': 'nbd0'}}",
+                                     "{'execute': 'cont'}",
+                                     NULL);
+    co_recurse(qmp_ectx_array(coroutine, CO ectx, CO commands));
+    my_array_unref(CO commands);
+
+    if (qmp_ectx_failed(CO ectx)) {
+        qmp_ectx_log_error(CO ectx);
+        qmp_ectx_unref(CO ectx, NULL);
+        return STATE_FAILED;
+    }
+    qmp_ectx_unref(CO ectx, NULL);
+
+    return STATE_PRIMARY_WAIT;
+    co_end;
 }
 
 #define colod_primary_start_migration_co(...) \
@@ -724,6 +926,10 @@ static MainState _colod_primary_start_migration_co(Coroutine *coroutine,
     co_frame(co, sizeof(*co));
     co_begin(MainState, STATE_FAILED);
 
+    if (!peer_manager_get_peer(this->ctx->peer)) {
+        return STATE_FAILOVER_SYNC;
+    }
+
     CO ectx = qmp_ectx_new(this->qmp);
     qmp_ectx_set_interrupt_cb(CO ectx, eventqueue_interrupt, this);
     eventqueue_set_interrupting(this->queue, EVENT_FAILOVER_SYNC, 0);
@@ -735,7 +941,7 @@ static MainState _colod_primary_start_migration_co(Coroutine *coroutine,
                         "{'capability': 'pause-before-switchover', 'state': true}]}}\n"));
     qmp_result_free(result);
 
-    CO commands = qmp_commands_get_migration_start(qmpcommands, "dummy address");
+    CO commands = qmp_commands_get_migration_start(qmpcommands, peer_manager_get_peer(this->ctx->peer));
     co_recurse(qmp_ectx_array(coroutine, CO ectx, CO commands));
     my_array_unref(CO commands);
 
@@ -900,6 +1106,8 @@ static gboolean _colod_main_co(Coroutine *coroutine, ColodMainCoroutine *this) {
             this->replication = FALSE;
 
             co_recurse(new_state = colod_primary_wait_co(coroutine, this));
+        } else if (this->state == STATE_PRIMARY_RESYNC) {
+            co_recurse(new_state = colod_primary_start_resync(coroutine, this));
         } else if (this->state == STATE_PRIMARY_START_MIGRATION) {
             co_recurse(new_state = colod_primary_start_migration_co(coroutine,
                                                                       this));
@@ -989,6 +1197,16 @@ static void colod_qmp_event_cb(gpointer data, ColodQmpResult *result) {
     } else if (!strcmp(event, "RESET")) {
         colod_raise_timeout_coroutine(&this->raise_timeout_coroutine, this->qmp,
                                       this->ctx);
+    } else if (!strcmp(event, "BLOCK_JOB_COMPLETED")) {
+        const gchar *id = get_member_member_str(result->json_root, "data", "device");
+        if (!strcmp(id, "resync")) {
+            JsonObject *obj = json_node_get_object(result->json_root);
+            JsonObject *data = json_object_get_object_member(obj, "data");
+            assert(data);
+            if (json_object_has_member(data, "error")) {
+                colod_event_queue(this, EVENT_FAILOVER_SYNC, "block job failed");
+            }
+        }
     }
 }
 
