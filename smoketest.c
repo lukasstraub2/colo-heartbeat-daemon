@@ -218,14 +218,11 @@ static void smoke_fill_cctx(ColodContext *cctx) {
     cctx->node_name = "tele-clu-01";
     cctx->instance_name = "colo_test";
     cctx->base_dir = "";
-    cctx->qmp_path = "";
-    cctx->qmp_yank_path = "";
     cctx->daemonize = FALSE;
     cctx->qmp_timeout_low = 600;
     cctx->qmp_timeout_high = 10000;
     cctx->watchdog_interval = 0;
     cctx->do_trace = smoke_do_trace();
-    cctx->primary_startup = FALSE;
 }
 
 SmokeColodContext *smoke_context_new(GError **errp) {

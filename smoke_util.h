@@ -13,14 +13,16 @@
 #include <glib-2.0/glib.h>
 #include "coroutine_stack.h"
 
-#define ch_write_co(...) \
-    co_wrap(_ch_write_co(__VA_ARGS__))
+#define ch_write_co(...) co_wrap(_ch_write_co(__VA_ARGS__))
 void _ch_write_co(Coroutine *coroutine, GIOChannel *channel,
                   const gchar *buf, guint timeout);
 
-#define ch_readln_co(...) \
-    co_wrap(_ch_readln_co(__VA_ARGS__))
+#define ch_readln_co(...) co_wrap(_ch_readln_co(__VA_ARGS__))
 void _ch_readln_co(Coroutine *coroutine, GIOChannel *channel,
                    gchar **buf, gsize *len, guint timeout);
+
+#define ch_execute_co(...) co_wrap(_ch_execute_co(__VA_ARGS__))
+int _ch_execute_co(Coroutine *coroutine, GIOChannel *channel,
+                   const gchar *command, guint timeout);
 
 #endif // SMOKE_UTIL_H

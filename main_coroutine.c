@@ -1404,7 +1404,6 @@ ColodMainCoroutine *colod_main_new(const ColodContext *ctx, QemuLauncher *launch
 
     this->queue = colod_eventqueue_new();
 
-    this->primary = ctx->primary_startup;
     qmp_add_notify_event(this->qmp, colod_qmp_event_cb, this);
     qmp_add_notify_hup(this->qmp, colod_hup_cb, this);
 

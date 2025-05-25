@@ -238,8 +238,24 @@ void daemon_mainloop(ColodContext *mctx) {
     GMainContext *main_context = g_main_context_default();
     GMainLoop *mainloop = g_main_loop_new(main_context, FALSE);
 
-    mctx->commands = qmp_commands_new(ctx->instance_name, ctx->base_dir, "",
-                                      "", "", "", 9000);
+    mctx->commands = qmp_commands_new(ctx->instance_name, ctx->base_dir,
+                                      ctx->active_hidden_dir,
+                                      ctx->listen_address, ctx->qemu,
+                                      ctx->qemu_img, 9000);
+    if (ctx->qemu_options) {
+        int ret = qmp_commands_set_qemu_options_str(ctx->commands, ctx->qemu_options, &local_errp);
+        if (ret < 0) {
+            log_error(local_errp->message);
+            exit(1);
+        }
+    }
+    if (ctx->advanced_config) {
+        int ret = qmp_commands_read_config(ctx->commands, ctx->advanced_config, ctx->qemu_options, &local_errp);
+        if (ret < 0) {
+            log_error(local_errp->message);
+            exit(1);
+        }
+    }
 
     mctx->cpg = cpg_new(ctx->cpg, &local_errp);
     if (!ctx->cpg) {
@@ -360,19 +376,22 @@ static int daemon_parse_options(ColodContext *ctx, int *argc, char ***argv,
     GOptionContext *context;
     GOptionEntry entries[] =
     {
-        {"daemonize", 'd', 0, G_OPTION_ARG_NONE, &ctx->daemonize, "Daemonize", NULL},
-        {"syslog", 's', 0, G_OPTION_ARG_NONE, &do_syslog, "Log to syslog", NULL},
-        {"instance_name", 'i', 0, G_OPTION_ARG_STRING, &ctx->instance_name, "The CPG group name for corosync communication", NULL},
-        {"node_name", 'n', 0, G_OPTION_ARG_STRING, &ctx->node_name, "The node hostname", NULL},
-        {"base_directory", 'b', 0, G_OPTION_ARG_FILENAME, &ctx->base_dir, "The base directory to store logs and sockets", NULL},
-        {"qmp_path", 'q', 0, G_OPTION_ARG_FILENAME, &ctx->qmp_path, "The path to the qmp socket", NULL},
-        {"qmp_yank_path", 'y', 0, G_OPTION_ARG_FILENAME, &ctx->qmp_yank_path, "The path to the qmp socket used for yank", NULL},
-        {"timeout_low", 'l', 0, G_OPTION_ARG_INT, &ctx->qmp_timeout_low, "Low qmp timeout", NULL},
-        {"timeout_high", 't', 0, G_OPTION_ARG_INT, &ctx->qmp_timeout_high, "High qmp timeout", NULL},
-        {"watchdog_interval", 'a', 0, G_OPTION_ARG_INT, &ctx->watchdog_interval, "Watchdog interval (0 to disable)", NULL},
-        {"primary", 'p', 0, G_OPTION_ARG_NONE, &ctx->primary_startup, "Startup in primary mode", NULL},
+        {"daemonize", 0, 0, G_OPTION_ARG_NONE, &ctx->daemonize, "Daemonize", NULL},
+        {"syslog", 0, 0, G_OPTION_ARG_NONE, &do_syslog, "Log to syslog", NULL},
+        {"instance_name", 0, 0, G_OPTION_ARG_STRING, &ctx->instance_name, "The CPG group name for corosync communication", NULL},
+        {"node_name", 0, 0, G_OPTION_ARG_STRING, &ctx->node_name, "The node hostname", NULL},
+        {"base_directory", 0, 0, G_OPTION_ARG_FILENAME, &ctx->base_dir, "The base directory to store logs and sockets", NULL},
+        {"qemu", 0, 0, G_OPTION_ARG_FILENAME, &ctx->qemu, "The path to the qmp socket", NULL},
+        {"qemu_img", 0, 0, G_OPTION_ARG_FILENAME, &ctx->qemu_img, "The path to the qmp socket used for yank", NULL},
+        {"timeout_low", 0, 0, G_OPTION_ARG_INT, &ctx->qmp_timeout_low, "Low qmp timeout", NULL},
+        {"timeout_high", 0, 0, G_OPTION_ARG_INT, &ctx->qmp_timeout_high, "High qmp timeout", NULL},
+        {"watchdog_interval", 0, 0, G_OPTION_ARG_INT, &ctx->watchdog_interval, "Watchdog interval (0 to disable)", NULL},
         {"trace", 0, 0, G_OPTION_ARG_NONE, &ctx->do_trace, "Enable tracing", NULL},
-        {"monitor_interface", 'm', 0, G_OPTION_ARG_STRING, &ctx->monitor_interface, "The interface to monitor", NULL},
+        {"monitor_interface", 0, 0, G_OPTION_ARG_STRING, &ctx->monitor_interface, "The interface to monitor", NULL},
+        {"listen_address", 0, 0, G_OPTION_ARG_STRING, &ctx->listen_address, "listen address", NULL},
+        {"active_hidden_dir", 0, 0, G_OPTION_ARG_STRING, &ctx->active_hidden_dir, "active/hidden image dir", NULL},
+        {"advanced_config", 0, 0, G_OPTION_ARG_STRING, &ctx->advanced_config, "advanced config", NULL},
+        {"qemu_options", 0, 0, G_OPTION_ARG_STRING, &ctx->qemu_options, "qemu options", NULL},
         {0}
     };
 
@@ -389,8 +408,7 @@ static int daemon_parse_options(ColodContext *ctx, int *argc, char ***argv,
         return -1;
     }
 
-    if (!ctx->node_name || !ctx->instance_name || !ctx->base_dir ||
-            !ctx->qmp_path) {
+    if (!ctx->node_name || !ctx->instance_name || !ctx->base_dir) {
         g_set_error(errp, COLOD_ERROR, COLOD_ERROR_FATAL,
                     "--instance_name, --node_name, --base_directory and --qmp_path need to be given.");
         return -1;

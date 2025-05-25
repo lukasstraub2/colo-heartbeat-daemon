@@ -429,7 +429,7 @@ static JsonNode* _parse_config(const char* config_str, GError** errp) {
 static JsonNode* parse_config(const char* config_str, const char* qemu_options, GError** errp) {
     JsonObject* config = json_object_new();
 
-    json_object_set_string_member(config, "qemu-options-str", qemu_options);
+    json_object_set_string_member(config, "qemu-options-str", (qemu_options?qemu_options:""));
     json_object_set_boolean_member(config, "vnet-hdr", FALSE);
     json_object_set_boolean_member(config, "filter-rewriter", TRUE);
     json_object_set_object_member(config, "colo-compare-options", json_object_new());

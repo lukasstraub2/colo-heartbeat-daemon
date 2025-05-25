@@ -48,3 +48,18 @@ void _ch_readln_co(Coroutine *coroutine, GIOChannel *channel,
 
     return;
 }
+
+int _ch_execute_co(Coroutine *coroutine, GIOChannel *channel,
+                   const gchar *command, guint timeout) {
+    gchar *line;
+    gsize len;
+
+    co_begin(int, -1);
+
+    co_recurse(ch_write_co(coroutine, channel, command, timeout));
+    co_recurse(ch_readln_co(coroutine, channel, &line, &len, timeout));
+    g_free(line);
+
+    return 0;
+    co_end;
+}

@@ -22,14 +22,15 @@
 
 typedef struct ColodContext {
     /* Parameters */
-    gchar *node_name, *instance_name, *base_dir;
-    gchar *qmp_path, *qmp_yank_path;
-    gchar *monitor_interface;
+    const gchar *node_name, *instance_name, *base_dir;
+    const gchar *qemu, *qemu_img, *listen_address, *active_hidden_dir;
+    const gchar *monitor_interface;
+    const gchar *advanced_config;
+    const gchar *qemu_options;
     gboolean daemonize;
     guint qmp_timeout_low, qmp_timeout_high;
     guint watchdog_interval;
     gboolean do_trace;
-    gboolean primary_startup;
 
     /* Variables */
     int mngmt_listen_fd;
