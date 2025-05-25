@@ -27,10 +27,8 @@
 #include "peer_manager.h"
 
 typedef enum MainState {
-    STATE_SECONDARY_STARTUP,
     STATE_SECONDARY_WAIT,
     STATE_SECONDARY_COLO_RUNNING,
-    STATE_PRIMARY_STARTUP,
     STATE_PRIMARY_WAIT,
     STATE_PRIMARY_RESYNC,
     STATE_PRIMARY_START_MIGRATION,
@@ -615,36 +613,6 @@ static MainState _colod_failover_sync_co(Coroutine *coroutine,
     return STATE_FAILED;
 }
 
-#define colod_secondary_startup_co(...) \
-    co_wrap(_colod_secondary_startup_co(__VA_ARGS__));
-static MainState _colod_secondary_startup_co(Coroutine *coroutine,
-                                             ColodMainCoroutine *this) {
-    GError *local_errp = NULL;
-    ColodQmpResult *result;
-
-    co_begin(MainState, STATE_FAILED);
-
-    co_recurse(result = qmp_execute_co(coroutine, this->qmp, &local_errp,
-                            "{'execute': 'migrate-set-capabilities',"
-                            "'arguments': {'capabilities': ["
-                                "{'capability': 'events', 'state': true }]}}\n"));
-    if (!result) {
-        log_error(local_errp->message);
-        g_error_free(local_errp);
-        return STATE_FAILED;
-    }
-
-    if (result->did_yank) {
-        log_error("Yank during startup");
-        qmp_result_free(result);
-        return STATE_FAILED;
-    }
-    qmp_result_free(result);
-
-    return STATE_SECONDARY_WAIT;
-    co_end;
-}
-
 #define colod_secondary_wait_co(...) \
     co_wrap(_colod_secondary_wait_co(__VA_ARGS__))
 static MainState _colod_secondary_wait_co(Coroutine *coroutine,
@@ -1176,10 +1144,10 @@ static gboolean _colod_main_co(Coroutine *coroutine, ColodMainCoroutine *this) {
 
     if (this->primary) {
         colod_syslog(LOG_INFO, "starting in primary mode");
-        new_state = STATE_PRIMARY_STARTUP;
+        new_state = STATE_PRIMARY_WAIT;
     } else {
         colod_syslog(LOG_INFO, "starting in secondary mode");
-        new_state = STATE_SECONDARY_STARTUP;
+        new_state = STATE_SECONDARY_WAIT;
     }
 
     colod_cpg_send(this->ctx->cpg, MESSAGE_HELLO);
@@ -1187,16 +1155,11 @@ static gboolean _colod_main_co(Coroutine *coroutine, ColodMainCoroutine *this) {
     while (TRUE) {
         this->transitioning = FALSE;
         this->state = new_state;
-        if (this->state == STATE_SECONDARY_STARTUP) {
-            co_recurse(new_state = colod_secondary_startup_co(coroutine,
-                                                                this));
-        } else if (this->state == STATE_SECONDARY_WAIT) {
+        if (this->state == STATE_SECONDARY_WAIT) {
             co_recurse(new_state = colod_secondary_wait_co(coroutine, this));
         } else if (this->state == STATE_SECONDARY_COLO_RUNNING) {
             this->replication = TRUE;
             co_recurse(new_state = colod_colo_running_co(coroutine, this));
-        } else if (this->state == STATE_PRIMARY_STARTUP) {
-            new_state = STATE_PRIMARY_WAIT;
         } else if (this->state == STATE_PRIMARY_WAIT) {
             // Now running primary standalone
             this->primary = TRUE;
