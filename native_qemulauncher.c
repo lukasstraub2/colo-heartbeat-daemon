@@ -233,17 +233,21 @@ int _qemu_launcher_wait_co(Coroutine *coroutine, QemuLauncher *this, guint timeo
     co_begin(int, -1);
 
     if (!this->pid) {
-        colod_error_set(errp, "qemu not running");
-        return -1;
+        return 0;
     }
 
     co_recurse(ret = colod_wait_co(coroutine, this->pid, timeout, errp));
-    return ret;
+    this->pid = 0;
 
+    return ret;
     co_end;
 }
 
 int qemu_launcher_kill(QemuLauncher *this) {
+    if (!this->pid) {
+        return 0;
+    }
+
     return kill(this->pid, SIGKILL);
 }
 
@@ -256,6 +260,11 @@ ColodQmpState *_qemu_launcher_launch_primary(Coroutine *coroutine, QemuLauncher 
 
     co_frame(co, sizeof(*co));
     co_begin(ColodQmpState *, NULL);
+
+    if (this->pid) {
+        colod_error_set(errp, "qemu already running");
+        return NULL;
+    }
 
     CO cmdline = qmp_commands_get_qemu_primary(this->commands);
     co_recurse(CO qmp = qemu_launcher_launch_co(coroutine, this, CO cmdline, errp));
@@ -289,6 +298,12 @@ ColodQmpState *_qemu_launcher_launch_secondary(Coroutine *coroutine, QemuLaunche
 
     co_frame(co, sizeof(*co));
     co_begin(ColodQmpState *, NULL);
+
+    if (this->pid) {
+        colod_error_set(errp, "qemu already running");
+        return NULL;
+    }
+
     if (!this->disk_size) {
         char *disk_size;
         co_recurse(disk_size = qemu_launcher_disk_size_co(coroutine, this, errp));

@@ -7,7 +7,7 @@
 
 typedef struct PeerStatus PeerStatus;
 struct PeerStatus {
-    gboolean failed, yellow, failover;
+    gboolean failed, yellow, failover, shutdown;
 };
 
 struct PeerManager {
@@ -76,6 +76,8 @@ static void peer_manager_cpg_cb(gpointer data, ColodMessage message,
         this->peer.yellow = TRUE;
     } else if (message == MESSAGE_UNYELLOW) {
         this->peer.yellow = FALSE;
+    } else if (message == MESSAGE_SHUTDOWN || message == MESSAGE_REBOOT) {
+        this->peer.shutdown = TRUE;
     }
 }
 
@@ -112,6 +114,10 @@ gboolean peer_manager_yellow(PeerManager *this) {
 
 gboolean peer_manager_failover(PeerManager *this) {
     return this->peer.failover;
+}
+
+gboolean peer_manager_shutdown(PeerManager *this) {
+    return this->peer.shutdown;
 }
 
 PeerManager *peer_manager_new(Cpg *cpg) {

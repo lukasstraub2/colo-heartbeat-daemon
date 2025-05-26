@@ -70,18 +70,24 @@ static gboolean colod_cpg_retransmit_cb(gpointer data) {
     return G_SOURCE_REMOVE;
 }
 
+static gboolean node_equal(uint32_t ida, uint32_t pida, uint32_t idb, uint32_t pidb) {
+    return ida == idb && pida == pidb;
+}
+
 static void colod_cpg_deliver(cpg_handle_t handle,
                               G_GNUC_UNUSED const struct cpg_name *group_name,
                               uint32_t nodeid,
-                              G_GNUC_UNUSED uint32_t pid,
+                              uint32_t pid,
                               void *msg,
                               size_t msg_len) {
     Cpg *cpg;
     uint32_t conv;
     uint32_t myid;
+    uint32_t mypid;
 
     cpg_context_get(handle, (void**) &cpg);
     cpg_local_get(handle, &myid);
+    mypid = getpid();
 
     if (msg_len != sizeof(conv)) {
         log_error_fmt("cpg: Got message of invalid length %zu", msg_len);
@@ -89,11 +95,11 @@ static void colod_cpg_deliver(cpg_handle_t handle,
     }
     conv = ntohl((*(uint32_t*)msg));
 
-    if (nodeid == myid) {
+    if (node_equal(nodeid, pid, myid, mypid)) {
         cpg->retransmit[conv] = FALSE;
     }
 
-    notify(cpg, conv, nodeid == myid, FALSE);
+    notify(cpg, conv, node_equal(nodeid, pid, myid, mypid), FALSE);
 }
 
 static void colod_cpg_confchg(cpg_handle_t handle,

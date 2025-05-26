@@ -13,6 +13,8 @@ const gchar *get_member_member_str(JsonNode *node, const gchar *member1,
                                    const gchar *member2);
 long get_member_member_int(JsonNode *node, const gchar *member1,
 						   const gchar *member2);
+gboolean get_member_member_bool(JsonNode *node, const gchar *member1,
+								const gchar *member2);
 gboolean object_matches(JsonNode *node, JsonNode *match);
 gboolean object_matches_json(JsonNode *node, const gchar *match);
 gboolean object_matches_match_array(JsonNode *node, JsonNode *match_array);

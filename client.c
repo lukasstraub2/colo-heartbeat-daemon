@@ -55,18 +55,22 @@ struct MyTimeout {
     guint timeout_ms;
 };
 
-guint my_timeout_remaining_ms(MyTimeout *this) {
+guint my_timeout_remaining_ms(MyTimeout *this, guint max) {
+    if (!this) {
+        return max;
+    }
+
     guint elapsed = g_timer_elapsed(this->timer, NULL)/1000;
 
     if (elapsed >= this->timeout_ms) {
         return 0;
     }
 
-    return this->timeout_ms - elapsed;
+    return MAX(max, this->timeout_ms - elapsed);
 }
 
-guint my_timeout_remaining_minus_ms(MyTimeout *this, guint minus) {
-    guint remaining = my_timeout_remaining_ms(this);
+guint my_timeout_remaining_minus_ms(MyTimeout *this, guint max, guint minus) {
+    guint remaining = my_timeout_remaining_ms(this, max + minus);
 
     if (minus >= remaining) {
         return 0;
@@ -108,10 +112,6 @@ void client_unregister(ColodClientListener *this, const ClientCallbacks *cb, gpo
     this->cb_data = NULL;
 }
 
-static void query_status(ColodClientListener *this, ColodState *ret) {
-    this->cb->query_status(this->cb_data, ret);
-}
-
 #define wait_while(cond) \
     while (cond) { \
         progress_source_add(coroutine->cb, coroutine); \
@@ -121,8 +121,22 @@ static void query_status(ColodClientListener *this, ColodState *ret) {
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wunused-variable"
 
-#define check_health_co(...) \
-    co_wrap(_check_health_co(__VA_ARGS__))
+#define query_status_co(...) co_wrap(_query_status(__VA_ARGS__))
+static int _query_status(Coroutine *coroutine, ColodClientListener *this, ColodState *ret) {
+    co_begin(int, -1);
+
+    wait_while(!this->cb || !this->cb->query_status || this->lock.holder);
+    colod_lock_co(this->lock);
+
+    this->cb->query_status(this->cb_data, ret);
+
+    colod_unlock_co(this->lock);
+    co_end;
+
+    return 0;
+}
+
+#define check_health_co(...) co_wrap(_check_health_co(__VA_ARGS__))
 static int _check_health_co(Coroutine *coroutine, ColodClientListener *this, GError **errp) {
     struct {
         const ClientCallbacks *cb;
@@ -457,10 +471,9 @@ static ColodQmpResult *_handle_query_status_co(Coroutine *coroutine,
         failed = TRUE;
     }
 
+    co_recurse(query_status_co(coroutine, this, &state));
     co_end;
 
-
-    query_status(this, &state);
     gchar *reply;
     reply = g_strdup_printf("{\"return\": "
                             "{\"primary\": %s, \"replication\": %s,"

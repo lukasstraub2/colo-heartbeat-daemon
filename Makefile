@@ -10,13 +10,13 @@ common_objects=util.o qemu_util.o json_util.o coutil.o qmp.o qmpexectx.o client.
 
 all: colod check
 
-colod: $(common_objects) native_qemulauncher.o cpg.o colod.o
+colod: $(common_objects) cluster_resource_pacemaker.o native_qemulauncher.o cpg.o colod.o
 	$(CC) -o $@ $^ $(CFLAGS) $(CPG_LDFLAGS) $(LDFLAGS)
 
-smoketest_quit_early: $(common_objects) stub_qemulauncher.o stub_cpg.o smoke_util.o smoketest_quit_early.o smoketest.o
+smoketest_quit_early: $(common_objects) stub_cluster_resource.o stub_qemulauncher.o stub_cpg.o smoke_util.o smoketest_quit_early.o smoketest.o
 	$(CC) -o $@ $^ $(CFLAGS) $(LDFLAGS)
 
-smoketest_client_quit: $(common_objects) stub_qemulauncher.o stub_cpg.o smoke_util.o smoketest_client_quit.o smoketest.o
+smoketest_client_quit: $(common_objects) stub_cluster_resource.o stub_qemulauncher.o stub_cpg.o smoke_util.o smoketest_client_quit.o smoketest.o
 	$(CC) -o $@ $^ $(CFLAGS) $(LDFLAGS)
 
 test_eventqueue: eventqueue.o test_eventqueue.o
@@ -40,10 +40,12 @@ io_watch_test: util.o io_watch_test.o
 netlink_test: util.o netlink.o netlink_test.o
 	$(CC) -o $@ $^ $(CFLAGS) $(LDFLAGS)
 
-.PHONY: clean check
+.PHONY: clean check tests
 
-check: smoketest_quit_early smoketest_client_quit test_eventqueue test_yellow_coroutine netlink_test test_myarray test_qmpcommands test_native_qemulauncher
+tests: smoketest_quit_early smoketest_client_quit test_eventqueue test_yellow_coroutine netlink_test test_myarray test_qmpcommands test_native_qemulauncher
 	$(foreach EXEC,$^, echo "./${EXEC}"; G_DEBUG=fatal-warnings ./${EXEC} || exit 1;)
+
+check: tests
 
 clean:
 	rm -f *.o colod smoketest_quit_early smoketest_client_quit test_eventqueue io_watch_test netlink_test test_myarray test_qmpcommands test_native_qemulauncher

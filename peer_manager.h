@@ -16,6 +16,7 @@ const char *peer_manager_get_peer(PeerManager *this);
 gboolean peer_manager_failed(PeerManager *this);
 gboolean peer_manager_yellow(PeerManager *this);
 gboolean peer_manager_failover(PeerManager *this);
+gboolean peer_manager_shutdown(PeerManager *this);
 
 PeerManager *peer_manager_new(Cpg *cpg);
 void peer_manager_free(gpointer data);

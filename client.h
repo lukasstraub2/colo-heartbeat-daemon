@@ -17,8 +17,8 @@
 
 typedef struct MyTimeout MyTimeout;
 
-guint my_timeout_remaining_ms(MyTimeout *this);
-guint my_timeout_remaining_minus_ms(MyTimeout *this, guint minus);
+guint my_timeout_remaining_ms(MyTimeout *this, guint max);
+guint my_timeout_remaining_minus_ms(MyTimeout *this, guint max, guint minus);
 MyTimeout *my_timeout_new(guint timeout_ms);
 void my_timeout_free(gpointer data);
 MyTimeout *my_timeout_ref(MyTimeout *this);

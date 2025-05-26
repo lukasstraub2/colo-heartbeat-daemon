@@ -10,6 +10,9 @@ typedef enum ColodMessage {
     MESSAGE_HELLO,
     MESSAGE_YELLOW,
     MESSAGE_UNYELLOW,
+    MESSAGE_SHUTDOWN,
+    MESSAGE_REBOOT,
+    MESSAGE_REBOOT_RESTART,
     MESSAGE_MAX
 } ColodMessage;
 
