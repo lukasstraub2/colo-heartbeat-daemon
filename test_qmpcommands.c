@@ -66,7 +66,7 @@ static void test_b() {
     ret = qmp_commands_set_prepare_secondary(commands, json, NULL);
     assert(ret == 0);
 
-    MyArray *array = qmp_commands_get_migration_start(commands, "address");
+    MyArray *array = qmp_commands_get_migration_start(commands, "address", FALSE);
     assert(!strcmp(array->array[0], "some address\n"));
     assert(!strcmp(array->array[1], "and :9000: then\n"));
     assert(!strcmp(array->array[2], "0.0.0.0\n"));
@@ -165,7 +165,7 @@ static void test_f() {
     ret = qmp_commands_set_migration_start(commands, json, NULL);
     assert(ret == 0);
 
-    MyArray *array = qmp_commands_get_migration_start(commands, "address");
+    MyArray *array = qmp_commands_get_migration_start(commands, "address", FALSE);
     assert(array->size == 1);
     assert(!strcmp(array->array[0], "{\"test\":\"test\",\"colo_comp_prop\":\"lol\"}\n"));
     my_array_unref(array);
@@ -187,7 +187,7 @@ static void test_g() {
     ret = qmp_commands_set_migration_start(commands, json, NULL);
     assert(ret == 0);
 
-    MyArray *array = qmp_commands_get_migration_start(commands, "address");
+    MyArray *array = qmp_commands_get_migration_start(commands, "address", FALSE);
     assert(array->size == 1);
     assert(!strcmp(array->array[0], "[{\"colo_comp_prop\":\"lol\"}]\n"));
     my_array_unref(array);

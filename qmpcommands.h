@@ -33,7 +33,7 @@ MyArray *qmp_commands_get_qemu_secondary(QmpCommands *this);
 MyArray *qmp_commands_get_qemu_dummy(QmpCommands *this);
 MyArray *qmp_commands_get_prepare_primary(QmpCommands *this);
 MyArray *qmp_commands_get_prepare_secondary(QmpCommands *this);
-MyArray *qmp_commands_get_migration_start(QmpCommands *this, const char *address);
+MyArray *qmp_commands_get_migration_start(QmpCommands *this, const char *address, gboolean filter_rewriter);
 MyArray *qmp_commands_get_migration_switchover(QmpCommands *this);
 MyArray *qmp_commands_get_failover_primary(QmpCommands *this);
 MyArray *qmp_commands_get_failover_secondary(QmpCommands *this);

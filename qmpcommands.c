@@ -168,7 +168,8 @@ static MyArray *_qmp_commands_format(const QmpCommands *this,
                                      gboolean newline,
                                      const MyArray *entry,
                                      const char *address,
-                                     const char *disk_size) {
+                                     const char *disk_size,
+                                     gboolean filter_rewriter) {
     Formater *fmt = formater_new(
                 this->instance_name,
                 this->base_dir,
@@ -178,7 +179,7 @@ static MyArray *_qmp_commands_format(const QmpCommands *this,
                 this->qemu_binary,
                 this->qemu_img_binary,
                 disk_size,
-                this->filter_rewriter,
+                filter_rewriter,
                 newline,
                 this->comp_prop,
                 this->mig_cap,
@@ -198,14 +199,22 @@ static MyArray *qmp_commands_format(const QmpCommands *this,
                                     const MyArray *entry,
                                     const char *address,
                                     const char *disk_size) {
-    return _qmp_commands_format(this, TRUE, entry, address, disk_size);
+    return _qmp_commands_format(this, TRUE, entry, address, disk_size, this->filter_rewriter);
+}
+
+static MyArray *qmp_commands_format_migration_start(const QmpCommands *this,
+                                                    const MyArray *entry,
+                                                    const char *address,
+                                                    const char *disk_size,
+                                                    gboolean filter_rewriter) {
+    return _qmp_commands_format(this, TRUE, entry, address, disk_size, filter_rewriter);
 }
 
 static MyArray *qmp_commands_format_cmdline(const QmpCommands *this,
                                             const MyArray *entry,
                                             const char *address,
                                             const char *disk_size) {
-    MyArray *ret = _qmp_commands_format(this, FALSE, entry, address, disk_size);
+    MyArray *ret = _qmp_commands_format(this, FALSE, entry, address, disk_size, this->filter_rewriter);
     if (!ret) {
         return NULL;
     }
@@ -276,9 +285,8 @@ MyArray *qmp_commands_get_prepare_secondary(QmpCommands *this) {
     return qmp_commands_format(this, this->prepare_secondary, NULL, NULL);
 }
 
-MyArray *qmp_commands_get_migration_start(QmpCommands *this,
-                                          const char *address) {
-    return qmp_commands_format(this, this->migration_start, address, NULL);
+MyArray *qmp_commands_get_migration_start(QmpCommands *this, const char *address, gboolean filter_rewriter) {
+    return qmp_commands_format_migration_start(this, this->migration_start, address, NULL, filter_rewriter);
 }
 
 MyArray *qmp_commands_get_migration_switchover(QmpCommands *this) {

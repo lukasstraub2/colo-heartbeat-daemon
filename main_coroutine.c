@@ -1005,6 +1005,7 @@ static MainState _colod_primary_start_migration_co(Coroutine *coroutine,
         ColodEvent event;
         MyArray *commands;
         QmpEctx *ectx;
+        gboolean filter_rewriter;
     } *co;
     QmpCommands *qmpcommands = this->ctx->commands;
     ColodQmpResult *result;
@@ -1022,6 +1023,22 @@ static MainState _colod_primary_start_migration_co(Coroutine *coroutine,
     qmp_ectx_set_interrupt_cb(CO ectx, eventqueue_interrupt, this);
     eventqueue_set_interrupting(this->queue, EVENT_FAILOVER_SYNC, 0);
 
+    co_recurse(result = qmp_execute_co(coroutine, this->qmp, &local_errp,
+                                       "{'execute': 'qom-list', 'arguments': {'path': '/objects/rew0'}}"));
+    if (!result) {
+        if (g_error_matches(local_errp, COLOD_ERROR, COLOD_ERROR_QMP)) {
+            CO filter_rewriter = FALSE;
+            g_error_free(local_errp);
+            local_errp = NULL;
+        } else {
+            qmp_ectx_unref(CO ectx, NULL);
+            return STATE_FAILED;
+        }
+    } else {
+        CO filter_rewriter = TRUE;
+    }
+    qmp_result_free(result);
+
     co_recurse(result = qmp_ectx(coroutine, CO ectx,
                     "{'execute': 'migrate-set-capabilities',"
                     "'arguments': {'capabilities': ["
@@ -1029,7 +1046,7 @@ static MainState _colod_primary_start_migration_co(Coroutine *coroutine,
                         "{'capability': 'pause-before-switchover', 'state': true}]}}\n"));
     qmp_result_free(result);
 
-    CO commands = qmp_commands_get_migration_start(qmpcommands, peer_manager_get_peer(this->ctx->peer));
+    CO commands = qmp_commands_get_migration_start(qmpcommands, peer_manager_get_peer(this->ctx->peer), CO filter_rewriter);
     co_recurse(qmp_ectx_array(coroutine, CO ectx, CO commands));
     my_array_unref(CO commands);
 
