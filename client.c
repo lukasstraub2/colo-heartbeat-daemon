@@ -460,14 +460,15 @@ static ColodQmpResult *_handle_query_status_co(Coroutine *coroutine,
 
     co_begin(ColodQmpResult*, NULL);
 
-    co_recurse(ret = check_health_co(coroutine, this, &local_errp));
-    if (coroutine->yield) {
-        return NULL;
-    }
-    if (ret < 0) {
-        log_error(local_errp->message);
-        g_error_free(local_errp);
-        local_errp = NULL;
+    if (this->cb->_check_health_co) {
+        co_recurse(ret = check_health_co(coroutine, this, &local_errp));
+        if (ret < 0) {
+            log_error(local_errp->message);
+            g_error_free(local_errp);
+            local_errp = NULL;
+            failed = TRUE;
+        }
+    } else {
         failed = TRUE;
     }
 
