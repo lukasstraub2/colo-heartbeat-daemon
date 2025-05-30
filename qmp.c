@@ -162,9 +162,12 @@ static ColodQmpResult *_qmp_read_line_co(Coroutine *coroutine,
             return NULL;
         }
 
-        if (!object_matches_json(result->json_root,
-                                 "{'event': 'MIGRATION_PASS'}")
-                && !channel->discard_events) {
+        if (has_member(result->json_root, "event")) {
+            if (!object_matches_json(result->json_root, "{'event': 'MIGRATION_PASS'}")
+                    && !channel->discard_events) {
+                colod_trace("%s", result->line);
+            }
+        } else {
             colod_trace("%s", result->line);
         }
 
