@@ -1641,7 +1641,7 @@ ColodMainCoroutine *colod_main_new(const ColodContext *ctx, QemuLauncher *launch
 
     this->yellow_co = yellow_coroutine_new(ctx->cpg, ctx, 500, 1000, errp);
     if (!this->yellow_co) {
-        g_free(this);
+        colod_main_unref(this);
         return NULL;
     }
 

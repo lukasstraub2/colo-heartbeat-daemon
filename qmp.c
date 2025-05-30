@@ -629,7 +629,7 @@ ColodQmpState *qmp_new(int fd, int yank_fd, guint timeout, GError **errp) {
     state->timeout = timeout;
     state->channel.channel = colod_create_channel(fd, errp);
     if (!state->channel.channel) {
-        g_free(state);
+        qmp_unref(state);
         return NULL;
     }
 
@@ -637,7 +637,7 @@ ColodQmpState *qmp_new(int fd, int yank_fd, guint timeout, GError **errp) {
     state->yank_channel.discard_events = TRUE;
     if (!state->yank_channel.channel) {
         g_io_channel_unref(state->channel.channel);
-        g_free(state);
+        qmp_unref(state);
         return NULL;
     }
 

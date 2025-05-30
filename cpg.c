@@ -176,7 +176,7 @@ Cpg *colod_open_cpg(ColodContext *ctx, GError **errp) {
                                (cpg_model_data_t*) &cpg_data, cpg);
     if (ret != CS_OK) {
         colod_error_set(errp, "Failed to initialize cpg: %s", cs_strerror(ret));
-        g_free(cpg);
+        cpg_unref(cpg);
         return NULL;
     }
 
@@ -184,7 +184,7 @@ Cpg *colod_open_cpg(ColodContext *ctx, GError **errp) {
     if (ret != CS_OK) {
         colod_error_set(errp, "Failed to join cpg group: %s", cs_strerror(ret));
         cpg_finalize(cpg->handle);
-        g_free(cpg);
+        cpg_unref(cpg);
         return NULL;
     }
 
@@ -213,8 +213,9 @@ static void cpg_free(gpointer data) {
     if (cpg->retransmit_source_id) {
         g_source_remove(cpg->retransmit_source_id);
     }
-    g_source_remove(cpg->source_id);
-    g_free(cpg);
+    if (cpg->source_id) {
+        g_source_remove(cpg->source_id);
+    }
 }
 
 Cpg *cpg_ref(Cpg *this) {
