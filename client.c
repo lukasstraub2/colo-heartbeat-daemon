@@ -475,19 +475,19 @@ static ColodQmpResult *_handle_query_status_co(Coroutine *coroutine,
     co_recurse(query_status_co(coroutine, this, &state));
     co_end;
 
-    gchar *reply;
-    reply = g_strdup_printf("{\"return\": "
-                            "{\"primary\": %s, \"replication\": %s,"
-                            " \"failed\": %s, \"peer-failover\": %s,"
-                            " \"peer-failed\": %s}}\n",
+    gchar *member;
+    member = g_strdup_printf("{\"primary\": %s, \"replication\": %s,"
+                             " \"failed\": %s, \"peer-failover\": %s,"
+                             " \"peer-failed\": %s}",
                             bool_to_json(state.primary),
                             bool_to_json(state.replication),
                             bool_to_json(failed || state.failed),
                             bool_to_json(state.peer_failover),
                             bool_to_json(state.peer_failed));
 
-    result = qmp_parse_result(reply, strlen(reply), NULL);
+    result = create_reply(member);
     assert(result);
+    g_free(member);
     return result;
 }
 
@@ -784,13 +784,12 @@ static ColodQmpResult * _handle_set_peer(Coroutine *coroutine, ColodClientListen
 #define handle_query_peer(...) co_wrap(_handle_query_peer(__VA_ARGS__))
 static ColodQmpResult * _handle_query_peer(Coroutine *coroutine, ColodClientListener *this) {
     (void) coroutine;
-    gchar *reply;
-    reply = g_strdup_printf("{\"return\": "
-                            "{\"peer\": \"%s\"}}",
-                            peer_manager_get_peer(this->peer));
+    gchar *member;
+    member = g_strdup_printf("{\"peer\": \"%s\"}", peer_manager_get_peer(this->peer));
 
-    ColodQmpResult *result = qmp_parse_result(reply, strlen(reply), NULL);
+    ColodQmpResult *result = create_reply(member);
     assert(result);
+    g_free(member);
     return result;
 }
 
