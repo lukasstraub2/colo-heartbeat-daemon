@@ -39,13 +39,15 @@ void colod_syslog(int pri, const char *fmt, ...) {
         va_end(args);
     }
 
-    va_start(args, fmt);
     if (do_syslog) {
+        va_start(args, fmt);
         vsyslog(pri, fmt, args);
-    } else {
-        vfprintf(stderr, fmt, args);
-        fwrite("\n", 1, 1, stderr);
+        va_end(args);
     }
+
+    va_start(args, fmt);
+    vfprintf(stderr, fmt, args);
+    fwrite("\n", 1, 1, stderr);
     va_end(args);
 }
 
