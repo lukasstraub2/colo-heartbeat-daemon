@@ -29,13 +29,11 @@
 
 typedef enum MainState {
     STATE_SECONDARY_WAIT,
-    STATE_SECONDARY_COLO_RUNNING,
     STATE_PRIMARY_WAIT,
     STATE_PRIMARY_RESYNC,
     STATE_PRIMARY_START_MIGRATION,
-    STATE_PRIMARY_COLO_RUNNING,
+    STATE_COLO_RUNNING,
     STATE_FAILOVER_SYNC,
-    STATE_FAILOVER,
     STATE_SHUTDOWN,
     STATE_GUEST_SHUTDOWN,
     STATE_GUEST_REBOOT,
@@ -603,8 +601,7 @@ const ClientCallbacks colod_client_callbacks = {
     __colod_execute_co
 };
 
-#define colod_failover_co(...) \
-    co_wrap(_colod_failover_co(__VA_ARGS__))
+#define colod_failover_co(...) co_wrap(_colod_failover_co(__VA_ARGS__))
 static MainState _colod_failover_co(Coroutine *coroutine,
                                     ColodMainCoroutine *this) {
     struct {
@@ -615,6 +612,18 @@ static MainState _colod_failover_co(Coroutine *coroutine,
 
     co_frame(co, sizeof(*co));
     co_begin(MainState, STATE_FAILED);
+
+    colod_cpg_send(this->ctx->cpg, MESSAGE_FAILOVER);
+
+    while (TRUE) {
+        ColodEvent event;
+        co_recurse(event = colod_event_wait(coroutine, this));
+        if (event == EVENT_FAILOVER_WIN) {
+            break;
+        } else if (event_always_interrupting(event)) {
+            return handle_always_interrupting(event);
+        }
+    }
 
     CO ectx = qmp_ectx_new(this->qmp);
     qmp_ectx_set_ignore_yank(CO ectx);
@@ -644,31 +653,6 @@ static MainState _colod_failover_co(Coroutine *coroutine,
     co_end;
 
     return STATE_PRIMARY_WAIT;
-}
-
-#define colod_failover_sync_co(...) \
-    co_wrap(_colod_failover_sync_co(__VA_ARGS__))
-static MainState _colod_failover_sync_co(Coroutine *coroutine,
-                                         ColodMainCoroutine *this) {
-
-    co_begin(MainState, STATE_FAILED);
-    eventqueue_set_interrupting(this->queue, 0);
-
-    colod_cpg_send(this->ctx->cpg, MESSAGE_FAILOVER);
-
-    while (TRUE) {
-        ColodEvent event;
-        co_recurse(event = colod_event_wait(coroutine, this));
-        if (event == EVENT_FAILOVER_WIN) {
-            return STATE_FAILOVER;
-        } else if (event_always_interrupting(event)) {
-            return handle_always_interrupting(event);
-        }
-    }
-
-    co_end;
-
-    return STATE_FAILED;
 }
 
 #define colod_secondary_wait_co(...) \
@@ -721,7 +705,7 @@ static MainState _colod_secondary_wait_co(Coroutine *coroutine,
     colod_raise_timeout_coroutine(&this->raise_timeout_coroutine, this->qmp,
                                   this->ctx);
 
-    return STATE_SECONDARY_COLO_RUNNING;
+    return STATE_COLO_RUNNING;
 }
 
 #define colod_colo_running_co(...) \
@@ -1090,7 +1074,7 @@ static MainState _colod_primary_start_migration_co(Coroutine *coroutine,
     }
 
     qmp_ectx_unref(CO ectx, NULL);
-    return STATE_PRIMARY_COLO_RUNNING;
+    return STATE_COLO_RUNNING;
 
 ectx_failed:
     if (qmp_ectx_did_interrupt(CO ectx)) {
@@ -1368,9 +1352,6 @@ static MainReturn _colod_main_co(Coroutine *coroutine, ColodMainCoroutine *this)
         this->state = new_state;
         if (this->state == STATE_SECONDARY_WAIT) {
             co_recurse(new_state = colod_secondary_wait_co(coroutine, this));
-        } else if (this->state == STATE_SECONDARY_COLO_RUNNING) {
-            this->replication = TRUE;
-            co_recurse(new_state = colod_colo_running_co(coroutine, this));
         } else if (this->state == STATE_PRIMARY_WAIT) {
             // Now running primary standalone
             this->primary = TRUE;
@@ -1383,12 +1364,10 @@ static MainReturn _colod_main_co(Coroutine *coroutine, ColodMainCoroutine *this)
         } else if (this->state == STATE_PRIMARY_START_MIGRATION) {
             co_recurse(new_state = colod_primary_start_migration_co(coroutine,
                                                                       this));
-        } else if (this->state == STATE_PRIMARY_COLO_RUNNING) {
+        } else if (this->state == STATE_COLO_RUNNING) {
             this->replication = TRUE;
             co_recurse(new_state = colod_colo_running_co(coroutine, this));
         } else if (this->state == STATE_FAILOVER_SYNC) {
-            co_recurse(new_state = colod_failover_sync_co(coroutine, this));
-        } else if (this->state == STATE_FAILOVER) {
             co_recurse(new_state = colod_failover_co(coroutine, this));
         } else if (this->state == STATE_SHUTDOWN) {
             this->transitioning = TRUE;
