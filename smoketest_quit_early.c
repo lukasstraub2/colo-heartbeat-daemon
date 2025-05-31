@@ -33,7 +33,7 @@ static gboolean _testcase_co(Coroutine *coroutine, SmokeTestcase *this) {
     co_begin(gboolean, G_SOURCE_CONTINUE);
 
     co_recurse(ch_write_co(coroutine, sctx->client_ch,
-                           "{'exec-colod': 'start'}\n", 1000));
+                           "{'exec-colod': 'demote'}\n", 1000));
     co_recurse(ch_readln_co(coroutine, sctx->client_ch, &line, &len, 1000));
     g_free(line);
 

@@ -80,7 +80,19 @@ static void daemon_wake_command(DaemonCoroutine *this, MainReturn command) {
     }
 }
 
-static int _daemon_start_co(Coroutine *coroutine, gpointer data) {
+static int _daemon_promote_co(Coroutine *coroutine, gpointer data) {
+    return _deliver_command_co(coroutine, data, MAIN_PROMOTE);
+}
+
+static int _daemon_shutdown_co(Coroutine *coroutine, gpointer data, MyTimeout *timeout) {
+    (void) coroutine;
+    (void) data;
+    (void) timeout;
+    return 0;
+}
+
+static int _daemon_demote_co(Coroutine *coroutine, gpointer data, MyTimeout *timeout) {
+    (void) timeout;
     return _deliver_command_co(coroutine, data, MAIN_DEMOTE);
 }
 
@@ -101,12 +113,11 @@ static void daemon_query_status(gpointer data, ColodState *ret) {
 const ClientCallbacks daemon_client_callbacks = {
     daemon_query_status,
     NULL,
-    _daemon_start_co,
+    _daemon_promote_co,
     NULL,
     NULL,
-    NULL,
-    NULL,
-    NULL,
+    _daemon_shutdown_co,
+    _daemon_demote_co,
     _daemon_quit_co,
     NULL,
     NULL,
@@ -158,6 +169,7 @@ static gboolean _daemon_co(Coroutine *coroutine, DaemonCoroutine *this) {
             if (CO command == MAIN_PROMOTE) {
                 co_recurse(qmp = qemu_launcher_launch_primary(coroutine, CO launcher,
                                                               &CO local_errp));
+                daemon_wake_command(this, MAIN_PROMOTE);
             } else {
                 co_recurse(qmp = qemu_launcher_launch_secondary(coroutine, CO launcher,
                                                                 &CO local_errp));
@@ -187,10 +199,8 @@ static gboolean _daemon_co(Coroutine *coroutine, DaemonCoroutine *this) {
                 continue;
             }
 
-            colod_main_client_register(CO mainco);
             co_recurse(CO command = colod_main_enter(coroutine, CO mainco));
             colod_main_query_status(CO mainco, &this->last_state);
-            colod_main_client_unregister(CO mainco);
 
             colod_main_unref(CO mainco);
         } else if (CO command == MAIN_QUIT) {
@@ -382,6 +392,7 @@ static int daemon_parse_options(ColodContext *ctx, int *argc, char ***argv,
         {"qemu_img", 0, 0, G_OPTION_ARG_FILENAME, &ctx->qemu_img, "The path to the qmp socket used for yank", NULL},
         {"timeout_low", 0, 0, G_OPTION_ARG_INT, &ctx->qmp_timeout_low, "Low qmp timeout", NULL},
         {"timeout_high", 0, 0, G_OPTION_ARG_INT, &ctx->qmp_timeout_high, "High qmp timeout", NULL},
+        {"command_timeout", 0, 0, G_OPTION_ARG_INT, &ctx->command_timeout, "Timeout for commands", NULL},
         {"watchdog_interval", 0, 0, G_OPTION_ARG_INT, &ctx->watchdog_interval, "Watchdog interval (0 to disable)", NULL},
         {"trace", 0, 0, G_OPTION_ARG_NONE, &ctx->do_trace, "Enable tracing", NULL},
         {"monitor_interface", 0, 0, G_OPTION_ARG_STRING, &ctx->monitor_interface, "The interface to monitor", NULL},
@@ -408,6 +419,11 @@ static int daemon_parse_options(ColodContext *ctx, int *argc, char ***argv,
     if (!ctx->node_name || !ctx->instance_name || !ctx->base_dir) {
         g_set_error(errp, COLOD_ERROR, COLOD_ERROR_FATAL,
                     "--instance_name, --node_name, --base_directory and --qmp_path need to be given.");
+        return -1;
+    }
+
+    if (ctx->command_timeout < 20*1000) {
+        colod_error_set(errp, "command_timeout must be at least 20 seconds");
         return -1;
     }
 

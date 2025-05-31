@@ -87,7 +87,7 @@ int colod_fd_set_blocking(int fd, gboolean blocking, GError **errp) {
 static gboolean progress_source_prepare(G_GNUC_UNUSED GSource *source,
                                         gint *timeout)
 {
-    *timeout = -1;
+    *timeout = 500;
 
     return FALSE;
 }
@@ -123,7 +123,7 @@ guint progress_source_add(GSourceFunc func, gpointer data) {
     guint source_id;
 
     source = g_source_new(&progress_source_funcs, sizeof(GSource));
-    g_source_set_priority(source, G_PRIORITY_DEFAULT_IDLE);
+    g_source_set_priority(source, 1000);
     g_source_set_callback(source, func, data, NULL);
     source_id = g_source_attach(source, context);
     g_source_unref(source);

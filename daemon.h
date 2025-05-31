@@ -29,6 +29,7 @@ typedef struct ColodContext {
     const gchar *qemu_options;
     gboolean daemonize;
     guint qmp_timeout_low, qmp_timeout_high;
+    guint command_timeout;
     guint watchdog_interval;
     gboolean do_trace;
 

@@ -30,7 +30,6 @@ struct ClientCallbacks {
     void (*query_status)(gpointer data, ColodState *ret);
     int (*_check_health_co)(Coroutine *coroutine, gpointer data, GError **errp);
 
-    int (*_start_co)(Coroutine *coroutine, gpointer data);
     int (*_promote_co)(Coroutine *coroutine, gpointer data);
     int (*_start_migration_co)(Coroutine *coroutine, gpointer data);
     int (*_reboot_co)(Coroutine *coroutine, gpointer data);

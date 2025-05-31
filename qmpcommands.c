@@ -693,7 +693,7 @@ QmpCommands *qmp_commands_new(const char *instance_name, const char *base_dir,
         NULL);
 
     this->migration_switchover = qmp_commands_static(0,
-        "{'execute': 'qom-set', 'arguments': {'path': '/objects/mirror0', 'property': 'status', 'value': 'on'}}"
+        "{'execute': 'qom-set', 'arguments': {'path': '/objects/mirror0', 'property': 'status', 'value': 'on'}}",
         "{'execute': 'qom-set', 'arguments': {'path': '/objects/comp_pri_in0', 'property': 'status', 'value': 'on'}}",
         NULL);
 

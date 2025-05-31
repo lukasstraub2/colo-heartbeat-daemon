@@ -172,31 +172,6 @@ static void _clear_peer(Coroutine *coroutine, ColodClientListener *this) {
     peer_manager_clear_peer(this->peer);
 }
 
-#define start(...) co_wrap(_start(__VA_ARGS__))
-static int _start(Coroutine *coroutine, ColodClientListener *this) {
-    struct {
-        const ClientCallbacks *cb;
-        gpointer data;
-    } *co;
-    int ret;
-
-    co_frame(co, sizeof(*co));
-    co_begin(int, -1);
-
-    wait_while(!this->cb || !this->cb->_start_co || this->lock.holder);
-    colod_lock_co(this->lock);
-
-    CO cb = this->cb;
-    CO data = this->cb_data;
-
-    co_recurse(ret = CO cb->_start_co(coroutine, CO data));
-
-    colod_unlock_co(this->lock);
-    co_end;
-
-    return ret;
-}
-
 #define promote(...) co_wrap(_promote(__VA_ARGS__))
 static int _promote(Coroutine *coroutine, ColodClientListener *this) {
     struct {
@@ -460,7 +435,7 @@ static ColodQmpResult *_handle_query_status_co(Coroutine *coroutine,
 
     co_begin(ColodQmpResult*, NULL);
 
-    if (this->cb->_check_health_co) {
+    if (this->cb && this->cb->_check_health_co) {
         co_recurse(ret = check_health_co(coroutine, this, &local_errp));
         if (ret < 0) {
             log_error(local_errp->message);
@@ -468,22 +443,20 @@ static ColodQmpResult *_handle_query_status_co(Coroutine *coroutine,
             local_errp = NULL;
             failed = TRUE;
         }
-    } else {
-        failed = TRUE;
     }
 
     co_recurse(query_status_co(coroutine, this, &state));
     co_end;
 
     gchar *member;
-    member = g_strdup_printf("{\"primary\": %s, \"replication\": %s,"
-                             " \"failed\": %s, \"peer-failover\": %s,"
-                             " \"peer-failed\": %s}",
-                            bool_to_json(state.primary),
-                            bool_to_json(state.replication),
-                            bool_to_json(failed || state.failed),
-                            bool_to_json(state.peer_failover),
-                            bool_to_json(state.peer_failed));
+    member = g_strdup_printf("{\"running\": %s,"
+                             " \"primary\": %s, \"replication\": %s,"
+                             " \"failed\": %s,"
+                             " \"peer-failover\": %s, \"peer-failed\": %s}",
+                             bool_to_json(state.running),
+                             bool_to_json(state.primary), bool_to_json(state.replication),
+                             bool_to_json(failed || state.failed),
+                             bool_to_json(state.peer_failover), bool_to_json(state.peer_failed));
 
     result = create_reply(member);
     assert(result);
@@ -864,9 +837,6 @@ static gboolean _colod_client_co(Coroutine *coroutine) {
                 CO result = handle_query_store(client);
             } else if (!strcmp(command, "set-store")) {
                 CO result = handle_set_store(CO request, client);
-            } else if (!strcmp(command, "start")) {
-                co_recurse(start(coroutine, client->parent));
-                CO result = create_reply("{}");
             } else if (!strcmp(command, "promote")) {
                 co_recurse(promote(coroutine, client->parent));
                 CO result = create_reply("{}");

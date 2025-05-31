@@ -51,7 +51,7 @@ HA_LOGFILE = os.getenv("HA_LOGFILE")
 HA_DEBUG = os.getenv("HA_debug", "0")
 HA_DEBUGLOG = os.getenv("HA_DEBUGLOG")
 OCF_RESOURCE_INSTANCE = os.getenv("OCF_RESOURCE_INSTANCE", "default-instance")
-OCF_RESKEY_CRM_meta_timeout = int(os.getenv("OCF_RESKEY_CRM_meta_timeout", "60000"))
+OCF_RESKEY_CRM_meta_timeout = int(os.getenv("OCF_RESKEY_CRM_meta_timeout", "40000"))
 OCF_RESKEY_CRM_meta_interval = int(os.getenv("OCF_RESKEY_CRM_meta_interval", "1"))
 OCF_RESKEY_CRM_meta_clone_max = int(os.getenv("OCF_RESKEY_CRM_meta_clone_max", "1"))
 OCF_RESKEY_CRM_meta_clone_node_max = int(os.getenv("OCF_RESKEY_CRM_meta_clone_node_max", "1"))
@@ -118,6 +118,7 @@ def colod_cmdline():
         "--qemu", OCF_RESKEY_qemu_binary,"--qemu_img", OCF_RESKEY_qemu_img_binary,
         "--timeout_low", OCF_RESKEY_low_yank_timeout,
         "--timeout_high", OCF_RESKEY_high_yank_timeout,
+        "--command_timeout", str(OCF_RESKEY_CRM_meta_timeout - 10*1000),
         "--watchdog_interval", "500", "--listen_address", OCF_RESKEY_listen_address,
         "--active_hidden_dir", OCF_RESKEY_active_hidden_dir,
         "--advanced_config", OCF_RESKEY_advanced_config, "--qemu_options", OCF_RESKEY_options]
@@ -307,7 +308,6 @@ longer than usual.
 Control debugging:
 0: disable debugging
 1: log debug messages and qmp commands
-2: + dump core of hanging qemu
         </longdesc>
         <shortdesc lang="en">Control debugging</shortdesc>
         <content type="integer" default=\"""" + OCF_RESKEY_debug_default + """\"/>
@@ -316,14 +316,14 @@ Control debugging:
     </parameters>
 
     <actions>
-        <action name="start"        timeout="30s" />
-        <action name="stop"         timeout="10s" />
+        <action name="start"        timeout="120s" />
+        <action name="stop"         timeout="120s" />
         <action name="monitor"      timeout="30s" \
             interval="10000ms" depth="0" role="Slave" />
         <action name="monitor"      timeout="30s" \
             interval="10001ms" depth="0" role="Master" />
         <action name="notify"       timeout="30s" />
-        <action name="promote"      timeout="30s" />
+        <action name="promote"      timeout="120s" />
         <action name="demote"       timeout="120s" />
         <action name="meta-data"    timeout="5s" />
         <action name="validate-all" timeout="30s" />
@@ -543,13 +543,14 @@ def qmp_execute(fd, commands, ignore_error = False):
 
     return answer
 
+def get_timeout():
+    return OCF_RESKEY_CRM_meta_timeout/1000 - 5
+
 # Open qemu qmp connection
 def qmp_open():
-    timeout = OCF_RESKEY_CRM_meta_timeout*2/3/1000
-
     try:
         fd = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        fd.settimeout(timeout)
+        fd.settimeout(get_timeout())
         fd.connect(HELPER_SOCK)
     except socket.error as e:
         log.error("while connecting to helper socket: %s" % e)
@@ -599,9 +600,6 @@ def pid_running(pidfile):
     else:
         return True
 
-def check_running_pid():
-    return pid_running(COLOD_PIDFILE)
-
 def new_peer(fd, peer):
     if qmp_query_peer(fd):
         return
@@ -615,7 +613,7 @@ def del_peer(fd):
     qmp_execute(fd, [{"exec-colod": "clear-peer"}])
 
 def qemu_colo_monitor():
-    running = check_running_pid()
+    running = pid_running(COLOD_PIDFILE)
     if not running:
         return OCF_NOT_RUNNING
 
@@ -640,7 +638,7 @@ def qemu_colo_monitor():
         return OCF_SUCCESS
 
 def qemu_colo_start():
-    if check_running_pid():
+    if pid_running(COLOD_PIDFILE):
         log.info("qemu is already running")
         return OCF_SUCCESS
 
@@ -659,7 +657,7 @@ def qemu_colo_start():
 
     fd = qmp_open()
     qmp_update_store(fd, {"pretend-secondary": True})
-    qmp_execute(fd, [ {"exec-colod": "start"} ])
+    qmp_execute(fd, [ {"exec-colod": "demote"} ])
     fd.close()
 
     return OCF_SUCCESS
@@ -694,29 +692,6 @@ def env_find_secondary():
 
     # we found no secondary
     return None
-
-def stop_qemu(failed, shutdown_guest):
-    # stop action must do everything possible to stop the resource
-
-    if not pid_running(COLOD_PIDFILE):
-        log.info("resource is already stopped")
-        return OCF_SUCCESS
-
-    fd = qmp_open()
-    if shutdown_guest and not failed:
-        try:
-            qmp_execute(fd, [{"exec-colod": "shutdown"}])
-        except Error:
-            qmp_execute(fd, [{"exec-colod": "quit"}])
-    else:
-        qmp_execute(fd, [{"exec-colod": "quit"}])
-    fd.close()
-
-    while pid_running(COLOD_PIDFILE):
-        log.debug("Waiting for colod to stop")
-        time.sleep(1)
-
-    return OCF_SUCCESS
 
 def calculate_master_score(status, shutdown_guest):
     primary = status["primary"]
@@ -763,24 +738,52 @@ def calculate_master_score(status, shutdown_guest):
         else:
             raise Error()
 
-def qemu_colo_stop():
+def maybe_shutdown(fd):
     shutdown_guest = env_do_shutdown_guest()
+    status = qmp_query_status(fd)
+
+    if shutdown_guest and not status["failed"]:
+        try:
+            qmp_execute(fd, [{"exec-colod": "shutdown"}])
+        except Error:
+            pass
+
+def qemu_colo_stop():
+    if not pid_running(COLOD_PIDFILE):
+        log.info("resource is already stopped")
+        return OCF_SUCCESS
 
     try:
+        timeout = START_TIME + get_timeout()
+
         fd = qmp_open()
         status = qmp_query_status(fd)
-        failed = status["failed"]
+        maybe_shutdown(fd)
+        qmp_execute(fd, [{"exec-colod": "quit"}])
         fd.close()
+
+        while pid_running(COLOD_PIDFILE):
+            if time.time() >= timeout:
+                raise Error()
+            log.debug("Waiting for colod to stop")
+            time.sleep(1)
+
+        calculate_master_score(status, env_do_shutdown_guest())
+
     except Exception:
-        status = None
-        failed = True
+        log.info("force stopping colod")
 
-    ret = stop_qemu(failed, shutdown_guest)
+        pid = get_pid(COLOD_PIDFILE)
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except Exception:
+            pass
 
-    if status:
-        calculate_master_score(status, shutdown_guest)
+        while pid_running(COLOD_PIDFILE):
+            log.debug("Waiting for colod to stop")
+            time.sleep(1)
 
-    return ret
+    return OCF_SUCCESS
 
 def qemu_colo_notify():
     fd = qmp_open()
@@ -866,6 +869,7 @@ def qemu_colo_promote():
 
 def qemu_colo_demote():
     fd = qmp_open()
+    maybe_shutdown(fd)
     qmp_execute(fd, [{"exec-colod": "demote"}])
     fd.close()
     return OCF_SUCCESS
