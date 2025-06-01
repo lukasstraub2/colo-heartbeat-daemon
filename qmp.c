@@ -191,14 +191,13 @@ static ColodQmpResult *_qmp_read_line_co(Coroutine *coroutine,
     return result;
 }
 
-#define ___qmp_execute_co(...) \
-    co_wrap(__qmp_execute_co(__VA_ARGS__))
-static ColodQmpResult *__qmp_execute_co(Coroutine *coroutine,
-                                        ColodQmpState *state,
-                                        QmpChannel *channel,
-                                        gboolean yank,
-                                        GError **errp,
-                                        const gchar *command) {
+#define qmp_execute_rec_co(...) co_wrap(_qmp_execute_rec_co(__VA_ARGS__))
+static ColodQmpResult *_qmp_execute_rec_co(Coroutine *coroutine,
+                                           ColodQmpState *state,
+                                           QmpChannel *channel,
+                                           gboolean yank,
+                                           GError **errp,
+                                           const gchar *command) {
     ColodQmpResult *result;
     int ret;
     GError *local_errp = NULL;
@@ -239,8 +238,8 @@ ColodQmpResult *_qmp_execute_co(Coroutine *coroutine,
                                 const gchar *command) {
     ColodQmpResult *result;
 
-    result = __qmp_execute_co(coroutine, state, &state->channel, TRUE, errp,
-                              command);
+    result = _qmp_execute_rec_co(coroutine, state, &state->channel, TRUE, errp,
+                                 command);
     if (coroutine->yield) {
         return NULL;
     }
@@ -262,8 +261,8 @@ ColodQmpResult *_qmp_execute_nocheck_co(Coroutine *coroutine,
                                         ColodQmpState *state,
                                         GError **errp,
                                         const gchar *command) {
-    return __qmp_execute_co(coroutine, state, &state->channel, TRUE, errp,
-                            command);
+    return _qmp_execute_rec_co(coroutine, state, &state->channel, TRUE, errp,
+                               command);
 }
 
 static gchar *pick_yank_instances(JsonNode *result,
@@ -307,9 +306,9 @@ int _qmp_yank_co(Coroutine *coroutine, ColodQmpState *state,
     co_frame(co, sizeof(*co));
     co_begin(int, -1);
 
-    co_recurse(result = ___qmp_execute_co(coroutine, state, &state->yank_channel,
-                               FALSE, errp,
-                               "{'exec-oob': 'query-yank', 'id': 'yank0'}\n"));
+    co_recurse(result = qmp_execute_rec_co(coroutine, state, &state->yank_channel,
+                                           FALSE, errp,
+                                           "{'exec-oob': 'query-yank', 'id': 'yank0'}\n"));
     if (!result) {
         return -1;
     }
@@ -327,13 +326,21 @@ int _qmp_yank_co(Coroutine *coroutine, ColodQmpState *state,
     g_free(instances);
     qmp_result_free(result);
 
-    co_recurse(result = ___qmp_execute_co(coroutine, state, &state->yank_channel,
-                                          FALSE, errp, CO command));
+    co_recurse(result = qmp_execute_rec_co(coroutine, state, &state->yank_channel,
+                                           FALSE, errp, CO command));
     if (!result) {
         g_free(CO command);
         return -1;
     }
     if (has_member(result->json_root, "error")) {
+        const char *class = get_member_member_str(result->json_root, "error", "class");
+        if (!strcmp(class, "DeviceNotFound")) {
+            g_free(CO command);
+            qmp_result_free(result);
+            int ret;
+            co_recurse(ret = qmp_yank_co(coroutine, state, errp))
+            return ret;
+        }
         g_set_error(errp, COLOD_ERROR, COLOD_ERROR_FATAL,
                     "qmp yank: %s: %s", CO command, result->line);
         qmp_result_free(result);
@@ -388,9 +395,9 @@ static gboolean _qmp_handshake_readable_co(Coroutine *coroutine) {
     colod_trace("%s", result->line);
     qmp_result_free(result);
 
-    co_recurse(result = ___qmp_execute_co(coroutine, qmp, qmpco->channel, FALSE, NULL,
-                                          "{'execute': 'qmp_capabilities', "
-                                          "'arguments': {'enable': ['oob']}}\n"));
+    co_recurse(result = qmp_execute_rec_co(coroutine, qmp, qmpco->channel, FALSE, NULL,
+                                           "{'execute': 'qmp_capabilities', "
+                                           "'arguments': {'enable': ['oob']}}\n"));
     colod_unlock_co(qmpco->channel->lock);
     if (!result) {
         return G_SOURCE_REMOVE;
