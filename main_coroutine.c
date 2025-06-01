@@ -409,7 +409,7 @@ static ColodQmpResult *__colod_execute_co(Coroutine *coroutine, gpointer data,
     co_end;
 }
 
-static gboolean qemu_runnng(const gchar *status) {
+static gboolean qemu_running(const gchar *status) {
     return !strcmp(status, "running")
             || !strcmp(status, "finish-migrate")
             || !strcmp(status, "colo")
@@ -461,18 +461,20 @@ static QmpEctx *_qemu_query_status_co(Coroutine *coroutine, ColodMainCoroutine *
         return NULL;
     }
 
-    if (!strcmp(status, "inmigrate") || !strcmp(status, "shutdown")) {
+    if ((!strcmp(status, "inmigrate") || !strcmp(status, "shutdown"))
+            && !strcmp(colo_mode, "none")) {
         *primary = FALSE;
         *replication = FALSE;
-    } else if (qemu_runnng(status) && !strcmp(colo_mode, "none")
+    } else if (qemu_running(status) && !strcmp(colo_mode, "none")
                && (!strcmp(colo_reason, "none")
                    || !strcmp(colo_reason, "request"))) {
         *primary = TRUE;
         *replication = FALSE;
-    } else if (qemu_runnng(status) &&!strcmp(colo_mode, "primary")) {
+    } else if (qemu_running(status) && !strcmp(colo_mode, "primary")) {
         *primary = TRUE;
         *replication = TRUE;
-    } else if (qemu_runnng(status) && !strcmp(colo_mode, "secondary")) {
+    } else if ((!strcmp(status, "inmigrate") || qemu_running(status))
+               && !strcmp(colo_mode, "secondary")) {
         *primary = FALSE;
         *replication = TRUE;
     } else if (this->state == STATE_SHUTDOWN
@@ -494,8 +496,7 @@ static QmpEctx *_qemu_query_status_co(Coroutine *coroutine, ColodMainCoroutine *
     return CO ectx;
 }
 
-#define colod_check_health_co(...) \
-    co_wrap(_colod_check_health_co(__VA_ARGS__))
+#define colod_check_health_co(...) co_wrap(_colod_check_health_co(__VA_ARGS__))
 static int _colod_check_health_co(Coroutine *coroutine, ColodMainCoroutine *this,
                                   GError **errp) {
     gboolean primary;
@@ -503,11 +504,9 @@ static int _colod_check_health_co(Coroutine *coroutine, ColodMainCoroutine *this
     QmpEctx *ret;
     GError *local_errp = NULL;
 
-    ret = _qemu_query_status_co(coroutine, this, &primary, &replication,
-                                &local_errp);
-    if (coroutine->yield) {
-        return -1;
-    }
+    co_begin(int, -1);
+
+    co_recurse(ret = qemu_query_status_co(coroutine, this, &primary, &replication, &local_errp));
     if (!ret) {
         colod_event_queue(this, EVENT_FAILED, local_errp->message);
         g_propagate_error(errp, local_errp);
@@ -533,6 +532,7 @@ static int _colod_check_health_co(Coroutine *coroutine, ColodMainCoroutine *this
     }
 
     return 0;
+    co_end;
 }
 
 static int __colod_check_health_co(Coroutine *coroutine, gpointer data,
