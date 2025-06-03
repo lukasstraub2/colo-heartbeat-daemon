@@ -17,6 +17,7 @@ typedef enum ColodEvent ColodEvent;
 enum ColodEvent {
     EVENT_FAILED = 1,
     EVENT_QUIT,
+    EVENT_GUEST_SHUTDOWN,
 
     EVENT_FAILOVER_SYNC,
 
@@ -24,7 +25,6 @@ enum ColodEvent {
     EVENT_KICK,
     EVENT_START_MIGRATION,
     EVENT_SHUTDOWN,
-    EVENT_GUEST_SHUTDOWN,
     EVENT_MAX
 };
 
