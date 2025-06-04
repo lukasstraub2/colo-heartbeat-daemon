@@ -29,8 +29,10 @@
 
 typedef enum MainState {
     STATE_SECONDARY_WAIT,
+    STATE_PRIMARY_STARTUP,
     STATE_PRIMARY_WAIT,
     STATE_PRIMARY_RESYNC,
+    STATE_PRIMARY_CONT_REPL,
     STATE_PRIMARY_START_MIGRATION,
     STATE_COLO_RUNNING,
     STATE_FAILOVER_SYNC,
@@ -41,6 +43,11 @@ typedef enum MainState {
     STATE_QUIT,
     STATE_RETURN_NONE
 } MainState;
+
+struct ColodMainCache {
+    gboolean valid;
+    MainState new_state;
+};
 
 struct ColodMainCoroutine {
     Coroutine coroutine;
@@ -70,6 +77,8 @@ struct ColodMainCoroutine {
 
     MainReturn command;
     Coroutine *command_wake;
+
+    ColodMainCache cache;
 };
 
 #define colod_trace_source(data) \
@@ -432,8 +441,10 @@ static gboolean qemu_running(const gchar *status) {
 static gboolean ignore_state(MainState state) {
     switch (state) {
         case STATE_SECONDARY_WAIT: return FALSE;
+        case STATE_PRIMARY_STARTUP: return TRUE;
         case STATE_PRIMARY_WAIT: return FALSE;
         case STATE_PRIMARY_RESYNC: return FALSE;
+        case STATE_PRIMARY_CONT_REPL: return FALSE;
         case STATE_PRIMARY_START_MIGRATION: return FALSE;
         case STATE_COLO_RUNNING: return FALSE;
         case STATE_FAILOVER_SYNC: return FALSE;
@@ -916,6 +927,7 @@ handle_event:
         if (event_failover(event)) {
             return handle_event_failover(event);
         } else if (event_always_interrupting(event)) {
+            this->cache.new_state = STATE_PRIMARY_CONT_REPL;
             return handle_always_interrupting(this, event);
         } else if (event_command(event)) {
             return handle_event_command(event);
@@ -1067,6 +1079,7 @@ handle_event:
     if (event_failover(event)) {
         goto failover;
     } else {
+        this->cache.new_state = STATE_PRIMARY_RESYNC;
         return handle_always_interrupting(this, event);
     }
 
@@ -1104,6 +1117,94 @@ failover:
 
     CO commands = qmp_commands_adhoc(qmpcommands, "dummy address",
                                      "{'execute': 'block-job-dismiss', 'arguments': {'id': 'resync'}}",
+                                     "{'execute': 'x-blockdev-change', 'arguments': {'parent': 'quorum0', 'child': 'children.1'}}",
+                                     "{'execute': 'blockdev-del', 'arguments': {'node-name': 'nbd0'}}",
+                                     "{'execute': 'cont'}",
+                                     NULL);
+    co_recurse(qmp_ectx_array(coroutine, CO ectx, CO commands));
+    my_array_unref(CO commands);
+
+    if (qmp_ectx_failed(CO ectx)) {
+        qmp_ectx_log_error(CO ectx);
+        qmp_ectx_unref(CO ectx, NULL);
+        return STATE_FAILED;
+    }
+    qmp_ectx_unref(CO ectx, NULL);
+
+    peer_manager_clear_peer(this->ctx->peer);
+
+    return STATE_PRIMARY_WAIT;
+    co_end;
+}
+
+#define colod_primary_cont_repl(...) co_wrap(_colod_primary_cont_repl(__VA_ARGS__))
+static MainState _colod_primary_cont_repl(Coroutine *coroutine, ColodMainCoroutine *this) {
+    struct {
+        MyArray *commands;
+        QmpEctx *ectx;
+    } *co;
+    QmpCommands *qmpcommands = this->ctx->commands;
+
+    co_frame(co, sizeof(*co));
+    co_begin(MainState, STATE_FAILED);
+
+    if (!strlen(peer_manager_get_peer(this->ctx->peer))) {
+        return STATE_PRIMARY_WAIT;
+    }
+
+    CO ectx = qmp_ectx_new(this->qmp);
+    qmp_ectx_set_interrupt_cb(CO ectx, eventqueue_interrupt, this);
+    eventqueue_set_interrupting(this->queue, EVENT_FAILOVER_SYNC, 0);
+
+    CO commands = qmp_commands_adhoc(qmpcommands, peer_manager_get_peer(this->ctx->peer),
+                                     "{'execute': 'blockdev-add', 'arguments': {'driver': 'nbd', 'node-name': 'nbd0', 'server': {'type': 'inet', 'host': '@@ADDRESS@@', 'port': '@@NBD_PORT@@'}, 'export': 'parent0', 'detect-zeroes': 'on'}}",
+                                     "{'execute': 'x-blockdev-change', 'arguments': {'parent': 'quorum0', 'node': 'nbd0'}}",
+                                     NULL);
+    co_recurse(qmp_ectx_array(coroutine, CO ectx, CO commands));
+    my_array_unref(CO commands);
+
+    if (qmp_ectx_failed(CO ectx)) {
+        goto ectx_failed;
+    }
+
+    return STATE_PRIMARY_START_MIGRATION;
+
+ectx_failed:
+    if (qmp_ectx_did_interrupt(CO ectx)) {
+        qmp_ectx_unref(CO ectx, NULL);
+
+        goto handle_event;
+    } else if (qmp_ectx_did_yank(CO ectx) || qmp_ectx_did_qmp_error(CO ectx)) {
+        qmp_ectx_unref(CO ectx, NULL);
+
+        goto failover;
+    } else {
+        assert(qmp_ectx_did_error(CO ectx));
+        qmp_ectx_log_error(CO ectx);
+        qmp_ectx_unref(CO ectx, NULL);
+        return STATE_FAILED;
+    }
+
+handle_event:
+    assert(eventqueue_pending_interrupt(this->queue));
+    ColodEvent event;
+    co_recurse(event = colod_event_wait(coroutine, this));
+    if (event_failover(event)) {
+        goto failover;
+    } else {
+        this->cache.new_state = STATE_PRIMARY_CONT_REPL;
+        return handle_always_interrupting(this, event);
+    }
+
+failover:
+    CO ectx = qmp_ectx_new(this->qmp);
+    qmp_ectx_set_ignore_yank(CO ectx);
+    qmp_ectx_set_ignore_qmp_error(CO ectx);
+    eventqueue_set_interrupting(this->queue, 0);
+
+    co_recurse(qmp_ectx_yank(coroutine, CO ectx));
+
+    CO commands = qmp_commands_adhoc(qmpcommands, "dummy address",
                                      "{'execute': 'x-blockdev-change', 'arguments': {'parent': 'quorum0', 'child': 'children.1'}}",
                                      "{'execute': 'blockdev-del', 'arguments': {'node-name': 'nbd0'}}",
                                      "{'execute': 'cont'}",
@@ -1256,6 +1357,7 @@ handle_event:
     if (event_failover(event)) {
         goto failover;
     } else {
+        this->cache.new_state = STATE_PRIMARY_CONT_REPL;
         return handle_always_interrupting(this, event);
     }
 
@@ -1381,24 +1483,40 @@ static int _colod_guest_shutdown_co(Coroutine *coroutine, ColodMainCoroutine *th
 #define colod_guest_reboot_co(...) co_wrap(_colod_guest_reboot_co(__VA_ARGS__))
 static int _colod_guest_reboot_co(Coroutine *coroutine, ColodMainCoroutine *this) {
     co_begin(int, -1);
+    GError *local_errp = NULL;
+    ColodQmpResult *result;
 
     eventqueue_set_interrupting(this->queue, 0);
 
     if (this->primary) {
+        colod_cpg_send(this->ctx->cpg, MESSAGE_SHUTDOWN_DONE);
         if (strlen(peer_manager_get_peer(this->ctx->peer))
                 && !peer_manager_failed(this->ctx->peer)) {
             co_recurse(wait_while_timeout(coroutine, !this->peer_reboot_restart, this->ctx->command_timeout - 10*1000));
+            co_recurse(wait_while_timeout(coroutine, TRUE, 5*1000));
         }
     } else {
-        co_recurse(wait_while_timeout(coroutine, !this->guest_shutdown, this->ctx->command_timeout - 10*1000));
+        if (this->replication) {
+            co_recurse(wait_while_timeout(coroutine, !this->guest_shutdown, this->ctx->command_timeout - 10*1000));
+        }
+        co_recurse(result = qmp_execute_co(coroutine, this->qmp, NULL,
+                                           "{'execute': 'yank', 'arguments': {"
+                                           " 'instances': [{ 'type': 'migration' }]}}\n"));
+        qmp_result_free(result);
+        co_recurse(result = qmp_execute_co(coroutine, this->qmp, NULL,
+                                           "{'execute': 'stop'}\n"));
+        qmp_result_free(result);
+        co_recurse(wait_while_timeout(coroutine, !this->peer_shutdown_done, this->ctx->command_timeout - 10*1000));
     }
 
     if (peer_manager_failover(this->ctx->peer)) {
         return -1;
     }
 
-    if (this->primary) {
-        co_recurse(wait_while_timeout(coroutine, TRUE, 5*1000));
+    if (this->primary
+            && (this->cache.new_state == STATE_PRIMARY_RESYNC
+             || this->cache.new_state == STATE_PRIMARY_CONT_REPL)) {
+        this->cache.valid = TRUE;
     }
 
     colod_cpg_send(this->ctx->cpg, MESSAGE_REBOOT_RESTART);
@@ -1408,6 +1526,7 @@ static int _colod_guest_reboot_co(Coroutine *coroutine, ColodMainCoroutine *this
 
 static MainReturn handle_pending_command(ColodMainCoroutine *this, MainReturn ret) {
     if (this->command_wake) {
+        this->cache.valid = FALSE;
         g_idle_add(this->command_wake->cb, this->command_wake);
         return this->command;
     }
@@ -1447,17 +1566,20 @@ static MainReturn _colod_main_co(Coroutine *coroutine, ColodMainCoroutine *this)
     co_begin(gboolean, G_SOURCE_CONTINUE);
 
     if (this->primary) {
-        if (strlen(peer_manager_get_peer(this->ctx->peer)) && !peer_manager_failed(this->ctx->peer)) {
-            colod_syslog(LOG_INFO, "starting in primary mode with resync");
-            new_state = STATE_PRIMARY_RESYNC;
+        if (this->cache.valid
+                && strlen(peer_manager_get_peer(this->ctx->peer))
+                && !peer_manager_failed(this->ctx->peer)) {
+            colod_syslog(LOG_INFO, "starting in primary mode and continuing replication");
+            new_state = this->cache.new_state;
         } else {
             colod_syslog(LOG_INFO, "starting in primary mode");
-            new_state = STATE_PRIMARY_WAIT;
+            new_state = STATE_PRIMARY_STARTUP;
         }
     } else {
         colod_syslog(LOG_INFO, "starting in secondary mode");
         new_state = STATE_SECONDARY_WAIT;
     }
+    memset(&this->cache, 0, sizeof(this->cache));
 
     colod_cpg_send(this->ctx->cpg, MESSAGE_HELLO);
 
@@ -1466,6 +1588,20 @@ static MainReturn _colod_main_co(Coroutine *coroutine, ColodMainCoroutine *this)
         this->state = new_state;
         if (this->state == STATE_SECONDARY_WAIT) {
             co_recurse(new_state = colod_secondary_wait_co(coroutine, this));
+        } else if (this->state == STATE_PRIMARY_STARTUP) {
+            ColodQmpResult *result;
+            GError *local_errp = NULL;
+            co_recurse(result = qmp_execute_co(coroutine, this->qmp, &local_errp,
+                                               "{'execute': 'cont'}\n"));
+            if (!result) {
+                log_error(local_errp->message);
+                g_error_free(local_errp);
+                new_state = STATE_FAILED;
+                continue;
+            }
+            qmp_result_free(result);
+
+            new_state = STATE_PRIMARY_WAIT;
         } else if (this->state == STATE_PRIMARY_WAIT) {
             // Now running primary standalone
             this->primary = TRUE;
@@ -1475,6 +1611,8 @@ static MainReturn _colod_main_co(Coroutine *coroutine, ColodMainCoroutine *this)
         } else if (this->state == STATE_PRIMARY_RESYNC) {
             wake_command(this, MAIN_NONE);
             co_recurse(new_state = colod_primary_start_resync(coroutine, this));
+        } else if (this->state == STATE_PRIMARY_CONT_REPL) {
+            co_recurse(new_state = colod_primary_cont_repl(coroutine, this));
         } else if (this->state == STATE_PRIMARY_START_MIGRATION) {
             co_recurse(new_state = colod_primary_start_migration_co(coroutine,
                                                                       this));
@@ -1655,7 +1793,8 @@ static void colod_cpg_event_cb(gpointer data, ColodMessage message,
 
     if (message == MESSAGE_SHUTDOWN_REQUEST) {
         if (this->state == STATE_PRIMARY_RESYNC
-                || this->state == STATE_PRIMARY_START_MIGRATION) {
+                || this->state == STATE_PRIMARY_START_MIGRATION
+                || this->state == STATE_PRIMARY_CONT_REPL) {
             colod_event_queue(this, EVENT_FAILOVER_SYNC, "Failover before shutdown");
         }
         colod_event_queue(this, EVENT_SHUTDOWN, "cpg shutdown request");
@@ -1730,8 +1869,19 @@ MainReturn _colod_main_enter(Coroutine *coroutine, ColodMainCoroutine *this) {
     return this->main_return;
 }
 
+ColodMainCache *colod_main_get_cache(ColodMainCoroutine *this) {
+    if (!this->cache.valid) {
+        return NULL;
+    }
+
+    ColodMainCache *ret = g_new0(ColodMainCache, 1);
+    *ret = this->cache;
+    return ret;
+}
+
 ColodMainCoroutine *colod_main_new(const ColodContext *ctx, QemuLauncher *launcher,
-                                   ColodQmpState *qmp, gboolean primary, GError **errp) {
+                                   ColodQmpState *qmp, gboolean primary,
+                                   ColodMainCache *cache, GError **errp) {
     ColodMainCoroutine *this;
     Coroutine *coroutine;
 
@@ -1751,6 +1901,10 @@ ColodMainCoroutine *colod_main_new(const ColodContext *ctx, QemuLauncher *launch
     this->queue = colod_eventqueue_new();
 
     this->primary = primary;
+    if (cache) {
+        this->cache = *cache;
+        g_free(cache);
+    }
     qmp_add_notify_event(this->qmp, colod_qmp_event_cb, this);
     qmp_add_notify_hup(this->qmp, colod_hup_cb, this);
 

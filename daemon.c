@@ -145,6 +145,7 @@ static gboolean _daemon_co(Coroutine *coroutine, DaemonCoroutine *this) {
         QemuLauncher *launcher;
         ColodMainCoroutine *mainco;
         MainReturn command;
+        ColodMainCache *cache;
     } *co;
     const ColodContext *ctx = this->ctx;
     co_frame(co, sizeof(*co));
@@ -152,6 +153,7 @@ static gboolean _daemon_co(Coroutine *coroutine, DaemonCoroutine *this) {
 
     CO local_errp = NULL;
     CO command = MAIN_NONE;
+    CO cache = NULL;
 
     while (TRUE) {
         if (CO command == MAIN_NONE) {
@@ -188,7 +190,8 @@ static gboolean _daemon_co(Coroutine *coroutine, DaemonCoroutine *this) {
             }
 
             gboolean primary = (CO command == MAIN_PROMOTE);
-            CO mainco = colod_main_new(ctx, CO launcher, qmp, primary, &CO local_errp);
+            CO mainco = colod_main_new(ctx, CO launcher, qmp, primary,
+                                       CO cache, &CO local_errp);
             qmp_unref(qmp);
             qemu_launcher_unref(CO launcher);
             if (!CO mainco) {
@@ -204,6 +207,7 @@ static gboolean _daemon_co(Coroutine *coroutine, DaemonCoroutine *this) {
 
             co_recurse(CO command = colod_main_enter(coroutine, CO mainco));
             colod_main_query_status(CO mainco, &this->last_state);
+            CO cache = colod_main_get_cache(CO mainco);
 
             colod_main_unref(CO mainco);
         } else if (CO command == MAIN_QUIT) {

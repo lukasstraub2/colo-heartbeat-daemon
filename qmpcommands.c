@@ -619,6 +619,7 @@ QmpCommands *qmp_commands_new(const char *instance_name, const char *base_dir,
         "-qmp", "unix:@@QMP_SOCK@@,server=on,wait=off",
         "-qmp", "unix:@@QMP_YANK_SOCK@@,server=on,wait=off",
         "-object", "throttle-group,id=throttle0",
+        "-S",
         NULL);
 
     this->qemu_secondary = qmp_commands_static(0,
@@ -712,6 +713,7 @@ QmpCommands *qmp_commands_new(const char *instance_name, const char *base_dir,
         "{'execute': 'chardev-remove', 'arguments': {'id': 'comp_pri_in0'}}",
         "{'execute': 'chardev-remove', 'arguments': {'id': 'comp_out0..'}}",
         "{'execute': 'chardev-remove', 'arguments': {'id': 'comp_out0'}}",
+        "{'execute': 'cont'}",
         NULL);
 
     this->failover_secondary = qmp_commands_static(0,
@@ -724,6 +726,7 @@ QmpCommands *qmp_commands_new(const char *instance_name, const char *base_dir,
         "{'execute': 'object-del', 'arguments': {'id': 'comp_sec_in0'}}",
         "{'execute': 'chardev-remove', 'arguments': {'id': 'mirror0'}}",
         "{'execute': 'chardev-remove', 'arguments': {'id': 'comp_sec_in0'}}",
+        "{'execute': 'cont'}",
         NULL);
 
     this->yank_instances = json_from_string(
