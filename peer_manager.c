@@ -89,6 +89,14 @@ void peer_manager_clear_failed(PeerManager *this) {
     this->peer.failed = FALSE;
 }
 
+void peer_manager_clear_failover(PeerManager *this) {
+    this->peer.shutdown = FALSE;
+}
+
+void peer_manager_clear_shutdown(PeerManager *this) {
+    this->peer.shutdown = FALSE;
+}
+
 void peer_manager_set_peer(PeerManager *this, const gchar *peer) {
     g_free(this->peer_name);
     this->peer_name = g_strdup(peer);

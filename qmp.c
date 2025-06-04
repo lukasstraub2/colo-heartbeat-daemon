@@ -383,23 +383,27 @@ static gboolean _qmp_handshake_readable_co(Coroutine *coroutine) {
     QmpCoroutine *qmpco = (QmpCoroutine *) coroutine;
     ColodQmpState *qmp = qmpco->state;
     ColodQmpResult *result;
+    GError *local_errp = NULL;
 
     co_begin(gboolean, G_SOURCE_CONTINUE);
 
     co_recurse(result = qmp_read_line_co(coroutine, qmp, qmpco->channel,
-                                         FALSE, TRUE, NULL));
+                                         FALSE, TRUE, &local_errp));
     if (!result) {
+        log_error(local_errp->message);
+        g_error_free(local_errp);
         colod_unlock_co(qmpco->channel->lock);
         return G_SOURCE_REMOVE;
     }
-    colod_trace("%s", result->line);
     qmp_result_free(result);
 
-    co_recurse(result = qmp_execute_rec_co(coroutine, qmp, qmpco->channel, FALSE, NULL,
+    co_recurse(result = qmp_execute_rec_co(coroutine, qmp, qmpco->channel, FALSE, &local_errp,
                                            "{'execute': 'qmp_capabilities', "
                                            "'arguments': {'enable': ['oob']}}\n"));
     colod_unlock_co(qmpco->channel->lock);
     if (!result) {
+        log_error(local_errp->message);
+        g_error_free(local_errp);
         return G_SOURCE_REMOVE;
     }
     if (has_member(result->json_root, "error")) {
@@ -526,6 +530,7 @@ static gboolean _qmp_event_co(Coroutine *coroutine) {
     QmpCoroutine *qmpco = (QmpCoroutine *) coroutine;
     QmpChannel *channel = qmpco->channel;
     ColodQmpResult *result;
+    GError *local_errp = NULL;
 
     co_begin(gboolean, G_SOURCE_CONTINUE);
 
@@ -541,9 +546,11 @@ static gboolean _qmp_event_co(Coroutine *coroutine) {
         colod_lock_co(channel->lock);
 
         co_recurse(result = qmp_read_line_co(coroutine, qmpco->state, channel,
-                                             FALSE, FALSE, NULL));
+                                             FALSE, FALSE, &local_errp));
         colod_unlock_co(channel->lock);
         if (!result) {
+            log_error(local_errp->message);
+            g_error_free(local_errp);
             return G_SOURCE_REMOVE;
         }
         if (!has_member(result->json_root, "event")) {
@@ -568,6 +575,7 @@ static gboolean qmp_hup_cb(G_GNUC_UNUSED GIOChannel *channel,
                            gpointer data) {
     ColodQmpState *state = data;
 
+    log_error("qemu quit");
     notify_hup(state);
 
     state->hup_source_id = 0;

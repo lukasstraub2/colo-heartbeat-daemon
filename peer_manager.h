@@ -10,6 +10,8 @@ void peer_manager_del_notify(PeerManager *this, PeerManagerCb _func, gpointer da
 
 void peer_manager_set_failed(PeerManager *this);
 void peer_manager_clear_failed(PeerManager *this);
+void peer_manager_clear_failover(PeerManager *this);
+void peer_manager_clear_shutdown(PeerManager *this);
 void peer_manager_set_peer(PeerManager *this, const gchar *peer);
 void peer_manager_clear_peer(PeerManager *this);
 const char *peer_manager_get_peer(PeerManager *this);

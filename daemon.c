@@ -181,6 +181,7 @@ static gboolean _daemon_co(Coroutine *coroutine, DaemonCoroutine *this) {
                 CO local_errp = NULL;
                 this->last_state.failed = TRUE;
 
+                CO command = MAIN_NONE;
                 qemu_launcher_unref(CO launcher);
 
                 continue;
@@ -195,6 +196,8 @@ static gboolean _daemon_co(Coroutine *coroutine, DaemonCoroutine *this) {
                 g_error_free(CO local_errp);
                 CO local_errp = NULL;
                 this->last_state.failed = TRUE;
+
+                CO command = MAIN_NONE;
 
                 continue;
             }

@@ -513,12 +513,7 @@ static MyTimeout *request_timeout(ColodQmpResult *request) {
 static ColodQmpResult * _handle_start_migration(Coroutine *coroutine, ColodClientListener *this) {
     co_begin(ColodQmpResult *, NULL);
 
-    int ret;
-    co_recurse(ret = start_migration(coroutine, this));
-
-    if (ret < 0) {
-        return create_error_reply("Pending actions");
-    }
+    co_recurse(start_migration(coroutine, this));
 
     return create_reply("{}");
 

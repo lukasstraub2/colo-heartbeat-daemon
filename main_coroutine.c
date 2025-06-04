@@ -319,21 +319,33 @@ static int _wait_while_timeout(Coroutine *coroutine, gboolean expr, guint timeou
     co_begin(int, -1);
 
     CO timeout_source_id = g_timeout_add(timeout, coroutine->cb, coroutine);
-    while (expr) {
-        CO progress_source_id = progress_source_add(coroutine->cb, coroutine);
+    g_source_set_name_by_id(CO timeout_source_id, "wait_while timeout");
+    CO progress_source_id = progress_source_add(coroutine->cb, coroutine);
+    g_source_set_name_by_id(CO progress_source_id, "wait_while progress");
+
+    while (TRUE) {
         co_yield_int(G_SOURCE_REMOVE);
 
         guint source_id = g_source_get_id(g_main_current_source());
         if (source_id == CO timeout_source_id) {
             g_source_remove(CO progress_source_id);
-            return 0;
+            if (expr) {
+                return -1;
+            } else {
+                return 0;
+            }
         } else if (source_id == CO progress_source_id) {
-
+            if (expr) {
+                CO progress_source_id = progress_source_add(coroutine->cb, coroutine);
+                g_source_set_name_by_id(CO progress_source_id, "wait_while progress");
+            } else {
+                g_source_remove(CO timeout_source_id);
+                return 0;
+            }
+        } else {
+            colod_trace("%s:%u: Got woken by unknown source\n", __func__, __LINE__);
         }
     }
-    g_source_remove(CO timeout_source_id);
-
-    return 0;
     co_end;
 }
 
@@ -417,6 +429,24 @@ static gboolean qemu_running(const gchar *status) {
             || !strcmp(status, "paused");
 }
 
+static gboolean ignore_state(MainState state) {
+    switch (state) {
+        case STATE_SECONDARY_WAIT: return FALSE;
+        case STATE_PRIMARY_WAIT: return FALSE;
+        case STATE_PRIMARY_RESYNC: return FALSE;
+        case STATE_PRIMARY_START_MIGRATION: return FALSE;
+        case STATE_COLO_RUNNING: return FALSE;
+        case STATE_FAILOVER_SYNC: return FALSE;
+        case STATE_SHUTDOWN: return TRUE;
+        case STATE_GUEST_SHUTDOWN: return TRUE;
+        case STATE_GUEST_REBOOT: return TRUE;
+        case STATE_FAILED: return TRUE;
+        case STATE_QUIT: return TRUE;
+        case STATE_RETURN_NONE: return TRUE;
+    }
+    abort();
+}
+
 #define qemu_query_status_co(...) \
     co_wrap(_qemu_query_status_co(__VA_ARGS__))
 static QmpEctx *_qemu_query_status_co(Coroutine *coroutine, ColodMainCoroutine *this,
@@ -433,8 +463,22 @@ static QmpEctx *_qemu_query_status_co(Coroutine *coroutine, ColodMainCoroutine *
     CO ectx = qmp_ectx_new(this->qmp);
     qmp_ectx_set_ignore_yank(CO ectx);
 
+    if (ignore_state(this->state)) {
+        *primary = this->primary;
+        *replication = this->replication;
+        return qmp_ectx_new(this->qmp);
+    }
+
     co_recurse(CO qemu_status = qmp_ectx(coroutine, CO ectx, "{'execute': 'query-status'}\n"));
     co_recurse(CO colo_status = qmp_ectx(coroutine, CO ectx, "{'execute': 'query-colo-status'}\n"));
+
+    if (ignore_state(this->state)) {
+        qmp_ectx_failed(CO ectx);
+        qmp_ectx_unref(CO ectx, NULL);
+        *primary = this->primary;
+        *replication = this->replication;
+        return qmp_ectx_new(this->qmp);
+    }
 
     if (qmp_ectx_failed(CO ectx)) {
         qmp_result_free(CO qemu_status);
@@ -477,11 +521,6 @@ static QmpEctx *_qemu_query_status_co(Coroutine *coroutine, ColodMainCoroutine *
                && !strcmp(colo_mode, "secondary")) {
         *primary = FALSE;
         *replication = TRUE;
-    } else if (this->state == STATE_SHUTDOWN
-               || this->state == STATE_GUEST_SHUTDOWN
-               || this->state == STATE_GUEST_REBOOT) {
-        *primary = this->primary;
-        *replication = this->replication;
     } else {
         colod_error_set(errp, "Unknown qemu status: %s, %s",
                         CO qemu_status->line, CO colo_status->line);
@@ -584,8 +623,9 @@ static int __colod_start_migration(Coroutine *coroutine, gpointer data) {
 
     co_begin(int, -1);
 
-    if (this->state != STATE_PRIMARY_WAIT) {
-        return -1;
+    while (this->state != STATE_PRIMARY_WAIT) {
+        progress_source_add(coroutine->cb, coroutine);
+        co_yield_int(G_SOURCE_REMOVE);
     }
 
     co_recurse(deliver_command(coroutine, this, EVENT_START_MIGRATION, MAIN_NONE, NULL));
@@ -747,16 +787,18 @@ static MainState _colod_secondary_wait_co(Coroutine *coroutine,
      */
     eventqueue_set_interrupting(this->queue, EVENT_FAILOVER_SYNC,
                                 EVENT_FAILOVER_WIN, EVENT_KICK,
-                                EVENT_SHUTDOWN, EVENT_GUEST_SHUTDOWN, 0);
+                                EVENT_SHUTDOWN, 0);
 
     while (TRUE) {
         co_recurse(ret = colod_qmp_event_wait_co(coroutine, this, 0,
-                                        "{'event': 'RESUME'}", &local_errp));
+                                                 "{'event': 'MIGRATION', 'data': {'status': 'active'}}",
+                                                 &local_errp));
 
         if (ret < 0) {
             // Interrupted
             ColodEvent event;
             g_error_free(local_errp);
+            local_errp = NULL;
             assert(eventqueue_pending(this->queue));
             co_recurse(event = colod_event_wait(coroutine, this));
 
@@ -773,13 +815,44 @@ static MainState _colod_secondary_wait_co(Coroutine *coroutine,
 
         break;
     }
-    co_end;
+
+    eventqueue_set_interrupting(this->queue, EVENT_SHUTDOWN, 0);
+    this->transitioning = TRUE;
+
+    co_recurse(ret = colod_qmp_event_wait_co(coroutine, this, 5*60*1000,
+                                             "{'event': 'RESUME'}",
+                                             &local_errp));
+    if (ret < 0) {
+        if (g_error_matches(local_errp, COLOD_ERROR, COLOD_ERROR_INTERRUPT)) {
+            g_error_free(local_errp);
+            local_errp = NULL;
+
+            ColodEvent event;
+            co_recurse(event = colod_event_wait(coroutine, this));
+            if (event_always_interrupting(event)) {
+                return handle_always_interrupting(this, event);
+            } else if (event == EVENT_SHUTDOWN) {
+                eventqueue_set_interrupting(this->queue, EVENT_FAILOVER_SYNC, 0);
+
+                co_recurse(wait_while_timeout(coroutine, !this->peer_shutdown_done, this->ctx->command_timeout - 10*1000));
+                return STATE_RETURN_NONE;
+            } else {
+                abort();
+            }
+        } else if (g_error_matches(local_errp, COLOD_ERROR, COLOD_ERROR_TIMEOUT)) {
+            g_error_free(local_errp);
+            local_errp = NULL;
+            return STATE_FAILED;
+        }
+    }
 
     peer_manager_clear_failed(this->ctx->peer);
+    peer_manager_clear_failover(this->ctx->peer);
     colod_raise_timeout_coroutine(&this->raise_timeout_coroutine, this->qmp,
                                   this->ctx);
 
     return STATE_COLO_RUNNING;
+    co_end;
 }
 
 #define colod_colo_running_co(...) \
@@ -829,7 +902,8 @@ static MainState _colod_colo_running_co(Coroutine *coroutine,
             goto handle_event;
         }
 
-        if (this->yellow && !peer_manager_yellow(peer)) {
+        if (this->yellow && strlen(peer_manager_get_peer(peer))
+                && !peer_manager_yellow(peer)) {
             return STATE_FAILED;
         }
     }
@@ -847,7 +921,9 @@ handle_event:
             return handle_event_command(event);
         }
 
-        if (this->primary && this->yellow && !peer_manager_yellow(peer)) {
+        if (this->primary && this->yellow
+                && strlen(peer_manager_get_peer(peer))
+                && !peer_manager_yellow(peer)) {
             return STATE_FAILED;
         }
     }
@@ -878,8 +954,7 @@ static gboolean eventqueue_interrupt(gpointer data) {
     return eventqueue_pending_interrupt(this->queue);
 }
 
-#define colod_primary_start_resync(...) \
-    co_wrap(_colod_primary_start_resync(__VA_ARGS__))
+#define colod_primary_start_resync(...) co_wrap(_colod_primary_start_resync(__VA_ARGS__))
 static MainState _colod_primary_start_resync(Coroutine *coroutine, ColodMainCoroutine *this) {
     struct {
         MyArray *commands;
@@ -1268,6 +1343,7 @@ stop:
 static int _colod_guest_shutdown_co(Coroutine *coroutine, ColodMainCoroutine *this) {
     co_begin(int, -1);
     GError *local_errp = NULL;
+    ColodQmpResult *result;
 
     eventqueue_set_interrupting(this->queue, 0);
 
@@ -1280,7 +1356,16 @@ static int _colod_guest_shutdown_co(Coroutine *coroutine, ColodMainCoroutine *th
             return -1;
         }
     } else {
-        co_recurse(wait_while_timeout(coroutine, !this->guest_shutdown, this->ctx->command_timeout - 10*1000));
+        if (this->replication) {
+            co_recurse(wait_while_timeout(coroutine, !this->guest_shutdown, this->ctx->command_timeout - 10*1000));
+        }
+        co_recurse(result = qmp_execute_co(coroutine, this->qmp, NULL,
+                                           "{'execute': 'yank', 'arguments': {"
+                                           " 'instances': [{ 'type': 'migration' }]}}\n"));
+        qmp_result_free(result);
+        co_recurse(result = qmp_execute_co(coroutine, this->qmp, NULL,
+                                           "{'execute': 'stop'}\n"));
+        qmp_result_free(result);
         co_recurse(wait_while_timeout(coroutine, !this->peer_shutdown_done, this->ctx->command_timeout - 10*1000));
     }
 
@@ -1340,6 +1425,8 @@ static gboolean colod_main_co(gpointer data) {
     if (coroutine->yield) {
         return GPOINTER_TO_INT(coroutine->yield_value);
     }
+
+    peer_manager_clear_shutdown(this->ctx->peer);
 
     this->main_return = ret;
     if (this->wake_on_exit) {
@@ -1445,6 +1532,13 @@ static MainReturn _colod_main_co(Coroutine *coroutine, ColodMainCoroutine *this)
 
             return handle_pending_command(this, MAIN_NONE);
         } else if (this->state == STATE_QUIT) {
+            if (this->replication) {
+                colod_cpg_send(this->ctx->cpg, MESSAGE_FAILED);
+                co_recurse(wait_while_timeout(coroutine,
+                                              !peer_manager_failover(this->ctx->peer)
+                                                && !peer_manager_failed(this->ctx->peer),
+                                              this->ctx->command_timeout - 10*1000));
+            }
             co_recurse(colod_quit_co(coroutine, this));
             return handle_pending_command(this, MAIN_QUIT);
         } else if (this->state == STATE_RETURN_NONE) {
@@ -1459,7 +1553,6 @@ static MainReturn _colod_main_co(Coroutine *coroutine, ColodMainCoroutine *this)
 static void colod_hup_cb(gpointer data) {
     ColodMainCoroutine *this = data;
 
-    log_error("qemu quit");
     this->qemu_quit = TRUE;
     colod_event_queue(this, EVENT_FAILED, "qmp hup");
 }
@@ -1475,7 +1568,8 @@ static gboolean colo_link_broken_delay(gpointer data) {
     ColodMainCoroutine *this = data;
 
     if (peer_manager_shutdown(this->ctx->peer)) {
-        g_timeout_add(30*1000, colo_link_broken_delay2, this);
+        g_timeout_add(MIN(30*1000, this->ctx->command_timeout - 10*1000),
+                      colo_link_broken_delay2, this);
     } else {
         colod_event_queue(this, EVENT_FAILOVER_SYNC, "COLO_EXIT qmp event");
         colod_main_unref(this);
@@ -1523,17 +1617,19 @@ static void colod_qmp_event_cb(gpointer data, ColodQmpResult *result) {
             colod_main_ref(this);
         }
     } else if (!strcmp(event, "SHUTDOWN")) {
-        gboolean guest = get_member_member_bool(result->json_root, "data", "guest");
         const gchar *reason = get_member_member_str(result->json_root, "data", "reason");
-        if (guest) {
-            this->guest_shutdown = TRUE;
-            if (!strcmp(reason, "guest-shutdown")) {
-                this->guest_reboot = FALSE;
-            } else if (!strcmp(reason, "guest-reset") || !strcmp(reason, "host-qmp-system-reset")) {
-                this->guest_reboot = TRUE;
-            }
-            colod_event_queue(this, EVENT_GUEST_SHUTDOWN, "guest shutdown");
+        this->guest_shutdown = TRUE;
+        if (!strcmp(reason, "guest-shutdown")) {
+            this->guest_reboot = FALSE;
+        } else if (!strcmp(reason, "guest-reset") && !strcmp(reason, "host-qmp-system-reset")) {
+            this->guest_reboot = TRUE;
+        } else {
+            return;
         }
+        colod_event_queue(this, EVENT_GUEST_SHUTDOWN, "guest shutdown");
+    } else if (!strcmp(event, "RESET")) {
+        colod_raise_timeout_coroutine(&this->raise_timeout_coroutine, this->qmp,
+                                      this->ctx);
     } else if (!strcmp(event, "BLOCK_JOB_COMPLETED")) {
         const gchar *id = get_member_member_str(result->json_root, "data", "device");
         if (!strcmp(id, "resync")) {
@@ -1570,6 +1666,8 @@ static void colod_cpg_event_cb(gpointer data, ColodMessage message,
     } else if (message == MESSAGE_HELLO) {
         if (this->yellow) {
             colod_cpg_send(this->ctx->cpg, MESSAGE_YELLOW);
+        } else {
+            colod_cpg_send(this->ctx->cpg, MESSAGE_UNYELLOW);
         }
     } else if (message == MESSAGE_YELLOW) {
         colod_event_queue(this, EVENT_KICK, "peer yellow state change");
