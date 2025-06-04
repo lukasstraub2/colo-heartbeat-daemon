@@ -1092,7 +1092,7 @@ failover:
     co_recurse(qmp_ectx_yank(coroutine, CO ectx));
 
     co_recurse(result = qmp_ectx(coroutine, CO ectx,
-                                 "{'execute': 'block-job-cancel', 'arguments': {'device': 'resync'}, 'force': true}}"));
+                                 "{'execute': 'block-job-cancel', 'arguments': {'device': 'resync', 'force': true}}}\n"));
     if (result) {
         qmp_result_free(result);
 
@@ -1251,7 +1251,7 @@ static MainState _colod_primary_start_migration_co(Coroutine *coroutine,
     eventqueue_set_interrupting(this->queue, EVENT_FAILOVER_SYNC, 0);
 
     co_recurse(result = qmp_execute_co(coroutine, this->qmp, &local_errp,
-                                       "{'execute': 'qom-list', 'arguments': {'path': '/objects/rew0'}}"));
+                                       "{'execute': 'qom-list', 'arguments': {'path': '/objects/rew0'}}\n"));
     if (!result) {
         if (g_error_matches(local_errp, COLOD_ERROR, COLOD_ERROR_QMP)) {
             CO filter_rewriter = FALSE;

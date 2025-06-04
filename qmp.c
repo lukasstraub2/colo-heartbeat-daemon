@@ -147,7 +147,9 @@ static ColodQmpResult *_qmp_read_line_co(Coroutine *coroutine,
                     }
                     co_recurse(result = qmp_read_line_co(coroutine, state, channel,
                                                          FALSE, skip_events, errp));
-                    result->did_yank = TRUE;
+                    if (result) {
+                        result->did_yank = TRUE;
+                    }
                     return result;
                 }
             }

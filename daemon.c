@@ -255,7 +255,7 @@ void daemon_mainloop(ColodContext *mctx) {
     mctx->commands = qmp_commands_new(ctx->instance_name, ctx->base_dir,
                                       ctx->active_hidden_dir,
                                       ctx->listen_address, ctx->qemu,
-                                      ctx->qemu_img, 9000);
+                                      ctx->qemu_img, ctx->base_port);
     if (ctx->qemu_options) {
         int ret = qmp_commands_set_qemu_options_str(ctx->commands, ctx->qemu_options, &local_errp);
         if (ret < 0) {
@@ -407,6 +407,7 @@ static int daemon_parse_options(ColodContext *ctx, int *argc, char ***argv,
         {"active_hidden_dir", 0, 0, G_OPTION_ARG_STRING, &ctx->active_hidden_dir, "active/hidden image dir", NULL},
         {"advanced_config", 0, 0, G_OPTION_ARG_STRING, &ctx->advanced_config, "advanced config", NULL},
         {"qemu_options", 0, 0, G_OPTION_ARG_STRING, &ctx->qemu_options, "qemu options", NULL},
+        {"base_port", 0, 0, G_OPTION_ARG_INT, &ctx->base_port, "Base port", NULL},
         {0}
     };
 

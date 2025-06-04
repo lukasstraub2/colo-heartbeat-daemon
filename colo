@@ -120,7 +120,7 @@ def colod_cmdline():
         "--timeout_high", OCF_RESKEY_high_yank_timeout,
         "--command_timeout", str(OCF_RESKEY_CRM_meta_timeout - 10*1000),
         "--watchdog_interval", "500", "--listen_address", OCF_RESKEY_listen_address,
-        "--active_hidden_dir", OCF_RESKEY_active_hidden_dir,
+        "--base_port", OCF_RESKEY_base_port, "--active_hidden_dir", OCF_RESKEY_active_hidden_dir,
         "--advanced_config", OCF_RESKEY_advanced_config, "--qemu_options", OCF_RESKEY_options]
 
     if int(OCF_RESKEY_debug) >= 1:
@@ -316,15 +316,15 @@ Control debugging:
     </parameters>
 
     <actions>
-        <action name="start"        timeout="120s" />
-        <action name="stop"         timeout="120s" />
+        <action name="start"        timeout="75s" />
+        <action name="stop"         timeout="75s" />
         <action name="monitor"      timeout="30s" \
             interval="10000ms" depth="0" role="Slave" />
         <action name="monitor"      timeout="30s" \
             interval="10001ms" depth="0" role="Master" />
         <action name="notify"       timeout="30s" />
-        <action name="promote"      timeout="120s" />
-        <action name="demote"       timeout="120s" />
+        <action name="promote"      timeout="75s" />
+        <action name="demote"       timeout="75s" />
         <action name="meta-data"    timeout="5s" />
         <action name="validate-all" timeout="30s" />
     </actions>
@@ -842,6 +842,7 @@ def qemu_colo_promote():
         fd = qmp_open()
         qmp_execute(fd, [{"exec-colod": "promote"}])
         qmp_update_store(fd, {"pretend-secondary": False})
+        set_master_score(101)
         peer = env_find_secondary()
         if peer:
             new_peer(fd, peer)
@@ -869,9 +870,11 @@ def qemu_colo_promote():
 
 def qemu_colo_demote():
     fd = qmp_open()
+    status = qmp_query_status(fd)
     maybe_shutdown(fd)
     qmp_execute(fd, [{"exec-colod": "demote"}])
     fd.close()
+    calculate_master_score(status, env_do_shutdown_guest())
     return OCF_SUCCESS
 
 if OCF_ACTION == "meta-data":

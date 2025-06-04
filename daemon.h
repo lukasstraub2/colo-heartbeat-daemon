@@ -31,6 +31,7 @@ typedef struct ColodContext {
     guint qmp_timeout_low, qmp_timeout_high;
     guint command_timeout;
     guint watchdog_interval;
+    guint base_port;
     gboolean do_trace;
 
     /* Variables */
