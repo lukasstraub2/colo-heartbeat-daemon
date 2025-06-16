@@ -19,8 +19,12 @@ struct ColodRaiseCoroutine {
 
 static gboolean _colod_raise_timeout_co(Coroutine *coroutine,
                                         ColodRaiseCoroutine *this) {
+    struct {
+        guint timeout_source_id;
+    } *co;
     int ret;
 
+    co_frame(co, sizeof(*co));
     co_begin(gboolean, G_SOURCE_CONTINUE);
 
     co_recurse(ret = qmp_wait_event_co(coroutine, this->qmp, 0,
@@ -35,9 +39,24 @@ static gboolean _colod_raise_timeout_co(Coroutine *coroutine,
         return G_SOURCE_REMOVE;
     }
 
-    co_end;
+    CO timeout_source_id = g_timeout_add(60*1000, coroutine->cb, coroutine);
+    while (TRUE) {
+        co_recurse(ret = qmp_wait_event_co(coroutine, this->qmp, 30*1000,
+                                           "{'event': 'STOP'}", NULL));
+        if (ret < 0) {
+            break;
+        }
 
+        co_recurse(ret = qmp_wait_event_co(coroutine, this->qmp, 0,
+                                           "{'event': 'RESUME'}", NULL));
+        if (ret < 0) {
+            break;
+        }
+    }
+
+    g_source_remove(CO timeout_source_id);
     return G_SOURCE_REMOVE;
+    co_end;
 }
 
 static gboolean colod_raise_timeout_co(gpointer data) {
@@ -51,6 +70,7 @@ static gboolean colod_raise_timeout_co(gpointer data) {
     }
 
     qmp_set_timeout(this->qmp, this->ctx->qmp_timeout_low);
+    qmp_unref(this->qmp);
 
     colod_assert_remove_one_source(coroutine);
     *this->ptr = NULL;
@@ -85,7 +105,7 @@ void colod_raise_timeout_coroutine(ColodRaiseCoroutine **ptr,
     this = g_new0(ColodRaiseCoroutine, 1);
     coroutine = &this->coroutine;
     coroutine->cb = colod_raise_timeout_co;
-    this->qmp = qmp;
+    this->qmp = qmp_ref(qmp);
     this->ctx = ctx;
     this->ptr = ptr;
     *ptr = this;

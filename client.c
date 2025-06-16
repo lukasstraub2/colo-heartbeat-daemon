@@ -55,22 +55,18 @@ struct MyTimeout {
     guint timeout_ms;
 };
 
-guint my_timeout_remaining_ms(MyTimeout *this, guint max) {
-    if (!this) {
-        return max;
-    }
-
+guint my_timeout_remaining_ms(MyTimeout *this) {
     guint elapsed = g_timer_elapsed(this->timer, NULL)/1000;
 
     if (elapsed >= this->timeout_ms) {
         return 0;
     }
 
-    return MAX(max, this->timeout_ms - elapsed);
+    return this->timeout_ms - elapsed;
 }
 
-guint my_timeout_remaining_minus_ms(MyTimeout *this, guint max, guint minus) {
-    guint remaining = my_timeout_remaining_ms(this, max + minus);
+guint my_timeout_remaining_minus_ms(MyTimeout *this, guint minus) {
+    guint remaining = my_timeout_remaining_ms(this);
 
     if (minus >= remaining) {
         return 0;
@@ -82,11 +78,11 @@ guint my_timeout_remaining_minus_ms(MyTimeout *this, guint max, guint minus) {
 MyTimeout *my_timeout_new(guint timeout_ms) {
     MyTimeout *this = g_rc_box_new0(MyTimeout);
     this->timer = g_timer_new();
-    this->timeout_ms = MAX(0, timeout_ms - 1000);
+    this->timeout_ms = MAX(0, timeout_ms);
     return this;
 }
 
-void my_timeout_free(gpointer data) {
+static void my_timeout_free(gpointer data) {
     MyTimeout *this = data;
     g_timer_destroy(this->timer);
 }

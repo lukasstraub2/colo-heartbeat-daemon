@@ -1378,7 +1378,8 @@ failover:
 #define colod_quit_co(...) co_wrap(_colod_quit_co(__VA_ARGS__))
 static int _colod_quit_co(Coroutine *coroutine, ColodMainCoroutine *this) {
     struct {
-        guint timeout;
+        MyTimeout *timeout;
+        guint timeout_ms;
     } *co;
     ColodQmpResult *result;
     GError *local_errp = NULL;
@@ -1386,6 +1387,9 @@ static int _colod_quit_co(Coroutine *coroutine, ColodMainCoroutine *this) {
     co_frame(co, sizeof(*co));
     co_begin(int, -1);
 
+    CO timeout = my_timeout_new(10*1000);
+
+    qmp_set_timeout(this->qmp, MIN(5*1000, this->ctx->qmp_timeout_low));
     co_recurse(result = qmp_execute_co(coroutine, this->qmp, &local_errp,
                                        "{'execute': 'quit'}\n"));
     if (!result) {
@@ -1397,24 +1401,34 @@ static int _colod_quit_co(Coroutine *coroutine, ColodMainCoroutine *this) {
     qmp_result_free(result);
 
     int ret;
-    co_recurse(ret = qemu_launcher_wait_co(coroutine, this->launcher, 10*1000, &local_errp));
+    CO timeout_ms = my_timeout_remaining_ms(CO timeout);
+    co_recurse(ret = qemu_launcher_wait_co(coroutine, this->launcher, CO timeout_ms, &local_errp));
     if (ret < 0) {
         log_error(local_errp->message);
         g_error_free(local_errp);
         local_errp = NULL;
     }
 
+    my_timeout_unref(CO timeout);
     return 0;
     co_end;
 }
 
 #define colod_shutdown_co(...) co_wrap(_colod_shutdown_co(__VA_ARGS__))
 static int _colod_shutdown_co(Coroutine *coroutine, ColodMainCoroutine *this) {
+    struct {
+        MyTimeout *timeout;
+        guint timeout_ms;
+    } *co;
     ColodQmpResult *result;
+    int ret;
+    GError *local_errp = NULL;
 
+    co_frame(co, sizeof(*co));
     co_begin(int, -1);
 
     eventqueue_set_interrupting(this->queue, 0);
+    CO timeout = my_timeout_new(this->ctx->command_timeout);
 
     co_recurse(result = qmp_execute_co(coroutine, this->qmp, NULL,
                                        "{'execute': 'system_powerdown'}\n"));
@@ -1423,31 +1437,67 @@ static int _colod_shutdown_co(Coroutine *coroutine, ColodMainCoroutine *this) {
     }
     qmp_result_free(result);
 
-    co_recurse(wait_while_timeout(coroutine, !this->guest_shutdown, this->ctx->command_timeout - 10*1000));
+    if (this->replication) {
+        while (!this->guest_shutdown) {
+            CO timeout_ms = my_timeout_remaining_minus_ms(CO timeout, 10*1000);
+            co_recurse(ret = qmp_wait_event_co(coroutine, this->qmp, CO timeout_ms,
+                                               "{'event': 'RESUME'}", &local_errp));
+            if (ret < 0) {
+                if (g_error_matches(local_errp, COLOD_ERROR, COLOD_ERROR_INTERRUPT)) {
+                    g_error_free(local_errp);
+                    continue;
+                }
+                g_error_free(local_errp);
+            }
+
+            break;
+        }
+
+        co_recurse(result = qmp_execute_co(coroutine, this->qmp, NULL,
+                                           "{'execute': 'system_powerdown'}\n"));
+        if (!result) {
+            goto stop;
+        }
+        qmp_result_free(result);
+    }
+
+    CO timeout_ms = my_timeout_remaining_minus_ms(CO timeout, 10*1000);
+    co_recurse(wait_while_timeout(coroutine, !this->guest_shutdown, CO timeout_ms));
     if (peer_manager_failover(this->ctx->peer)) {
+        my_timeout_unref(CO timeout);
         return -1;
     }
 
     if (!this->primary) {
-        co_recurse(wait_while_timeout(coroutine, !this->peer_shutdown_done, this->ctx->command_timeout - 10*1000));
+        CO timeout_ms = my_timeout_remaining_minus_ms(CO timeout, 10*1000);
+        co_recurse(wait_while_timeout(coroutine, !this->peer_shutdown_done, CO timeout_ms));
         if (peer_manager_failover(this->ctx->peer)) {
+            my_timeout_unref(CO timeout);
             return -1;
         }
     }
 
 stop:
     colod_cpg_send(this->ctx->cpg, MESSAGE_SHUTDOWN_DONE);
+    my_timeout_unref(CO timeout);
     return 0;
     co_end;
 }
 
 #define colod_guest_shutdown_co(...) co_wrap(_colod_guest_shutdown_co(__VA_ARGS__))
 static int _colod_guest_shutdown_co(Coroutine *coroutine, ColodMainCoroutine *this) {
+    struct {
+        MyTimeout *timeout;
+        guint timeout_ms;
+    } *co;
+
+    co_frame(co, sizeof(*co));
     co_begin(int, -1);
     GError *local_errp = NULL;
     ColodQmpResult *result;
 
     eventqueue_set_interrupting(this->queue, 0);
+    CO timeout = my_timeout_new(this->ctx->command_timeout);
 
     if (this->primary) {
         int ret;
@@ -1455,11 +1505,13 @@ static int _colod_guest_shutdown_co(Coroutine *coroutine, ColodMainCoroutine *th
         if (ret < 0) {
             log_error(local_errp->message);
             g_error_free(local_errp);
+            my_timeout_unref(CO timeout);
             return -1;
         }
     } else {
         if (this->replication) {
-            co_recurse(wait_while_timeout(coroutine, !this->guest_shutdown, this->ctx->command_timeout - 10*1000));
+            CO timeout_ms = my_timeout_remaining_minus_ms(CO timeout, 10*1000);
+            co_recurse(wait_while_timeout(coroutine, !this->guest_shutdown, CO timeout_ms));
         }
         co_recurse(result = qmp_execute_co(coroutine, this->qmp, NULL,
                                            "{'execute': 'yank', 'arguments': {"
