@@ -1,6 +1,6 @@
 CC=gcc
 
-CFLAGS=-g -O2 -Wall -Wextra -fsanitize=address `pkg-config --cflags libnl-3.0 glib-2.0 json-glib-1.0`
+CFLAGS=-g -O2 -Wall -Wextra `pkg-config --cflags libnl-3.0 glib-2.0 json-glib-1.0`
 CPG_LDFLAGS=-lcorosync_common -lcpg
 LDFLAGS=`pkg-config --libs libnl-3.0 glib-2.0 json-glib-1.0`
 common_objects=util.o qemu_util.o json_util.o coutil.o qmp.o qmpexectx.o client.o peer_manager.o netlink.o watchdog.o formater.o qmpcommands.o raise_timeout_coroutine.o yellow_coroutine.o eventqueue.o main_coroutine.o daemon.o
