@@ -289,6 +289,7 @@ void daemon_mainloop(ColodContext *mctx) {
 
     daemon_co_unref(daemon);
     client_listener_free(ctx->listener);
+    peer_manager_shutdown(ctx->peer);
     peer_manager_unref(ctx->peer);
     cpg_unref(ctx->cpg);
     qmp_commands_free(ctx->commands);

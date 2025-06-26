@@ -1322,6 +1322,8 @@ static MainState _colod_primary_start_migration_co(Coroutine *coroutine,
     }
 
     qmp_ectx_unref(CO ectx, NULL);
+
+    peer_manager_clear_failover_win(this->ctx->peer);
     return STATE_COLO_RUNNING;
 
 ectx_failed:

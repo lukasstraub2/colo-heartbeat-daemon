@@ -18,6 +18,7 @@ struct PeerManager {
     PeerStatus peer;
 
     gboolean failover_win;
+    guint failover_win_delay_id;
     ColodCallbackHead callbacks;
 };
 
@@ -41,12 +42,17 @@ static void peer_manager_notify(PeerManager *this, ColodEvent event) {
     }
 }
 
-static gboolean peer_manager_clear_failover_win(gpointer data) {
+static void clear_failover_win_destroy(gpointer data) {
+    PeerManager *this = data;
+
+    this->failover_win_delay_id = 0;
+    peer_manager_unref(this);
+}
+
+static gboolean peer_manager_failover_win_delay(gpointer data) {
     PeerManager *this = data;
 
     this->failover_win = FALSE;
-
-    peer_manager_unref(this);
     return G_SOURCE_REMOVE;
 }
 
@@ -59,7 +65,10 @@ static void peer_manager_cpg_cb(gpointer data, ColodMessage message,
         if (message_from_this_node) {
             this->failover_win = TRUE;
             peer_manager_notify(this, EVENT_FAILOVER_WIN);
-            g_timeout_add(60*1000, peer_manager_clear_failover_win, this);
+            this->failover_win_delay_id = g_timeout_add_full(G_PRIORITY_DEFAULT,
+                                                             60*1000,
+                                                             peer_manager_failover_win_delay, this,
+                                                             clear_failover_win_destroy);
             peer_manager_ref(this);
         } else if (this->failover_win) {
             this->failover_win = FALSE;
@@ -139,7 +148,18 @@ PeerManager *peer_manager_new(Cpg *cpg) {
     return this;
 }
 
-void peer_manager_free(gpointer data) {
+void peer_manager_clear_failover_win(PeerManager *this) {
+    this->failover_win = FALSE;
+    if (this->failover_win_delay_id) {
+        g_source_remove(this->failover_win_delay_id);
+    }
+}
+
+void peer_manager_shudown(PeerManager *this) {
+    peer_manager_clear_failover_win(this);
+}
+
+static void peer_manager_free(gpointer data) {
     PeerManager *this = data;
 
     g_free(this->peer_name);
