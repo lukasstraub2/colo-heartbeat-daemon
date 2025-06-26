@@ -658,6 +658,11 @@ def qemu_colo_start():
     fd = qmp_open()
     qmp_update_store(fd, {"pretend-secondary": True})
     qmp_execute(fd, [ {"exec-colod": "demote"} ])
+
+    if qmp_query_status(fd)["failed"]:
+        qmp_execute(fd, [ {"exec-colod": "quit"} ])
+        return OCF_ERR_GENERIC
+
     fd.close()
 
     return OCF_SUCCESS
@@ -848,6 +853,10 @@ def qemu_colo_promote():
     if not status["primary"] and not status["replication"]:
         fd = qmp_open()
         qmp_execute(fd, [{"exec-colod": "promote"}])
+
+        if qmp_query_status(fd)["failed"]:
+            return OCF_ERR_GENERIC
+
         qmp_update_store(fd, {"pretend-secondary": False})
         set_master_score(101)
         peer = env_find_secondary()
