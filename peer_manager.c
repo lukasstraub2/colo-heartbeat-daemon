@@ -90,7 +90,7 @@ void peer_manager_clear_failed(PeerManager *this) {
 }
 
 void peer_manager_clear_failover(PeerManager *this) {
-    this->peer.shutdown = FALSE;
+    this->peer.failover = FALSE;
 }
 
 void peer_manager_clear_shutdown(PeerManager *this) {
