@@ -60,6 +60,8 @@ struct ColodMainCoroutine {
     ColodRaiseCoroutine *raise_timeout_coroutine;
     YellowCoroutine *yellow_co;
     ColodWatchdog *watchdog;
+    guint link_broken_delay_id;
+    guint link_broken_delay2_id;
 
     MainState state;
     gboolean transitioning;
@@ -80,6 +82,8 @@ struct ColodMainCoroutine {
 
     ColodMainCache cache;
 };
+
+static void colod_link_broken_delay_stop(ColodMainCoroutine *this);
 
 #define colod_trace_source(data) \
     _colod_trace_source((data), __func__, __LINE__)
@@ -772,6 +776,7 @@ static MainState _colod_failover_sync_co(Coroutine *coroutine,
         return STATE_FAILED;
     }
 
+    colod_link_broken_delay_stop(this);
     peer_manager_clear_peer(this->ctx->peer);
 
     return STATE_PRIMARY_WAIT;
@@ -1605,6 +1610,7 @@ static gboolean colod_main_co(gpointer data) {
     }
 
     colod_main_client_unregister(this);
+    colod_link_broken_delay_stop(this);
 
     this->mainco_running = FALSE;
     colod_assert_remove_one_source(this);
@@ -1747,10 +1753,23 @@ static void colod_hup_cb(gpointer data) {
     colod_event_queue(this, EVENT_FAILED, "qmp hup");
 }
 
+static void delay_destroy_cb(gpointer data) {
+    ColodMainCoroutine *this = data;
+
+    this->link_broken_delay_id = 0;
+    colod_main_unref(this);
+}
+
+static void delay2_destroy_cb(gpointer data) {
+    ColodMainCoroutine *this = data;
+
+    this->link_broken_delay2_id = 0;
+    colod_main_unref(this);
+}
+
 static gboolean colo_link_broken_delay2(gpointer data) {
     ColodMainCoroutine *this = data;
-    colod_event_queue(this, EVENT_FAILOVER_SYNC, "COLO_EXIT qmp event");
-    colod_main_unref(this);
+    colod_event_queue(this, EVENT_FAILOVER_SYNC, "COLO_EXIT qmp event delay2");
     return G_SOURCE_REMOVE;
 }
 
@@ -1758,13 +1777,24 @@ static gboolean colo_link_broken_delay(gpointer data) {
     ColodMainCoroutine *this = data;
 
     if (peer_manager_shutdown(this->ctx->peer)) {
-        g_timeout_add(MIN(30*1000, this->ctx->command_timeout - 10*1000),
-                      colo_link_broken_delay2, this);
+        this->link_broken_delay2_id = g_timeout_add_full(G_PRIORITY_DEFAULT,
+                                                         MIN(30*1000, this->ctx->command_timeout - 10*1000),
+                                                         colo_link_broken_delay2,
+                                                         this, delay2_destroy_cb);
+        colod_main_ref(this);
     } else {
-        colod_event_queue(this, EVENT_FAILOVER_SYNC, "COLO_EXIT qmp event");
-        colod_main_unref(this);
+        colod_event_queue(this, EVENT_FAILOVER_SYNC, "COLO_EXIT qmp event delay");
     }
     return G_SOURCE_REMOVE;
+}
+
+static void colod_link_broken_delay_stop(ColodMainCoroutine *this) {
+    if (this->link_broken_delay_id) {
+        g_source_remove(this->link_broken_delay_id);
+    }
+    if (this->link_broken_delay2_id) {
+        g_source_remove(this->link_broken_delay2_id);
+    }
 }
 
 static void colod_qmp_event_cb(gpointer data, ColodQmpResult *result) {
@@ -1803,7 +1833,9 @@ static void colod_qmp_event_cb(gpointer data, ColodQmpResult *result) {
         reason = get_member_member_str(result->json_root, "data", "reason");
 
         if (!strcmp(reason, "error")) {
-            g_timeout_add(1000, colo_link_broken_delay, this);
+            this->link_broken_delay_id = g_timeout_add_full(G_PRIORITY_DEFAULT,
+                                                            1000, colo_link_broken_delay,
+                                                            this, delay_destroy_cb);
             colod_main_ref(this);
         }
     } else if (!strcmp(event, "SHUTDOWN")) {

@@ -803,6 +803,13 @@ def qemu_colo_notify():
             new_peer(fd, peer)
             fd.close()
 
+    elif action == "post-demote":
+        if status["primary"]:
+            peer = str.strip(OCF_RESKEY_CRM_meta_notify_demote_uname)
+            fd = qmp_open()
+            new_peer(fd, peer)
+            fd.close()
+
     elif action == "pre-stop":
         if not env_do_shutdown_guest() \
            and (status["primary"] or status["replication"]) \
@@ -873,8 +880,12 @@ def qemu_colo_demote():
     status = qmp_query_status(fd)
     maybe_shutdown(fd)
     qmp_execute(fd, [{"exec-colod": "demote"}])
-    fd.close()
     calculate_master_score(status, env_do_shutdown_guest())
+
+    if qmp_query_status(fd)["failed"]:
+        return OCF_ERR_GENERIC
+
+    fd.close()
     return OCF_SUCCESS
 
 if OCF_ACTION == "meta-data":
