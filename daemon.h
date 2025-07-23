@@ -27,6 +27,7 @@ typedef struct ColodContext {
     const gchar *monitor_interface;
     const gchar *advanced_config;
     const gchar *qemu_options;
+    const gchar *host_map;
     gboolean daemonize;
     guint qmp_timeout_low, qmp_timeout_high;
     guint command_timeout;

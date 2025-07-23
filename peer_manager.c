@@ -13,6 +13,7 @@ struct PeerStatus {
 struct PeerManager {
     Coroutine coroutine;
     Cpg *cpg;
+    JsonNode *host_map;
 
     char *peer_name;
     PeerStatus peer;
@@ -121,6 +122,20 @@ const char *peer_manager_get_peer(PeerManager *this) {
     return this->peer_name;
 }
 
+const char *peer_manager_get_ip(PeerManager *this) {
+    const char *peer = peer_manager_get_peer(this);
+    if (!strlen(peer) || !this->host_map) {
+        return peer;
+    }
+
+    JsonObject *obj = json_node_get_object(this->host_map);
+    if (json_object_has_member(obj, peer)) {
+        return json_object_get_string_member(obj, peer);
+    } else {
+        return peer;
+    }
+}
+
 gboolean peer_manager_failed(PeerManager *this) {
     return this->peer.failed;
 }
@@ -159,11 +174,33 @@ void peer_manager_shudown(PeerManager *this) {
     peer_manager_clear_failover_win(this);
 }
 
+int peer_manager_host_map(PeerManager *this, const gchar *json, GError **errp) {
+    JsonNode* node = json_from_string(json, errp);
+    if (!node) {
+        return -1;
+    }
+
+    if (!JSON_NODE_HOLDS_OBJECT(node)) {
+        colod_error_set(errp, "Not a json object");
+        return -1;
+    }
+
+    if (this->host_map) {
+        json_node_unref(this->host_map);
+    }
+    this->host_map = node;
+
+    return 0;
+}
+
 static void peer_manager_free(gpointer data) {
     PeerManager *this = data;
 
     g_free(this->peer_name);
 
+    if (this->host_map) {
+        json_node_unref(this->host_map);
+    }
     colod_cpg_del_notify(this->cpg, peer_manager_cpg_cb, this);
     colod_callback_clear(&this->callbacks);
 }

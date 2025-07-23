@@ -993,7 +993,7 @@ static MainState _colod_primary_start_resync(Coroutine *coroutine, ColodMainCoro
     qmp_ectx_set_interrupt_cb(CO ectx, eventqueue_interrupt, this);
     eventqueue_set_interrupting(this->queue, EVENT_FAILOVER_SYNC, 0);
 
-    CO commands = qmp_commands_adhoc(qmpcommands, peer_manager_get_peer(this->ctx->peer),
+    CO commands = qmp_commands_adhoc(qmpcommands, peer_manager_get_ip(this->ctx->peer),
                                      "{'execute': 'blockdev-add', 'arguments': {'driver': 'nbd', 'node-name': 'nbd0', 'server': {'type': 'inet', 'host': '@@ADDRESS@@', 'port': '@@NBD_PORT@@'}, 'export': 'parent0', 'detect-zeroes': 'on'}}",
                                      "@@DECL_BLK_MIRROR_PROP@@ {'device': 'colo-disk0', 'job-id': 'resync', 'target': 'nbd0', 'sync': 'full', 'on-target-error': 'report', 'on-source-error': 'ignore', 'auto-dismiss': false}",
                                      "{'execute': 'blockdev-mirror', 'arguments': @@BLK_MIRROR_PROP@@}",
@@ -1013,7 +1013,7 @@ static MainState _colod_primary_start_resync(Coroutine *coroutine, ColodMainCoro
         goto wait_error;
     }
 
-    CO commands = qmp_commands_adhoc(qmpcommands, peer_manager_get_peer(this->ctx->peer),
+    CO commands = qmp_commands_adhoc(qmpcommands, peer_manager_get_ip(this->ctx->peer),
                                      "{'execute': 'stop'}",
                                      "{'execute': 'block-job-cancel', 'arguments': {'device': 'resync'}}",
                                      NULL);
@@ -1032,7 +1032,7 @@ static MainState _colod_primary_start_resync(Coroutine *coroutine, ColodMainCoro
         goto wait_error;
     }
 
-    CO commands = qmp_commands_adhoc(qmpcommands, peer_manager_get_peer(this->ctx->peer),
+    CO commands = qmp_commands_adhoc(qmpcommands, peer_manager_get_ip(this->ctx->peer),
                                      "{'execute': 'block-job-dismiss', 'arguments': {'id': 'resync'}}",
                                      "{'execute': 'x-blockdev-change', 'arguments': {'parent': 'quorum0', 'node': 'nbd0'}}",
                                      "{'execute': 'cont'}",
@@ -1161,7 +1161,7 @@ static MainState _colod_primary_cont_repl(Coroutine *coroutine, ColodMainCorouti
     qmp_ectx_set_interrupt_cb(CO ectx, eventqueue_interrupt, this);
     eventqueue_set_interrupting(this->queue, EVENT_FAILOVER_SYNC, 0);
 
-    CO commands = qmp_commands_adhoc(qmpcommands, peer_manager_get_peer(this->ctx->peer),
+    CO commands = qmp_commands_adhoc(qmpcommands, peer_manager_get_ip(this->ctx->peer),
                                      "{'execute': 'blockdev-add', 'arguments': {'driver': 'nbd', 'node-name': 'nbd0', 'server': {'type': 'inet', 'host': '@@ADDRESS@@', 'port': '@@NBD_PORT@@'}, 'export': 'parent0', 'detect-zeroes': 'on'}}",
                                      "{'execute': 'x-blockdev-change', 'arguments': {'parent': 'quorum0', 'node': 'nbd0'}}",
                                      NULL);
@@ -1278,7 +1278,7 @@ static MainState _colod_primary_start_migration_co(Coroutine *coroutine,
                         "{'capability': 'pause-before-switchover', 'state': true}]}}\n"));
     qmp_result_free(result);
 
-    CO commands = qmp_commands_get_migration_start(qmpcommands, peer_manager_get_peer(this->ctx->peer), CO filter_rewriter);
+    CO commands = qmp_commands_get_migration_start(qmpcommands, peer_manager_get_ip(this->ctx->peer), CO filter_rewriter);
     co_recurse(qmp_ectx_array(coroutine, CO ectx, CO commands));
     my_array_unref(CO commands);
 

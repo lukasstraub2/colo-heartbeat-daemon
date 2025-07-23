@@ -121,7 +121,8 @@ def colod_cmdline():
         "--command_timeout", str(OCF_RESKEY_CRM_meta_timeout - 10*1000),
         "--watchdog_interval", "500", "--listen_address", OCF_RESKEY_listen_address,
         "--base_port", OCF_RESKEY_base_port, "--active_hidden_dir", OCF_RESKEY_active_hidden_dir,
-        "--advanced_config", OCF_RESKEY_advanced_config, "--qemu_options", OCF_RESKEY_options]
+        "--advanced_config", OCF_RESKEY_advanced_config, "--qemu_options", OCF_RESKEY_options,
+        "--host_map", OCF_RESKEY_host_map]
 
     if int(OCF_RESKEY_debug) >= 1:
         cmdline = cmdline + ["--trace"]
@@ -557,13 +558,6 @@ def qmp_open():
         raise Error()
 
     return fd
-
-def map_host(remote):
-    host_map = json.loads(OCF_RESKEY_host_map)
-    if remote in host_map:
-        return host_map[remote]
-    else:
-        return remote
 
 def qmp_query_status(fd):
     return qmp_execute(fd, [{"exec-colod": "query-status"}])["return"]

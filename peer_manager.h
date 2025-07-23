@@ -16,10 +16,12 @@ void peer_manager_set_peer(PeerManager *this, const gchar *peer);
 void peer_manager_clear_peer(PeerManager *this);
 void peer_manager_clear_failover_win(PeerManager *this);
 const char *peer_manager_get_peer(PeerManager *this);
+const char *peer_manager_get_ip(PeerManager *this);
 gboolean peer_manager_failed(PeerManager *this);
 gboolean peer_manager_yellow(PeerManager *this);
 gboolean peer_manager_failover(PeerManager *this);
 gboolean peer_manager_shutdown(PeerManager *this);
+int peer_manager_host_map(PeerManager *this, const gchar *json, GError **errp);
 
 PeerManager *peer_manager_new(Cpg *cpg);
 void peer_manager_shudown(PeerManager *this);

@@ -280,6 +280,14 @@ void daemon_mainloop(ColodContext *mctx) {
     }
 
     mctx->peer = peer_manager_new(ctx->cpg);
+    if (ctx->host_map) {
+        int ret = peer_manager_host_map(ctx->peer, ctx->host_map, &local_errp);
+        if (ret < 0) {
+            log_error(local_errp->message);
+            exit(1);
+        }
+    }
+
     mctx->listener = client_listener_new(ctx->mngmt_listen_fd, ctx->commands, ctx->peer);
 
     DaemonCoroutine *daemon = daemon_co_new(mctx, mainloop);
@@ -409,6 +417,7 @@ static int daemon_parse_options(ColodContext *ctx, int *argc, char ***argv,
         {"advanced_config", 0, 0, G_OPTION_ARG_STRING, &ctx->advanced_config, "advanced config", NULL},
         {"qemu_options", 0, 0, G_OPTION_ARG_STRING, &ctx->qemu_options, "qemu options", NULL},
         {"base_port", 0, 0, G_OPTION_ARG_INT, &ctx->base_port, "Base port", NULL},
+        {"host_map", 0, 0, G_OPTION_ARG_STRING, &ctx->host_map, "Host map", NULL},
         {0}
     };
 
